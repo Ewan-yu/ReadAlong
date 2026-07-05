@@ -86,3 +86,12 @@ tmp/
 
 # ---- PoC 产出物（音频、时间戳等，不入库）----
 poc/out/
+poc/recordings/*.wav
+poc/recordings/*.mp3
+poc/recordings/*.m4a
+
+# ---- 真实密钥配置（不入库；ise_config.example.json 是模板可入库）----
+**/ise_config.json
+
+# ---- 用户测试素材（真实录音，含隐私，不入库）----
+poc/TestSource/
