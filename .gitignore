@@ -1,0 +1,85 @@
+# ============================================================
+# ReadAlong .gitignore  （家长端 Python + 孩子端 Flutter）
+# ============================================================
+
+# ---- 操作系统 / 编辑器 ----
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+*.iml
+*.swp
+*~
+
+# ---- 密钥 / 本地配置（切勿泄露 API key）----
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+secrets.json
+**/api_keys.json
+**/credentials.json
+config/local.*
+
+# ---- Python（家长端）----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+venv/
+.venv/
+env/
+ENV/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.htmlcov/
+.ipynb_checkpoints/
+
+# ---- Flutter / Dart（孩子端）----
+**/.dart_tool/
+**/.packages
+**/.pub-cache/
+**/.pub/
+**/build/
+**/.flutter-plugins
+**/.flutter-plugins-dependencies
+**/android/.gradle/
+**/android/local.properties
+**/android/key.properties
+*.jks
+**/ios/Pods/
+**/ios/.symlinks/
+**/GeneratedPluginRegistrant.*
+
+# ---- AI 模型权重（体积巨大，严禁入库）----
+*.gguf
+*.safetensors
+*.pt
+*.pth
+*.ckpt
+*.onnx
+*.tflite
+models/
+pretrained_models/
+checkpoints/
+.cache/
+
+# ---- 项目产出物（加工后的绘本包、大音频文件）----
+book_*/
+projects/
+**/tts_out/
+**/recordings/
+# 允许少量示例素材入库
+!samples/
+!**/assets/samples/
+
+# ---- 临时 / 日志 ----
+*.log
+logs/
+tmp/
+*.tmp
+*.bak
