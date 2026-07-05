@@ -83,3 +83,6 @@ logs/
 tmp/
 *.tmp
 *.bak
+
+# ---- PoC 产出物（音频、时间戳等，不入库）----
+poc/out/
