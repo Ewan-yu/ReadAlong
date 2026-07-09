@@ -1,0 +1,34 @@
+[project]
+name = "readalong-parent-tool"
+version = "0.1.0"
+description = "ReadAlong 家长端加工工具：PDF → 点读资源包(.readalongbook)"
+requires-python = ">=3.10,<3.13"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "pydantic>=2.7",
+    "jsonschema>=4.22",
+    "pymupdf>=1.24",
+    "pillow>=10.3",
+    "opencv-python-headless>=4.10",
+]
+
+[project.optional-dependencies]
+# GPU 相关依赖（VoxCPM/stable-ts/paddle）安装重、平台绑定，
+# 按 poc/README.md 的 conda 步骤装在 readalong 环境，不在这里声明版本。
+dev = [
+    "pytest>=8.2",
+    "httpx>=0.27",
+    "ruff>=0.5",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["app*"]

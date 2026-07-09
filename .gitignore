@@ -95,3 +95,6 @@ poc/recordings/*.m4a
 
 # ---- 用户测试素材（真实录音，含隐私，不入库）----
 poc/TestSource/
+
+# ---- 夹具产物（脚本可再生，不入库）----
+shared/fixtures/out/

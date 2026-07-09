@@ -1,0 +1,73 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "readalong/manifest.schema.json",
+  "title": "ReadAlong 资源包 manifest.json",
+  "description": "资源包(.readalongbook)入口文件。schema_version=1。改格式必须 bump 版本并记 CHANGELOG.md。",
+  "type": "object",
+  "required": ["schema_version", "book_id", "title", "language", "created_at", "generator", "page_count", "page_image", "thumbnail", "pages"],
+  "properties": {
+    "schema_version": { "type": "integer", "const": 1 },
+    "book_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{2,63}$",
+      "description": "书籍唯一 ID（slug-日期-序号），导入冲突检测的键"
+    },
+    "title": { "type": "string", "minLength": 1 },
+    "language": { "type": "string", "enum": ["en"] },
+    "created_at": { "type": "string", "format": "date-time" },
+    "generator": {
+      "type": "object",
+      "required": ["name", "version"],
+      "properties": {
+        "name": { "type": "string" },
+        "version": { "type": "string" }
+      }
+    },
+    "page_count": { "type": "integer", "minimum": 1 },
+    "page_image": {
+      "type": "object",
+      "required": ["format", "max_long_edge_px", "quality"],
+      "properties": {
+        "format": { "type": "string", "enum": ["webp"] },
+        "max_long_edge_px": { "type": "integer" },
+        "quality": { "type": "integer", "minimum": 1, "maximum": 100 }
+      }
+    },
+    "thumbnail": {
+      "type": "object",
+      "required": ["format", "max_long_edge_px", "quality"],
+      "properties": {
+        "format": { "type": "string", "enum": ["jpg"] },
+        "max_long_edge_px": { "type": "integer" },
+        "quality": { "type": "integer", "minimum": 1, "maximum": 100 }
+      }
+    },
+    "pages": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["page_no", "image", "thumbnail", "width_px", "height_px", "source_region"],
+        "properties": {
+          "page_no": { "type": "integer", "minimum": 1 },
+          "image": { "type": "string", "pattern": "^pages/p[0-9]{4}\\.webp$" },
+          "thumbnail": { "type": "string", "pattern": "^thumbnails/p[0-9]{4}\\.jpg$" },
+          "width_px": { "type": "integer", "minimum": 1 },
+          "height_px": { "type": "integer", "minimum": 1 },
+          "source_pdf_page": { "type": ["integer", "null"] },
+          "source_region": { "type": "string", "enum": ["full", "left", "right", "custom"] },
+          "source_crop": {
+            "type": "object",
+            "required": ["x", "y", "w", "h"],
+            "properties": {
+              "x": { "type": "number", "minimum": 0, "maximum": 1 },
+              "y": { "type": "number", "minimum": 0, "maximum": 1 },
+              "w": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 },
+              "h": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 }
+            }
+          }
+        }
+      }
+    }
+  }
+}
