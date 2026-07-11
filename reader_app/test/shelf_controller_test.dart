@@ -10,9 +10,13 @@ import 'package:reader_app/features/shelf/shelf_library.dart';
 
 class _FakeBookPackPicker implements BookPackPicker {
   BookPackSelection? selection;
+  var pickCalls = 0;
 
   @override
-  Future<BookPackSelection?> pick() async => selection;
+  Future<BookPackSelection?> pick() async {
+    pickCalls++;
+    return selection;
+  }
 }
 
 class _ImportCall {
@@ -72,6 +76,10 @@ class _FakeShelfLibrary implements ShelfLibrary {
   }) async {
     deletedBooks.add(book);
     deleteRecordingsValues.add(deleteRecordings);
+    if (deleteError is PartialBookDeleteException) {
+      books.remove(book);
+      throw deleteError!;
+    }
     if (deleteError != null) throw deleteError!;
     books.remove(book);
   }
@@ -145,6 +153,42 @@ void main() {
     expect(result.book, importedBook);
     expect(container.read(shelfControllerProvider).value!.books,
         [importedBook, existingBook]);
+    expect(container.read(shelfControllerProvider).value!.isMutating, isFalse);
+  });
+
+  test('rejects an overlapping mutation without disturbing the active one',
+      () async {
+    final existingBook = library.books.single;
+    final importedBook = _book('imported');
+    final completer = Completer<ImportResult>();
+    library.importCompleter = completer;
+    picker.selection = BookPackSelection(
+      name: 'new.readalongbook',
+      bytes: Uint8List.fromList([1, 2, 3]),
+    );
+
+    final first = controller.pickAndImport();
+    await Future<void>.delayed(Duration.zero);
+
+    final second = await controller.pickAndImport();
+
+    expect(second.kind, ShelfActionKind.busy);
+    expect(picker.pickCalls, 1);
+    expect(library.importCalls, hasLength(1));
+    expect(
+      container.read(shelfControllerProvider).value!.books,
+      [existingBook],
+    );
+    expect(container.read(shelfControllerProvider).value!.isMutating, isTrue);
+
+    library.books = [importedBook, existingBook];
+    completer.complete(ImportResult.success(entry: importedBook));
+    expect((await first).kind, ShelfActionKind.imported);
+
+    expect(
+      container.read(shelfControllerProvider).value!.books,
+      [importedBook, existingBook],
+    );
     expect(container.read(shelfControllerProvider).value!.isMutating, isFalse);
   });
 
@@ -247,7 +291,7 @@ void main() {
 
     final result = await controller.deleteBook(book, deleteRecordings: true);
 
-    expect(result.kind, ShelfActionKind.imported);
+    expect(result.kind, ShelfActionKind.deleted);
     expect(result.book, book);
     expect(library.deletedBooks, [book]);
     expect(library.deleteRecordingsValues, [isTrue]);
@@ -255,7 +299,7 @@ void main() {
     expect(container.read(shelfControllerProvider).value!.isMutating, isFalse);
   });
 
-  test('maps partial and unexpected delete errors to typed results', () async {
+  test('partial deletion reloads the shelf before returning', () async {
     final book = library.books.single;
     library.deleteError = PartialBookDeleteException(
       book: book,
@@ -266,12 +310,33 @@ void main() {
 
     expect(partial.kind, ShelfActionKind.partialDelete);
     expect(partial.book, book);
+    expect(container.read(shelfControllerProvider).value!.books, isEmpty);
     expect(container.read(shelfControllerProvider).value!.isMutating, isFalse);
+  });
+
+  test('maps unexpected delete errors to failed and retains the shelf',
+      () async {
+    final book = library.books.single;
 
     library.deleteError = StateError('disk failed');
     final failed = await controller.deleteBook(book, deleteRecordings: false);
 
     expect(failed.kind, ShelfActionKind.failed);
+    expect(container.read(shelfControllerProvider).value!.books, [book]);
     expect(container.read(shelfControllerProvider).value!.isMutating, isFalse);
+  });
+
+  test('rebuilds with an invalidated library dependency', () async {
+    final replacementBook = _book('replacement');
+    final replacement = _FakeShelfLibrary(
+      books: [replacementBook],
+      importResult: ImportResult.failed(['not configured']),
+    );
+
+    library = replacement;
+    container.invalidate(shelfLibraryProvider);
+    final rebuilt = await container.read(shelfControllerProvider.future);
+
+    expect(rebuilt.books, [replacementBook]);
   });
 }

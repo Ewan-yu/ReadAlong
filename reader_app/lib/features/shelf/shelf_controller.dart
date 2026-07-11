@@ -24,7 +24,9 @@ class ShelfState {
 
 enum ShelfActionKind {
   cancelled,
+  busy,
   imported,
+  deleted,
   alreadyImported,
   conflict,
   validationFailed,
@@ -82,28 +84,40 @@ final shelfControllerProvider =
     AsyncNotifierProvider<ShelfController, ShelfState>(ShelfController.new);
 
 class ShelfController extends AsyncNotifier<ShelfState> {
-  late final ShelfLibrary _library;
+  ShelfLibrary? _library;
+  bool _isMutationActive = false;
 
   @override
   Future<ShelfState> build() async {
-    _library = await ref.watch(shelfLibraryProvider.future);
-    await _library.recoverInterruptedImports();
-    return ShelfState(books: await _library.listBooks());
+    final library = await ref.watch(shelfLibraryProvider.future);
+    _library = library;
+    await library.recoverInterruptedImports();
+    return ShelfState(
+      books: await library.listBooks(),
+      isMutating: _isMutationActive,
+    );
   }
 
   Future<ShelfActionResult> pickAndImport() async {
-    _setMutating(true);
+    final busy = _beginMutation();
+    if (busy != null) return busy;
+    final library = _library;
     try {
+      if (library == null) return _libraryUnavailable();
       final selection = await ref.read(bookPackPickerProvider).pick();
       if (selection == null) {
         return const ShelfActionResult(kind: ShelfActionKind.cancelled);
       }
-      final result = await _library.importBook(selection.bytes);
-      return _handleImportResult(result, bytes: selection.bytes);
+      final result = await library.importBook(selection.bytes);
+      return _handleImportResult(
+        library,
+        result,
+        bytes: selection.bytes,
+      );
     } catch (error) {
       return _failed(error);
     } finally {
-      _setMutating(false);
+      _endMutation();
     }
   }
 
@@ -111,8 +125,11 @@ class ShelfController extends AsyncNotifier<ShelfState> {
     PendingImport pending,
     ImportConflictResolution resolution,
   ) async {
-    _setMutating(true);
+    final busy = _beginMutation();
+    if (busy != null) return busy;
+    final library = _library;
     try {
+      if (library == null) return _libraryUnavailable();
       final conflictEntry = pending.conflict.conflictEntry;
       if (conflictEntry == null) {
         return const ShelfActionResult(
@@ -120,16 +137,16 @@ class ShelfController extends AsyncNotifier<ShelfState> {
           errors: ['Conflict result has no target book'],
         );
       }
-      final result = await _library.importBook(
+      final result = await library.importBook(
         pending.bytes,
         resolution: resolution,
         targetLibraryId: conflictEntry.libraryId,
       );
-      return _handleImportResult(result, bytes: pending.bytes);
+      return _handleImportResult(library, result, bytes: pending.bytes);
     } catch (error) {
       return _failed(error);
     } finally {
-      _setMutating(false);
+      _endMutation();
     }
   }
 
@@ -137,12 +154,16 @@ class ShelfController extends AsyncNotifier<ShelfState> {
     ShelfBook book, {
     required bool deleteRecordings,
   }) async {
-    _setMutating(true);
+    final busy = _beginMutation();
+    if (busy != null) return busy;
+    final library = _library;
     try {
-      await _library.deleteBook(book, deleteRecordings: deleteRecordings);
-      await _reloadBooks();
-      return ShelfActionResult(kind: ShelfActionKind.imported, book: book);
+      if (library == null) return _libraryUnavailable();
+      await library.deleteBook(book, deleteRecordings: deleteRecordings);
+      await _reloadBooks(library);
+      return ShelfActionResult(kind: ShelfActionKind.deleted, book: book);
     } on PartialBookDeleteException catch (error) {
+      await _reloadAfterPartialDelete(library, error.book);
       return ShelfActionResult(
         kind: ShelfActionKind.partialDelete,
         book: error.book,
@@ -151,16 +172,17 @@ class ShelfController extends AsyncNotifier<ShelfState> {
     } catch (error) {
       return _failed(error);
     } finally {
-      _setMutating(false);
+      _endMutation();
     }
   }
 
   Future<ShelfActionResult> _handleImportResult(
+    ShelfLibrary library,
     ImportResult result, {
     required Uint8List bytes,
   }) async {
     if (result.ok) {
-      await _reloadBooks();
+      await _reloadBooks(library);
       return ShelfActionResult(
         kind: ShelfActionKind.imported,
         book: result.entry,
@@ -188,13 +210,49 @@ class ShelfController extends AsyncNotifier<ShelfState> {
     );
   }
 
-  Future<void> _reloadBooks() async {
-    final books = await _library.listBooks();
+  Future<void> _reloadBooks(ShelfLibrary library) async {
+    final books = await library.listBooks();
     final current = state.valueOrNull;
     state = AsyncData(ShelfState(
       books: books,
       isMutating: current?.isMutating ?? false,
     ));
+  }
+
+  Future<void> _reloadAfterPartialDelete(
+    ShelfLibrary? library,
+    ShelfBook deletedBook,
+  ) async {
+    try {
+      if (library == null) throw StateError('Shelf library is unavailable');
+      await _reloadBooks(library);
+    } catch (_) {
+      final current = state.valueOrNull;
+      if (current == null) return;
+      state = AsyncData(ShelfState(
+        books: current.books
+            .where((book) => book.libraryId != deletedBook.libraryId)
+            .toList(growable: false),
+        isMutating: current.isMutating,
+      ));
+    }
+  }
+
+  ShelfActionResult? _beginMutation() {
+    if (_isMutationActive) {
+      return const ShelfActionResult(
+        kind: ShelfActionKind.busy,
+        errors: ['Another shelf action is already in progress'],
+      );
+    }
+    _isMutationActive = true;
+    _setMutating(true);
+    return null;
+  }
+
+  void _endMutation() {
+    _isMutationActive = false;
+    _setMutating(false);
   }
 
   void _setMutating(bool isMutating) {
@@ -206,5 +264,10 @@ class ShelfController extends AsyncNotifier<ShelfState> {
   ShelfActionResult _failed(Object error) => ShelfActionResult(
         kind: ShelfActionKind.failed,
         errors: [error.toString()],
+      );
+
+  ShelfActionResult _libraryUnavailable() => const ShelfActionResult(
+        kind: ShelfActionKind.failed,
+        errors: ['Shelf library is unavailable'],
       );
 }
