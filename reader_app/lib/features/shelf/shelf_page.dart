@@ -17,7 +17,11 @@ class ShelfPage extends StatelessWidget {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(Icons.auto_stories, size: 96, color: AppColors.primary.withValues(alpha: 0.4)),
+            Icon(
+              Icons.auto_stories,
+              size: 96,
+              color: AppColors.primary.withOpacity(0.4),
+            ),
             const SizedBox(height: AppSpacing.pageMargin),
             const Text(
               '让爸爸妈妈用电脑制作绘本资源包，\n然后导入这里吧',

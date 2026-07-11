@@ -3,9 +3,11 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:archive/archive_io.dart';
+import 'package:crypto/crypto.dart';
 import 'package:path/path.dart' as p;
-import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+import 'package:sqflite/sqflite.dart' as sqflite;
 
+import '../appdb/shelf_index.dart';
 import 'schema_constants.dart';
 
 class ValidationResult {
@@ -17,22 +19,12 @@ class ValidationResult {
       ValidationResult._(false, List.unmodifiable(errors));
 }
 
-class BookEntry {
-  final String bookId;
-  final String title;
-  final int pageCount;
-  final String bookDir;
-  const BookEntry({
-    required this.bookId,
-    required this.title,
-    required this.pageCount,
-    required this.bookDir,
-  });
-}
-
 /// 资源包校验器。validateBytes 是异步的（含 sqlite 全量校验）。
 class BookPackValidator {
-  static Future<ValidationResult> validateBytes(Uint8List zipBytes) async {
+  static Future<ValidationResult> validateBytes(
+    Uint8List zipBytes, {
+    sqflite.DatabaseFactory? databaseFactory,
+  }) async {
     final errors = <String>[];
 
     // 1. zip 解析
@@ -63,9 +55,9 @@ class BookPackValidator {
     // 4. manifest.json
     Map<String, dynamic> manifest;
     try {
-      manifest = jsonDecode(
-              utf8.decode(byName['manifest.json']!.content as List<int>))
-          as Map<String, dynamic>;
+      manifest =
+          jsonDecode(utf8.decode(byName['manifest.json']!.content as List<int>))
+              as Map<String, dynamic>;
     } catch (e) {
       return ValidationResult.fail(['manifest.json 解析失败: $e']);
     }
@@ -98,31 +90,38 @@ class BookPackValidator {
       }
     }
 
-    // 6. alignment.db 全量校验（sqlite FFI）
+    // 6. alignment.db 全量校验
     final dbBytes =
         Uint8List.fromList(byName['align/alignment.db']!.content as List<int>);
-    final dbErrors = await _validateDb(dbBytes);
+    final dbErrors = await _validateDb(
+      dbBytes,
+      databaseFactory ?? sqflite.databaseFactory,
+    );
     errors.addAll(dbErrors);
 
-    return errors.isEmpty ? ValidationResult.pass() : ValidationResult.fail(errors);
+    return errors.isEmpty
+        ? ValidationResult.pass()
+        : ValidationResult.fail(errors);
   }
 
-  static Future<List<String>> _validateDb(Uint8List dbBytes) async {
+  static Future<List<String>> _validateDb(
+    Uint8List dbBytes,
+    sqflite.DatabaseFactory databaseFactory,
+  ) async {
     final errors = <String>[];
-    // 写临时文件，用 sqflite_ffi 打开做 SQL 级校验
+    // 写临时文件，用当前平台的数据库工厂做 SQL 级校验。
     final tmp = File(
         '${Directory.systemTemp.path}/ra_validate_${DateTime.now().millisecondsSinceEpoch}.db');
     try {
       await tmp.writeAsBytes(dbBytes);
-      sqfliteFfiInit();
-      final db = await databaseFactoryFfi.openDatabase(
+      final db = await databaseFactory.openDatabase(
         tmp.path,
-        options: OpenDatabaseOptions(readOnly: true),
+        options: sqflite.OpenDatabaseOptions(readOnly: true),
       );
 
       // 6a. 必需表存在
-      final tables = (await db.rawQuery(
-              "SELECT name FROM sqlite_master WHERE type='table'"))
+      final tables = (await db
+              .rawQuery("SELECT name FROM sqlite_master WHERE type='table'"))
           .map((r) => r['name'] as String)
           .toSet();
       for (final t in BookPackSchema.alignmentTables) {
@@ -141,8 +140,12 @@ class BookPackValidator {
             final y = (bbox['y'] as num).toDouble();
             final w = (bbox['w'] as num).toDouble();
             final h = (bbox['h'] as num).toDouble();
-            if (x < 0 || y < 0 || w <= 0 || h <= 0 ||
-                x + w > 1.001 || y + h > 1.001) {
+            if (x < 0 ||
+                y < 0 ||
+                w <= 0 ||
+                h <= 0 ||
+                x + w > 1.001 ||
+                y + h > 1.001) {
               errors.add('句子 $id bbox 越界: x=$x y=$y w=$w h=$h');
             }
           } catch (e) {
@@ -160,7 +163,9 @@ class BookPackValidator {
 
       await db.close();
     } finally {
-      try { await tmp.delete(); } catch (_) {}
+      try {
+        await tmp.delete();
+      } catch (_) {}
     }
     return errors;
   }
@@ -169,49 +174,90 @@ class BookPackValidator {
 /// 资源包导入器 — 校验通过后解包到 App 私有目录。
 class BookPackImporter {
   final String booksDir;
-  const BookPackImporter({required this.booksDir});
+  final ShelfIndex shelfIndex;
+  final sqflite.DatabaseFactory? validationDatabaseFactory;
+
+  const BookPackImporter({
+    required this.booksDir,
+    required this.shelfIndex,
+    this.validationDatabaseFactory,
+  });
 
   Future<ImportResult> import(Uint8List zipBytes) async {
-    final validation = await BookPackValidator.validateBytes(zipBytes);
+    final validation = await BookPackValidator.validateBytes(
+      zipBytes,
+      databaseFactory: validationDatabaseFactory,
+    );
     if (!validation.ok) return ImportResult.failed(validation.errors);
 
     final archive = ZipDecoder().decodeBytes(zipBytes);
-    final manifest = jsonDecode(utf8.decode(
-            archive.firstWhere((f) => f.name == 'manifest.json').content
-                as List<int>)) as Map<String, dynamic>;
+    final manifest = jsonDecode(utf8.decode(archive
+        .firstWhere((f) => f.name == 'manifest.json')
+        .content as List<int>)) as Map<String, dynamic>;
 
     final bookId = manifest['book_id'] as String;
     final bookDir = p.join(booksDir, bookId);
+    final packageSha256 = sha256.convert(zipBytes).toString();
+    final existing = await shelfIndex.findById(bookId);
 
-    if (Directory(bookDir).existsSync()) {
+    if (existing != null &&
+        existing.packageSha256 == packageSha256 &&
+        Directory(bookDir).existsSync()) {
+      return ImportResult.alreadyImported(entry: existing);
+    }
+    if (existing != null || Directory(bookDir).existsSync()) {
       return ImportResult.conflict(bookId: bookId, bookDir: bookDir);
     }
 
-    await Directory(bookDir).create(recursive: true);
-    for (final file in archive) {
-      if (file.isFile) {
-        final outPath = p.join(bookDir, file.name.replaceAll('/', p.separator));
-        final outFile = File(outPath);
-        await outFile.parent.create(recursive: true);
-        await outFile.writeAsBytes(file.content as List<int>);
+    final stagingDir = p.join(
+      booksDir,
+      '.import-$bookId-${DateTime.now().microsecondsSinceEpoch}',
+    );
+    var movedToBookDir = false;
+    try {
+      await Directory(stagingDir).create(recursive: true);
+      for (final file in archive) {
+        if (file.isFile) {
+          final relativePath = file.name.replaceAll('/', p.separator);
+          final outFile = File(p.join(stagingDir, relativePath));
+          await outFile.parent.create(recursive: true);
+          await outFile.writeAsBytes(file.content as List<int>);
+        }
       }
-    }
 
-    return ImportResult.success(
-      entry: BookEntry(
+      await Directory(stagingDir).rename(bookDir);
+      movedToBookDir = true;
+
+      final pages = (manifest['pages'] as List).cast<Map<String, dynamic>>();
+      final thumbnailPath = archive.any((file) => file.name == 'cover.jpg')
+          ? 'cover.jpg'
+          : pages.first['thumbnail'] as String;
+      final entry = ShelfBook(
         bookId: bookId,
         title: manifest['title'] as String,
         pageCount: manifest['page_count'] as int,
         bookDir: bookDir,
-      ),
-    );
+        thumbnailPath: thumbnailPath,
+        packageSha256: packageSha256,
+        importedAt: DateTime.now().toUtc(),
+      );
+      await shelfIndex.add(entry);
+      return ImportResult.success(entry: entry);
+    } catch (error) {
+      final cleanupPath = movedToBookDir ? bookDir : stagingDir;
+      try {
+        await Directory(cleanupPath).delete(recursive: true);
+      } catch (_) {}
+      return ImportResult.failed(['导入资源包失败: $error']);
+    }
   }
 }
 
 class ImportResult {
   final bool ok;
   final bool isConflict;
-  final BookEntry? entry;
+  final bool isAlreadyImported;
+  final ShelfBook? entry;
   final List<String> errors;
   final String? conflictBookId;
   final String? conflictBookDir;
@@ -219,18 +265,38 @@ class ImportResult {
   const ImportResult._({
     required this.ok,
     required this.isConflict,
+    required this.isAlreadyImported,
     this.entry,
     this.errors = const [],
     this.conflictBookId,
     this.conflictBookDir,
   });
 
-  factory ImportResult.success({required BookEntry entry}) =>
-      ImportResult._(ok: true, isConflict: false, entry: entry);
-  factory ImportResult.failed(List<String> errors) =>
-      ImportResult._(ok: false, isConflict: false, errors: errors);
-  factory ImportResult.conflict({required String bookId, required String bookDir}) =>
+  factory ImportResult.success({required ShelfBook entry}) => ImportResult._(
+        ok: true,
+        isConflict: false,
+        isAlreadyImported: false,
+        entry: entry,
+      );
+  factory ImportResult.alreadyImported({required ShelfBook entry}) =>
       ImportResult._(
-          ok: false, isConflict: true,
-          conflictBookId: bookId, conflictBookDir: bookDir);
+        ok: false,
+        isConflict: false,
+        isAlreadyImported: true,
+        entry: entry,
+      );
+  factory ImportResult.failed(List<String> errors) => ImportResult._(
+        ok: false,
+        isConflict: false,
+        isAlreadyImported: false,
+        errors: errors,
+      );
+  factory ImportResult.conflict(
+          {required String bookId, required String bookDir}) =>
+      ImportResult._(
+          ok: false,
+          isConflict: true,
+          isAlreadyImported: false,
+          conflictBookId: bookId,
+          conflictBookDir: bookDir);
 }
