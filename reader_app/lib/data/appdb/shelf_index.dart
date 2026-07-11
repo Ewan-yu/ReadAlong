@@ -14,17 +14,15 @@ class ShelfBook {
   final DateTime importedAt;
 
   const ShelfBook({
-    String? libraryId,
-    String? sourceBookId,
-    String? bookId,
+    required this.libraryId,
+    required this.sourceBookId,
     required this.title,
     required this.pageCount,
     required this.bookDir,
     required this.thumbnailPath,
     required this.packageSha256,
     required this.importedAt,
-  })  : libraryId = libraryId ?? bookId!,
-        sourceBookId = sourceBookId ?? bookId!;
+  });
 
   @Deprecated('Use libraryId instead')
   String get bookId => libraryId;

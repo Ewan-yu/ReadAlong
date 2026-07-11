@@ -233,7 +233,8 @@ class BookPackImporter {
           ? 'cover.jpg'
           : pages.first['thumbnail'] as String;
       final entry = ShelfBook(
-        bookId: bookId,
+        libraryId: bookId,
+        sourceBookId: bookId,
         title: manifest['title'] as String,
         pageCount: manifest['page_count'] as int,
         bookDir: bookDir,
