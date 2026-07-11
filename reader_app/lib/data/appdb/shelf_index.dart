@@ -24,9 +24,6 @@ class ShelfBook {
     required this.importedAt,
   });
 
-  @Deprecated('Use libraryId instead')
-  String get bookId => libraryId;
-
   Map<String, Object?> toMap() => {
         'book_id': libraryId,
         'source_book_id': sourceBookId,

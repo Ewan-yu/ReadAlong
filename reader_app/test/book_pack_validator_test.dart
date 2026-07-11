@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import 'package:reader_app/data/appdb/shelf_index.dart';
+import 'package:reader_app/data/bookpack/book_pack_importer.dart';
 import 'package:reader_app/data/bookpack/book_pack_validator.dart';
 
 Uint8List _fixture(String name) {
@@ -35,6 +36,28 @@ Uint8List _withDifferentContent(Uint8List source) {
     }
   }
   return Uint8List.fromList(ZipEncoder().encode(changedArchive)!);
+}
+
+Future<String> _readManifestTitle(ShelfBook entry) async {
+  final manifest = await File('${entry.bookDir}/manifest.json').readAsString();
+  return RegExp(r'"title"\s*:\s*"([^"]+)"').firstMatch(manifest)!.group(1)!;
+}
+
+Future<String> _readManifestBookId(ShelfBook entry) async {
+  final manifest = await File('${entry.bookDir}/manifest.json').readAsString();
+  return RegExp(r'"book_id"\s*:\s*"([^"]+)"').firstMatch(manifest)!.group(1)!;
+}
+
+class _ReplaceFailingShelfIndex extends ShelfIndex {
+  const _ReplaceFailingShelfIndex({
+    required super.databasePath,
+    required super.databaseFactory,
+  });
+
+  @override
+  Future<void> replace(ShelfBook book) {
+    throw StateError('replace failed');
+  }
 }
 
 void main() {
@@ -132,7 +155,7 @@ void main() {
       final entry = result.entry!;
       expect(File('${entry.bookDir}/manifest.json').existsSync(), isTrue);
       expect(File('${entry.bookDir}/align/alignment.db').existsSync(), isTrue);
-      expect(await shelfIndex.findById(entry.bookId), entry);
+      expect(await shelfIndex.findById(entry.libraryId), entry);
     });
 
     test('相同包再次导入返回已导入且不重复写索引', () async {
@@ -155,6 +178,113 @@ void main() {
       expect(conflict.ok, isFalse);
       expect(conflict.isConflict, isTrue);
       expect(conflict.isAlreadyImported, isFalse);
+      expect(conflict.conflictEntry, isNotNull);
+      expect(conflict.conflictEntry!.libraryId, 'fixture-book-0001');
+    });
+
+    test('覆盖保留 libraryId 并替换资源和哈希', () async {
+      final first =
+          await importer.import(_fixture('fixture_book.readalongbook'));
+      final result = await importer.import(
+        _withDifferentContent(_fixture('fixture_book.readalongbook')),
+        resolution: ImportConflictResolution.overwrite,
+        targetLibraryId: first.entry!.libraryId,
+      );
+
+      expect(result.ok, isTrue, reason: '${result.errors}');
+      expect(result.entry!.libraryId, first.entry!.libraryId);
+      expect(result.entry!.sourceBookId, 'fixture-book-0001');
+      expect(result.entry!.packageSha256, isNot(first.entry!.packageSha256));
+      expect(await _readManifestTitle(result.entry!), 'Fixture Book Updated');
+      expect(await shelfIndex.findByLibraryId(first.entry!.libraryId),
+          result.entry);
+    });
+
+    test('存为副本不修改资源 manifest 或 alignment', () async {
+      final original = _fixture('fixture_book.readalongbook');
+      final changed = _withDifferentContent(original);
+      await importer.import(original);
+      final sourceArchive = ZipDecoder().decodeBytes(changed);
+      final expectedAlignment = sourceArchive
+          .firstWhere((file) => file.name == 'align/alignment.db')
+          .content as List<int>;
+
+      final copy = await importer.import(
+        changed,
+        resolution: ImportConflictResolution.saveCopy,
+      );
+
+      expect(copy.ok, isTrue, reason: '${copy.errors}');
+      expect(copy.entry!.libraryId, 'fixture-book-0001-copy-1');
+      expect(copy.entry!.sourceBookId, 'fixture-book-0001');
+      expect(await _readManifestBookId(copy.entry!), 'fixture-book-0001');
+      expect(
+        await File('${copy.entry!.bookDir}/align/alignment.db').readAsBytes(),
+        expectedAlignment,
+      );
+    });
+
+    test('覆盖索引替换失败时恢复旧资源和索引', () async {
+      final first =
+          await importer.import(_fixture('fixture_book.readalongbook'));
+      final failingImporter = BookPackImporter(
+        booksDir: '${tempDir.path}/books',
+        shelfIndex: _ReplaceFailingShelfIndex(
+          databasePath: '${tempDir.path}/app.db',
+          databaseFactory: databaseFactoryFfi,
+        ),
+        validationDatabaseFactory: databaseFactoryFfi,
+      );
+
+      final result = await failingImporter.import(
+        _withDifferentContent(_fixture('fixture_book.readalongbook')),
+        resolution: ImportConflictResolution.overwrite,
+        targetLibraryId: first.entry!.libraryId,
+      );
+
+      expect(result.ok, isFalse);
+      expect(await _readManifestTitle(first.entry!), 'Fixture Book');
+      expect(await shelfIndex.findByLibraryId(first.entry!.libraryId),
+          first.entry);
+      expect(
+        Directory('${tempDir.path}/books')
+            .listSync()
+            .whereType<Directory>()
+            .map((directory) =>
+                directory.path.split(Platform.pathSeparator).last),
+        isNot(contains(startsWith('.backup-'))),
+      );
+    });
+
+    test('恢复仅处理导入器遗留的直接子目录', () async {
+      final booksDir = Directory('${tempDir.path}/books');
+      await booksDir.create(recursive: true);
+      await Directory('${booksDir.path}/.import-fixture-book-0001-100')
+          .create();
+      await Directory('${booksDir.path}/.backup-existing-book-101').create();
+      await Directory('${booksDir.path}/existing-book').create();
+      final restored = Directory('${booksDir.path}/.backup-restored-book-102');
+      await restored.create();
+      await File('${restored.path}/marker.txt').writeAsString('restore me');
+      final nestedImport =
+          Directory('${booksDir.path}/unrelated/.import-fixture-book-0001-103');
+      await nestedImport.create(recursive: true);
+
+      await importer.recoverInterruptedImports();
+
+      expect(
+        Directory('${booksDir.path}/.import-fixture-book-0001-100')
+            .existsSync(),
+        isFalse,
+      );
+      expect(
+        Directory('${booksDir.path}/.backup-existing-book-101').existsSync(),
+        isFalse,
+      );
+      expect(Directory('${booksDir.path}/restored-book').existsSync(), isTrue);
+      expect(File('${booksDir.path}/restored-book/marker.txt').existsSync(),
+          isTrue);
+      expect(nestedImport.existsSync(), isTrue);
     });
 
     test('坏包不创建书籍目录或书架索引', () async {

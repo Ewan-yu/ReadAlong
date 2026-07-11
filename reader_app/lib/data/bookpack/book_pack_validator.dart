@@ -3,11 +3,9 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:archive/archive_io.dart';
-import 'package:crypto/crypto.dart';
 import 'package:path/path.dart' as p;
 import 'package:sqflite/sqflite.dart' as sqflite;
 
-import '../appdb/shelf_index.dart';
 import 'schema_constants.dart';
 
 class ValidationResult {
@@ -169,135 +167,4 @@ class BookPackValidator {
     }
     return errors;
   }
-}
-
-/// 资源包导入器 — 校验通过后解包到 App 私有目录。
-class BookPackImporter {
-  final String booksDir;
-  final ShelfIndex shelfIndex;
-  final sqflite.DatabaseFactory? validationDatabaseFactory;
-
-  const BookPackImporter({
-    required this.booksDir,
-    required this.shelfIndex,
-    this.validationDatabaseFactory,
-  });
-
-  Future<ImportResult> import(Uint8List zipBytes) async {
-    final validation = await BookPackValidator.validateBytes(
-      zipBytes,
-      databaseFactory: validationDatabaseFactory,
-    );
-    if (!validation.ok) return ImportResult.failed(validation.errors);
-
-    final archive = ZipDecoder().decodeBytes(zipBytes);
-    final manifest = jsonDecode(utf8.decode(archive
-        .firstWhere((f) => f.name == 'manifest.json')
-        .content as List<int>)) as Map<String, dynamic>;
-
-    final bookId = manifest['book_id'] as String;
-    final bookDir = p.join(booksDir, bookId);
-    final packageSha256 = sha256.convert(zipBytes).toString();
-    final existing = await shelfIndex.findById(bookId);
-
-    if (existing != null &&
-        existing.packageSha256 == packageSha256 &&
-        Directory(bookDir).existsSync()) {
-      return ImportResult.alreadyImported(entry: existing);
-    }
-    if (existing != null || Directory(bookDir).existsSync()) {
-      return ImportResult.conflict(bookId: bookId, bookDir: bookDir);
-    }
-
-    final stagingDir = p.join(
-      booksDir,
-      '.import-$bookId-${DateTime.now().microsecondsSinceEpoch}',
-    );
-    var movedToBookDir = false;
-    try {
-      await Directory(stagingDir).create(recursive: true);
-      for (final file in archive) {
-        if (file.isFile) {
-          final relativePath = file.name.replaceAll('/', p.separator);
-          final outFile = File(p.join(stagingDir, relativePath));
-          await outFile.parent.create(recursive: true);
-          await outFile.writeAsBytes(file.content as List<int>);
-        }
-      }
-
-      await Directory(stagingDir).rename(bookDir);
-      movedToBookDir = true;
-
-      final pages = (manifest['pages'] as List).cast<Map<String, dynamic>>();
-      final thumbnailPath = archive.any((file) => file.name == 'cover.jpg')
-          ? 'cover.jpg'
-          : pages.first['thumbnail'] as String;
-      final entry = ShelfBook(
-        libraryId: bookId,
-        sourceBookId: bookId,
-        title: manifest['title'] as String,
-        pageCount: manifest['page_count'] as int,
-        bookDir: bookDir,
-        thumbnailPath: thumbnailPath,
-        packageSha256: packageSha256,
-        importedAt: DateTime.now().toUtc(),
-      );
-      await shelfIndex.add(entry);
-      return ImportResult.success(entry: entry);
-    } catch (error) {
-      final cleanupPath = movedToBookDir ? bookDir : stagingDir;
-      try {
-        await Directory(cleanupPath).delete(recursive: true);
-      } catch (_) {}
-      return ImportResult.failed(['导入资源包失败: $error']);
-    }
-  }
-}
-
-class ImportResult {
-  final bool ok;
-  final bool isConflict;
-  final bool isAlreadyImported;
-  final ShelfBook? entry;
-  final List<String> errors;
-  final String? conflictBookId;
-  final String? conflictBookDir;
-
-  const ImportResult._({
-    required this.ok,
-    required this.isConflict,
-    required this.isAlreadyImported,
-    this.entry,
-    this.errors = const [],
-    this.conflictBookId,
-    this.conflictBookDir,
-  });
-
-  factory ImportResult.success({required ShelfBook entry}) => ImportResult._(
-        ok: true,
-        isConflict: false,
-        isAlreadyImported: false,
-        entry: entry,
-      );
-  factory ImportResult.alreadyImported({required ShelfBook entry}) =>
-      ImportResult._(
-        ok: false,
-        isConflict: false,
-        isAlreadyImported: true,
-        entry: entry,
-      );
-  factory ImportResult.failed(List<String> errors) => ImportResult._(
-        ok: false,
-        isConflict: false,
-        isAlreadyImported: false,
-        errors: errors,
-      );
-  factory ImportResult.conflict(
-          {required String bookId, required String bookDir}) =>
-      ImportResult._(
-          ok: false,
-          isConflict: true,
-          isAlreadyImported: false,
-          conflictBookId: bookId,
-          conflictBookDir: bookDir);
 }
