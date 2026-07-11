@@ -8,6 +8,7 @@ Thumbs.db
 desktop.ini
 .vscode/
 .idea/
+.worktrees/
 *.iml
 *.swp
 *~
