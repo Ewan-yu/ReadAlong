@@ -9,6 +9,7 @@ desktop.ini
 .vscode/
 .idea/
 .worktrees/
+.superpowers/sdd/
 *.iml
 *.swp
 *~
