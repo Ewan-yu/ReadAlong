@@ -48,15 +48,62 @@ Future<String> _readManifestBookId(ShelfBook entry) async {
   return RegExp(r'"book_id"\s*:\s*"([^"]+)"').firstMatch(manifest)!.group(1)!;
 }
 
-class _ReplaceFailingShelfIndex extends ShelfIndex {
-  const _ReplaceFailingShelfIndex({
+class _FirstReplaceFailingShelfIndex extends ShelfIndex {
+  _FirstReplaceFailingShelfIndex({
+    required super.databasePath,
+    required super.databaseFactory,
+  });
+
+  var _shouldFail = true;
+
+  @override
+  Future<void> replace(ShelfBook book) {
+    if (_shouldFail) {
+      _shouldFail = false;
+      throw StateError('replace failed');
+    }
+    return super.replace(book);
+  }
+}
+
+class _AlwaysReplaceFailingShelfIndex extends ShelfIndex {
+  const _AlwaysReplaceFailingShelfIndex({
     required super.databasePath,
     required super.databaseFactory,
   });
 
   @override
   Future<void> replace(ShelfBook book) {
-    throw StateError('replace failed');
+    throw StateError('replace always failed');
+  }
+}
+
+class _BackupRemovingShelfIndex extends ShelfIndex {
+  final String booksDir;
+
+  _BackupRemovingShelfIndex({
+    required this.booksDir,
+    required super.databasePath,
+    required super.databaseFactory,
+  });
+
+  var _shouldFail = true;
+
+  @override
+  Future<void> replace(ShelfBook book) async {
+    if (_shouldFail) {
+      _shouldFail = false;
+      final backup = Directory(booksDir)
+          .listSync()
+          .whereType<Directory>()
+          .singleWhere((directory) =>
+              directory.path.split(Platform.pathSeparator).last.startsWith(
+                    '.backup-${book.libraryId}-',
+                  ));
+      await backup.delete(recursive: true);
+      throw StateError('backup removed before replace failed');
+    }
+    return super.replace(book);
   }
 }
 
@@ -205,6 +252,9 @@ void main() {
       final changed = _withDifferentContent(original);
       await importer.import(original);
       final sourceArchive = ZipDecoder().decodeBytes(changed);
+      final expectedManifest = sourceArchive
+          .firstWhere((file) => file.name == 'manifest.json')
+          .content as List<int>;
       final expectedAlignment = sourceArchive
           .firstWhere((file) => file.name == 'align/alignment.db')
           .content as List<int>;
@@ -219,6 +269,10 @@ void main() {
       expect(copy.entry!.sourceBookId, 'fixture-book-0001');
       expect(await _readManifestBookId(copy.entry!), 'fixture-book-0001');
       expect(
+        await File('${copy.entry!.bookDir}/manifest.json').readAsBytes(),
+        expectedManifest,
+      );
+      expect(
         await File('${copy.entry!.bookDir}/align/alignment.db').readAsBytes(),
         expectedAlignment,
       );
@@ -229,7 +283,7 @@ void main() {
           await importer.import(_fixture('fixture_book.readalongbook'));
       final failingImporter = BookPackImporter(
         booksDir: '${tempDir.path}/books',
-        shelfIndex: _ReplaceFailingShelfIndex(
+        shelfIndex: _FirstReplaceFailingShelfIndex(
           databasePath: '${tempDir.path}/app.db',
           databaseFactory: databaseFactoryFfi,
         ),
@@ -256,13 +310,87 @@ void main() {
       );
     });
 
+    test('覆盖回滚索引失败时保留备份并报告未完成恢复', () async {
+      final first =
+          await importer.import(_fixture('fixture_book.readalongbook'));
+      final failingImporter = BookPackImporter(
+        booksDir: '${tempDir.path}/books',
+        shelfIndex: _AlwaysReplaceFailingShelfIndex(
+          databasePath: '${tempDir.path}/app.db',
+          databaseFactory: databaseFactoryFfi,
+        ),
+        validationDatabaseFactory: databaseFactoryFfi,
+      );
+
+      final result = await failingImporter.import(
+        _withDifferentContent(_fixture('fixture_book.readalongbook')),
+        resolution: ImportConflictResolution.overwrite,
+        targetLibraryId: first.entry!.libraryId,
+      );
+      final backups = Directory('${tempDir.path}/books')
+          .listSync()
+          .whereType<Directory>()
+          .where((directory) =>
+              directory.path.split(Platform.pathSeparator).last.startsWith(
+                    '.backup-${first.entry!.libraryId}-',
+                  ))
+          .toList();
+
+      expect(result.ok, isFalse);
+      expect(result.errors.any((error) => error.contains('回滚书架索引失败')), isTrue);
+      expect(Directory(first.entry!.bookDir).existsSync(), isTrue);
+      expect(backups, hasLength(1));
+      expect(
+        await File('${backups.single.path}/manifest.json').readAsBytes(),
+        ZipDecoder()
+            .decodeBytes(_fixture('fixture_book.readalongbook'))
+            .firstWhere((file) => file.name == 'manifest.json')
+            .content,
+      );
+
+      await expectLater(
+        importer.recoverInterruptedImports(),
+        throwsA(
+          isA<StateError>().having(
+            (error) => error.message,
+            'message',
+            contains('未完成的覆盖恢复'),
+          ),
+        ),
+      );
+      expect(backups.single.existsSync(), isTrue);
+    });
+
+    test('覆盖回滚发现备份丢失时保留新目标并报告错误', () async {
+      final first =
+          await importer.import(_fixture('fixture_book.readalongbook'));
+      final failingImporter = BookPackImporter(
+        booksDir: '${tempDir.path}/books',
+        shelfIndex: _BackupRemovingShelfIndex(
+          booksDir: '${tempDir.path}/books',
+          databasePath: '${tempDir.path}/app.db',
+          databaseFactory: databaseFactoryFfi,
+        ),
+        validationDatabaseFactory: databaseFactoryFfi,
+      );
+
+      final result = await failingImporter.import(
+        _withDifferentContent(_fixture('fixture_book.readalongbook')),
+        resolution: ImportConflictResolution.overwrite,
+        targetLibraryId: first.entry!.libraryId,
+      );
+
+      expect(result.ok, isFalse);
+      expect(result.errors.any((error) => error.contains('回滚备份不存在')), isTrue);
+      expect(Directory(first.entry!.bookDir).existsSync(), isTrue);
+      expect(await _readManifestTitle(first.entry!), 'Fixture Book Updated');
+    });
+
     test('恢复仅处理导入器遗留的直接子目录', () async {
       final booksDir = Directory('${tempDir.path}/books');
       await booksDir.create(recursive: true);
       await Directory('${booksDir.path}/.import-fixture-book-0001-100')
           .create();
-      await Directory('${booksDir.path}/.backup-existing-book-101').create();
-      await Directory('${booksDir.path}/existing-book').create();
       final restored = Directory('${booksDir.path}/.backup-restored-book-102');
       await restored.create();
       await File('${restored.path}/marker.txt').writeAsString('restore me');
@@ -277,14 +405,34 @@ void main() {
             .existsSync(),
         isFalse,
       );
-      expect(
-        Directory('${booksDir.path}/.backup-existing-book-101').existsSync(),
-        isFalse,
-      );
       expect(Directory('${booksDir.path}/restored-book').existsSync(), isTrue);
       expect(File('${booksDir.path}/restored-book/marker.txt').existsSync(),
           isTrue);
       expect(nestedImport.existsSync(), isTrue);
+    });
+
+    test('恢复发现目标和备份同时存在时保留备份并报告冲突', () async {
+      final booksDir = Directory('${tempDir.path}/books');
+      final target = Directory('${booksDir.path}/existing-book');
+      final backup = Directory('${booksDir.path}/.backup-existing-book-101');
+      await target.create(recursive: true);
+      await backup.create();
+      await File('${backup.path}/old.txt').writeAsString('old resource');
+
+      await expectLater(
+        importer.recoverInterruptedImports(),
+        throwsA(
+          isA<StateError>().having(
+            (error) => error.message,
+            'message',
+            contains('未完成的覆盖恢复'),
+          ),
+        ),
+      );
+
+      expect(target.existsSync(), isTrue);
+      expect(backup.existsSync(), isTrue);
+      expect(File('${backup.path}/old.txt').existsSync(), isTrue);
     });
 
     test('坏包不创建书籍目录或书架索引', () async {

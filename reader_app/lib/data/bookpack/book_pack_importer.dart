@@ -140,6 +140,7 @@ class BookPackImporter {
   Future<void> recoverInterruptedImports() async {
     final root = Directory(booksDir);
     if (!await root.exists()) return;
+    final unresolved = <String>[];
 
     await for (final entity in root.list(followLinks: false)) {
       if (entity is! Directory) continue;
@@ -156,8 +157,12 @@ class BookPackImporter {
           FileSystemEntityType.notFound) {
         await entity.rename(targetPath);
       } else {
-        await entity.delete(recursive: true);
+        unresolved.add('目标 $targetPath 与备份 ${entity.path} 同时存在');
       }
+    }
+
+    if (unresolved.isNotEmpty) {
+      throw StateError('发现未完成的覆盖恢复；已保留备份：${unresolved.join('；')}');
     }
   }
 
@@ -236,30 +241,50 @@ class BookPackImporter {
       await Directory(backupDir).delete(recursive: true);
       return ImportResult.success(entry: updated);
     } catch (error) {
+      final errors = <String>['覆盖资源包失败: $error'];
       if (backupCreated) {
-        await _restoreOverwrite(existing, targetDir, backupDir);
+        errors.addAll(
+          await _restoreOverwrite(existing, targetDir, backupDir),
+        );
       } else {
         await _deleteIfExists(stagingDir);
       }
-      return ImportResult.failed(['覆盖资源包失败: $error']);
+      return ImportResult.failed(errors);
     }
   }
 
-  Future<void> _restoreOverwrite(
+  Future<List<String>> _restoreOverwrite(
     ShelfBook previous,
     String targetDir,
     String backupDir,
   ) async {
-    try {
-      await _deleteIfExists(targetDir);
-    } catch (_) {}
-    try {
-      final backup = Directory(backupDir);
-      if (await backup.exists()) await backup.rename(targetDir);
-    } catch (_) {}
+    final errors = <String>[];
+    final backup = Directory(backupDir);
+    if (!await backup.exists()) {
+      errors.add('回滚备份不存在，已保留新目标: $backupDir');
+      return errors;
+    }
+
     try {
       await shelfIndex.replace(previous);
-    } catch (_) {}
+    } catch (error) {
+      errors.add('回滚书架索引失败，已保留目标和备份: $error');
+      return errors;
+    }
+
+    try {
+      await _deleteIfExists(targetDir);
+    } catch (error) {
+      errors.add('删除新目标失败，已保留备份 $backupDir: $error');
+      return errors;
+    }
+
+    try {
+      await backup.rename(targetDir);
+    } catch (error) {
+      errors.add('恢复旧资源失败，已保留备份 $backupDir: $error');
+    }
+    return errors;
   }
 
   Future<void> _extract(Archive archive, String destination) async {

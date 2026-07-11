@@ -73,6 +73,15 @@ void main() {
     expect(migrated.sourceBookId, 'fixture-book-0001');
   });
 
+  test('deprecated bookId aliases libraryId', () {
+    final entry = book(
+      libraryId: 'library-id',
+      sourceBookId: 'source-id',
+    );
+
+    expect(entry.bookId, entry.libraryId);
+  });
+
   test('按 sourceBookId 查询所有副本', () async {
     await index.add(book(libraryId: 'source-copy-1', sourceBookId: 'source'));
     await index.add(book(libraryId: 'other-book', sourceBookId: 'other'));
