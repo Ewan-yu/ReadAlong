@@ -18,16 +18,17 @@ abstract interface class BookPackPicker {
   Future<BookPackSelection?> pick();
 }
 
+typedef BookPackFilePicker = Future<FilePickerResult?> Function();
+
 class FilePickerBookPackPicker implements BookPackPicker {
-  const FilePickerBookPackPicker();
+  final BookPackFilePicker _pickFiles;
+
+  const FilePickerBookPackPicker({BookPackFilePicker? pickFiles})
+      : _pickFiles = pickFiles ?? _pickFromPlatform;
 
   @override
   Future<BookPackSelection?> pick() async {
-    final result = await FilePicker.platform.pickFiles(
-      type: FileType.custom,
-      allowedExtensions: const ['readalongbook'],
-      withData: true,
-    );
+    final result = await _pickFiles();
     if (result == null) return null;
 
     final file = result.files.single;
@@ -39,6 +40,13 @@ class FilePickerBookPackPicker implements BookPackPicker {
     }
     return BookPackSelection(name: file.name, bytes: bytes);
   }
+
+  static Future<FilePickerResult?> _pickFromPlatform() =>
+      FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: const ['readalongbook'],
+        withData: true,
+      );
 }
 
 abstract interface class BookRecordCleaner {

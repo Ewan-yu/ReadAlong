@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:reader_app/data/appdb/shelf_index.dart';
 import 'package:reader_app/data/bookpack/book_pack_importer.dart';
@@ -46,6 +47,56 @@ class _RecordingCleaner implements BookRecordCleaner {
 void main() {
   setUpAll(sqfliteFfiInit);
 
+  group('FilePickerBookPackPicker', () {
+    test('cancellation returns null', () async {
+      final picker = FilePickerBookPackPicker(
+        pickFiles: () async => null,
+      );
+
+      expect(await picker.pick(), isNull);
+    });
+
+    test('returns selected in-memory bytes', () async {
+      final bytes = Uint8List.fromList([1, 2, 3]);
+      final picker = FilePickerBookPackPicker(
+        pickFiles: () async => FilePickerResult([
+          PlatformFile(
+            name: 'book.readalongbook',
+            size: bytes.length,
+            bytes: bytes,
+          ),
+        ]),
+      );
+
+      final selection = await picker.pick();
+
+      expect(selection?.name, 'book.readalongbook');
+      expect(selection?.bytes, bytes);
+    });
+
+    test('loads file bytes when selected bytes are absent', () async {
+      final tempDir =
+          await Directory.systemTemp.createTemp('readalong_picker_test_');
+      addTearDown(() => tempDir.delete(recursive: true));
+      final selectedFile = File('${tempDir.path}/book.readalongbook');
+      await selectedFile.writeAsBytes([4, 5, 6]);
+      final picker = FilePickerBookPackPicker(
+        pickFiles: () async => FilePickerResult([
+          PlatformFile(
+            name: 'book.readalongbook',
+            size: selectedFile.lengthSync(),
+            path: selectedFile.path,
+          ),
+        ]),
+      );
+
+      final selection = await picker.pick();
+
+      expect(selection?.name, 'book.readalongbook');
+      expect(selection?.bytes, [4, 5, 6]);
+    });
+  });
+
   group('LocalShelfLibrary', () {
     late Directory tempDir;
     late _FailingDeleteShelfIndex index;
@@ -82,6 +133,16 @@ void main() {
       return result.entry!;
     }
 
+    Iterable<Directory> pendingDeleteDirectories() {
+      final booksDir = Directory('${tempDir.path}/books');
+      return booksDir.listSync().whereType<Directory>().where(
+            (directory) => directory.path
+                .split(Platform.pathSeparator)
+                .last
+                .startsWith('.delete-'),
+          );
+    }
+
     test('forwards import, list, and interrupted-import recovery', () async {
       final book = await importFixture();
 
@@ -110,6 +171,7 @@ void main() {
       expect(recordCleaner.deletedIds, [book.libraryId]);
       expect(Directory(book.bookDir).existsSync(), isFalse);
       expect(await index.findByLibraryId(book.libraryId), isNull);
+      expect(pendingDeleteDirectories(), isEmpty);
     });
 
     test('cleaner failure after shelf deletion surfaces partial deletion',
