@@ -39,6 +39,9 @@ abstract final class AppSizes {
   static const primaryButton = 72.0; // 播放/录音主按钮直径
   static const topBarHeight = 64.0;
   static const thumbnailStripWidth = 76.0;
+  static const readerWideLayout = 720.0;
+  static const readerCollapsedStripWidth = 48.0;
+  static const readerThumbnailHeight = 96.0;
 }
 
 ThemeData buildAppTheme() {
