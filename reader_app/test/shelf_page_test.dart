@@ -79,6 +79,7 @@ Future<_ScriptedShelfController> _pumpShelf(
   List<ShelfBook> books = const [],
   bool isMutating = false,
   Size size = const Size(800, 800),
+  ValueChanged<ShelfBook>? onOpenBook,
 }) async {
   await tester.binding.setSurfaceSize(size);
   addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -92,7 +93,7 @@ Future<_ScriptedShelfController> _pumpShelf(
       ],
       child: MaterialApp(
         theme: buildAppTheme(),
-        home: const ShelfPage(),
+        home: ShelfPage(onOpenBook: onOpenBook),
       ),
     ),
   );
@@ -423,14 +424,14 @@ void main() {
     expect(find.text('已删除《要删除的绘本》'), findsOneWidget);
   });
 
-  testWidgets('绘本点击保持惰性且不声明按钮语义', (tester) async {
-    final book = _book('inert', title: '暂不打开的绘本');
-    final controller = await _pumpShelf(tester, books: [book]);
-    final inkWell = find.ancestor(
-      of: find.text(book.title),
-      matching: find.byType(InkWell),
+  testWidgets('绘本点击打开精确 libraryId 并保留长按删除', (tester) async {
+    final book = _book('story-copy-2', title: '打开这本绘本');
+    final opened = <ShelfBook>[];
+    await _pumpShelf(
+      tester,
+      books: [book],
+      onOpenBook: opened.add,
     );
-    final gesture = find.byKey(ValueKey('book-tile-gesture-${book.libraryId}'));
     final semantics = find.ancestor(
       of: find.text(book.title),
       matching: find.byWidgetPredicate(
@@ -440,15 +441,14 @@ void main() {
       ),
     );
 
-    expect(inkWell, findsNothing);
-    expect(tester.widget<GestureDetector>(gesture).onTap, isNull);
-    expect(tester.widget<Semantics>(semantics).properties.button, isNot(true));
+    expect(tester.widget<Semantics>(semantics).properties.button, isTrue);
     await tester.tap(find.text(book.title));
     await tester.pumpAndSettle();
+    expect(opened, [book]);
 
-    expect(find.byType(AlertDialog), findsNothing);
-    expect(find.byType(SnackBar), findsNothing);
-    expect(controller.deleteRecordings, isEmpty);
+    await tester.longPress(find.text(book.title));
+    await tester.pumpAndSettle();
+    expect(find.text('删除绘本'), findsOneWidget);
   });
 
   testWidgets('导入等待期间页面销毁后不显示反馈', (tester) async {

@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:path/path.dart' as p;
 
 import '../../core/theme/tokens.dart';
@@ -9,9 +10,10 @@ import '../../data/appdb/shelf_index.dart';
 import '../../data/bookpack/book_pack_importer.dart';
 import 'shelf_controller.dart';
 
-/// The M1.3 library surface. Opening a book is intentionally deferred to M1.4.
 class ShelfPage extends ConsumerWidget {
-  const ShelfPage({super.key});
+  const ShelfPage({super.key, this.onOpenBook});
+
+  final ValueChanged<ShelfBook>? onOpenBook;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -26,6 +28,7 @@ class ShelfPage extends ConsumerWidget {
       body: shelf.when(
         data: (state) => _ShelfContents(
           state: state,
+          onOpen: (book) => _openBook(context, book),
           onDelete: (book) => _confirmDelete(context, ref, book),
         ),
         loading: () => const Center(child: CircularProgressIndicator()),
@@ -53,6 +56,15 @@ class ShelfPage extends ConsumerWidget {
         orElse: () => null,
       ),
     );
+  }
+
+  void _openBook(BuildContext context, ShelfBook book) {
+    final callback = onOpenBook;
+    if (callback != null) {
+      callback(book);
+      return;
+    }
+    context.push('/reader/${Uri.encodeComponent(book.libraryId)}');
   }
 
   Future<void> _importBook(BuildContext context, WidgetRef ref) async {
@@ -283,9 +295,14 @@ class ShelfPage extends ConsumerWidget {
 }
 
 class _ShelfContents extends StatelessWidget {
-  const _ShelfContents({required this.state, required this.onDelete});
+  const _ShelfContents({
+    required this.state,
+    required this.onOpen,
+    required this.onDelete,
+  });
 
   final ShelfState state;
+  final ValueChanged<ShelfBook> onOpen;
   final ValueChanged<ShelfBook> onDelete;
 
   @override
@@ -319,6 +336,7 @@ class _ShelfContents extends StatelessWidget {
                 final book = state.books[index];
                 return _BookTile(
                   book: book,
+                  onTap: state.isMutating ? null : () => onOpen(book),
                   onLongPress: state.isMutating ? null : () => onDelete(book),
                 );
               },
@@ -366,20 +384,31 @@ class _ShelfEmptyState extends StatelessWidget {
 }
 
 class _BookTile extends StatelessWidget {
-  const _BookTile({required this.book, required this.onLongPress});
+  const _BookTile({
+    required this.book,
+    required this.onTap,
+    required this.onLongPress,
+  });
 
   final ShelfBook book;
+  final VoidCallback? onTap;
   final VoidCallback? onLongPress;
 
   @override
   Widget build(BuildContext context) => Semantics(
         label: '${book.title}，${book.pageCount} 页',
-        hint: onLongPress == null ? null : '长按可删除绘本',
+        hint: onTap == null
+            ? null
+            : onLongPress == null
+                ? '点击打开绘本'
+                : '点击打开绘本，长按可删除绘本',
+        button: true,
+        enabled: onTap != null,
         child: Material(
           color: AppColors.bg,
-          child: GestureDetector(
+          child: InkWell(
             key: ValueKey('book-tile-gesture-${book.libraryId}'),
-            behavior: HitTestBehavior.opaque,
+            onTap: onTap,
             onLongPress: onLongPress,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
