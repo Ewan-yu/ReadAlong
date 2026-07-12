@@ -1,14 +1,28 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path/path.dart' as p;
 
+import '../../data/appdb/app_database_providers.dart';
 import '../../data/appdb/shelf_index.dart';
 import 'reader_models.dart';
 
 abstract interface class ReaderRepository {
   Future<ReaderBook> loadBook(String libraryId);
 }
+
+final readerRepositoryProvider = FutureProvider<ReaderRepository>((ref) async {
+  final shelfIndex = await ref.watch(shelfIndexProvider.future);
+  return LocalReaderRepository(shelfIndex: shelfIndex);
+});
+
+final readerBookProvider = FutureProvider.family<ReaderBook, String>(
+  (ref, libraryId) async {
+    final repository = await ref.watch(readerRepositoryProvider.future);
+    return repository.loadBook(libraryId);
+  },
+);
 
 class LocalReaderRepository implements ReaderRepository {
   const LocalReaderRepository({required this.shelfIndex});

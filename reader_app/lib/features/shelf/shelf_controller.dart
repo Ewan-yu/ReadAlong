@@ -2,9 +2,8 @@ import 'dart:typed_data';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
-import 'package:sqflite/sqflite.dart' as sqflite;
 
+import '../../data/appdb/app_database_providers.dart';
 import '../../data/appdb/shelf_index.dart';
 import '../../data/bookpack/book_pack_importer.dart';
 import 'shelf_library.dart';
@@ -57,17 +56,15 @@ class PendingImport {
   const PendingImport({required this.bytes, required this.conflict});
 }
 
-final shelfLibraryProvider = FutureProvider<ShelfLibrary>((_) async {
-  final documents = await getApplicationDocumentsDirectory();
+final shelfLibraryProvider = FutureProvider<ShelfLibrary>((ref) async {
+  final documents = await ref.watch(appDocumentsDirectoryProvider.future);
   final booksDir = p.join(documents.path, 'books');
-  final shelfIndex = ShelfIndex(
-    databasePath: p.join(documents.path, 'app.db'),
-    databaseFactory: sqflite.databaseFactory,
-  );
+  final shelfIndex = await ref.watch(shelfIndexProvider.future);
+  final databaseFactory = ref.watch(appDatabaseFactoryProvider);
   final importer = BookPackImporter(
     booksDir: booksDir,
     shelfIndex: shelfIndex,
-    validationDatabaseFactory: sqflite.databaseFactory,
+    validationDatabaseFactory: databaseFactory,
   );
   return LocalShelfLibrary(
     importer: importer,

@@ -1,8 +1,12 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:path/path.dart' as p;
+import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+import 'package:reader_app/data/appdb/app_database_providers.dart';
 import 'package:reader_app/data/appdb/shelf_index.dart';
 import 'package:reader_app/data/bookpack/book_pack_importer.dart';
 import 'package:reader_app/features/shelf/shelf_controller.dart';
@@ -97,6 +101,8 @@ ShelfBook _book(String libraryId) => ShelfBook(
     );
 
 void main() {
+  sqfliteFfiInit();
+
   late _FakeShelfLibrary library;
   late _FakeBookPackPicker picker;
   late ProviderContainer container;
@@ -115,6 +121,24 @@ void main() {
     addTearDown(container.dispose);
     await container.read(shelfControllerProvider.future);
     controller = container.read(shelfControllerProvider.notifier);
+  });
+
+  test('shared shelfIndexProvider uses overridable documents and factory',
+      () async {
+    final tempDir = await Directory.systemTemp.createTemp('app_db_provider_');
+    addTearDown(() => tempDir.delete(recursive: true));
+    final localContainer = ProviderContainer(
+      overrides: [
+        appDocumentsDirectoryProvider.overrideWith((_) async => tempDir),
+        appDatabaseFactoryProvider.overrideWith((_) => databaseFactoryFfi),
+      ],
+    );
+    addTearDown(localContainer.dispose);
+
+    final index = await localContainer.read(shelfIndexProvider.future);
+
+    expect(index.databasePath, p.join(tempDir.path, 'app.db'));
+    expect(index.databaseFactory, same(databaseFactoryFfi));
   });
 
   test('pick cancellation returns cancelled without changing shelf state',

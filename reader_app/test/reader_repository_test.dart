@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
@@ -8,6 +9,19 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:reader_app/data/appdb/shelf_index.dart';
 import 'package:reader_app/features/reader/reader_models.dart';
 import 'package:reader_app/features/reader/reader_repository.dart';
+
+class _RecordingReaderRepository implements ReaderRepository {
+  _RecordingReaderRepository(this.book);
+
+  final ReaderBook book;
+  final requestedLibraryIds = <String>[];
+
+  @override
+  Future<ReaderBook> loadBook(String libraryId) async {
+    requestedLibraryIds.add(libraryId);
+    return book;
+  }
+}
 
 void main() {
   sqfliteFfiInit();
@@ -204,5 +218,27 @@ void main() {
       () => repository.loadBook(shelfBook.libraryId),
       throwsA(isA<ReaderManifestException>()),
     );
+  });
+
+  test('readerBookProvider 将请求的 libraryId 传给 repository', () async {
+    final expected = ReaderBook(
+      libraryId: 'story-copy-2',
+      sourceBookId: 'story-source',
+      title: 'Moon Story',
+      pages: const [],
+    );
+    final fake = _RecordingReaderRepository(expected);
+    final container = ProviderContainer(
+      overrides: [
+        readerRepositoryProvider.overrideWith((_) async => fake),
+      ],
+    );
+    addTearDown(container.dispose);
+
+    final loaded =
+        await container.read(readerBookProvider('story-copy-2').future);
+
+    expect(loaded, same(expected));
+    expect(fake.requestedLibraryIds, ['story-copy-2']);
   });
 }
