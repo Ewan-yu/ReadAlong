@@ -38,6 +38,25 @@ Uint8List _withDifferentContent(Uint8List source) {
   return Uint8List.fromList(ZipEncoder().encode(changedArchive)!);
 }
 
+Uint8List _withDuplicateEntry(
+  Uint8List source,
+  String path, {
+  List<int>? duplicateContent,
+}) {
+  final sourceArchive = ZipDecoder().decodeBytes(source);
+  final output = OutputStream();
+  final encoder = ZipEncoder()..startEncode(output);
+  for (final file in sourceArchive.files) {
+    encoder.addFile(file, autoClose: false);
+  }
+  final original = sourceArchive.files.firstWhere((file) => file.name == path);
+  final content =
+      duplicateContent ?? List<int>.from(original.content as List<int>);
+  encoder.addFile(ArchiveFile(path, content.length, content));
+  encoder.endEncode();
+  return Uint8List.fromList(output.getBytes());
+}
+
 Future<String> _readManifestTitle(ShelfBook entry) async {
   final manifest = await File('${entry.bookDir}/manifest.json').readAsString();
   return RegExp(r'"title"\s*:\s*"([^"]+)"').firstMatch(manifest)!.group(1)!;
@@ -160,6 +179,22 @@ void main() {
       expect(result.ok, isFalse);
       expect(result.errors.any((e) => e.contains('路径逃逸')), isTrue,
           reason: '错误信息应提及路径逃逸，实际: ${result.errors}');
+    });
+
+    test('坏包：内容不同的重复 manifest.json 在清单校验前被拒绝', () async {
+      final result = await BookPackValidator.validateBytes(
+        _withDuplicateEntry(
+          _fixture('fixture_book.readalongbook'),
+          'manifest.json',
+          duplicateContent: '{"book_id":"different"}'.codeUnits,
+        ),
+        databaseFactory: databaseFactoryFfi,
+      );
+
+      expect(result.ok, isFalse);
+      expect(result.errors, contains(contains('重复')));
+      expect(result.errors, contains(contains('manifest.json')));
+      expect(result.errors, isNot(contains(contains('缺少必需文件'))));
     });
 
     test('非法 zip 字节被拒绝', () async {
@@ -297,6 +332,7 @@ void main() {
       );
 
       expect(result.ok, isFalse);
+      expect(result.failureCategory, ImportFailureCategory.operation);
       expect(await _readManifestTitle(first.entry!), 'Fixture Book');
       expect(await shelfIndex.findByLibraryId(first.entry!.libraryId),
           first.entry);
@@ -337,6 +373,7 @@ void main() {
           .toList();
 
       expect(result.ok, isFalse);
+      expect(result.failureCategory, ImportFailureCategory.operation);
       expect(result.errors.any((error) => error.contains('回滚书架索引失败')), isTrue);
       expect(Directory(first.entry!.bookDir).existsSync(), isTrue);
       expect(backups, hasLength(1));
@@ -381,6 +418,7 @@ void main() {
       );
 
       expect(result.ok, isFalse);
+      expect(result.failureCategory, ImportFailureCategory.operation);
       expect(result.errors.any((error) => error.contains('回滚备份不存在')), isTrue);
       expect(Directory(first.entry!.bookDir).existsSync(), isTrue);
       expect(await _readManifestTitle(first.entry!), 'Fixture Book Updated');
@@ -441,6 +479,23 @@ void main() {
       );
 
       expect(result.ok, isFalse);
+      expect(result.failureCategory, ImportFailureCategory.validation);
+      expect(await shelfIndex.listBooks(), isEmpty);
+      final booksDir = Directory('${tempDir.path}/books');
+      expect(booksDir.existsSync() ? booksDir.listSync() : const [], isEmpty);
+    });
+
+    test('重复必需资源路径属于校验失败且不创建索引或残留目录', () async {
+      final result = await importer.import(
+        _withDuplicateEntry(
+          _fixture('fixture_book.readalongbook'),
+          'align/alignment.db',
+        ),
+      );
+
+      expect(result.ok, isFalse);
+      expect(result.failureCategory, ImportFailureCategory.validation);
+      expect(result.errors, contains(contains('align/alignment.db')));
       expect(await shelfIndex.listBooks(), isEmpty);
       final booksDir = Directory('${tempDir.path}/books');
       expect(booksDir.existsSync() ? booksDir.listSync() : const [], isEmpty);

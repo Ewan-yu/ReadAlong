@@ -2,7 +2,6 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
-import 'package:path/path.dart' as p;
 
 import '../../data/appdb/shelf_index.dart';
 import '../../data/bookpack/book_pack_importer.dart';
@@ -71,26 +70,35 @@ abstract interface class ShelfLibrary {
   Future<void> deleteBook(ShelfBook book, {required bool deleteRecordings});
 }
 
+typedef DeleteDirectory = Future<void> Function(Directory directory);
+
 class PartialBookDeleteException implements Exception {
   final ShelfBook book;
-  final Object cause;
+  final List<Object> causes;
 
-  const PartialBookDeleteException({required this.book, required this.cause});
+  PartialBookDeleteException({
+    required this.book,
+    required List<Object> causes,
+  })  : assert(causes.isNotEmpty),
+        causes = List.unmodifiable(causes);
 
   @override
-  String toString() => 'PartialBookDeleteException(${book.libraryId}): $cause';
+  String toString() =>
+      'PartialBookDeleteException(${book.libraryId}): ${causes.join('; ')}';
 }
 
 class LocalShelfLibrary implements ShelfLibrary {
   final BookPackImporter importer;
   final ShelfIndex shelfIndex;
   final BookRecordCleaner recordCleaner;
+  final DeleteDirectory _deleteDirectory;
 
-  const LocalShelfLibrary({
+  LocalShelfLibrary({
     required this.importer,
     required this.shelfIndex,
     required this.recordCleaner,
-  });
+    DeleteDirectory? deleteDirectory,
+  }) : _deleteDirectory = deleteDirectory ?? _deleteDirectoryRecursively;
 
   @override
   Future<void> recoverInterruptedImports() =>
@@ -117,12 +125,7 @@ class LocalShelfLibrary implements ShelfLibrary {
     required bool deleteRecordings,
   }) async {
     final source = Directory(book.bookDir);
-    final pendingDelete = Directory(
-      p.join(
-        source.parent.path,
-        '.delete-${book.libraryId}-${DateTime.now().microsecondsSinceEpoch}',
-      ),
-    );
+    final pendingDelete = Directory(importer.deleteStagingPath(book.libraryId));
 
     await source.rename(pendingDelete.path);
     try {
@@ -132,14 +135,24 @@ class LocalShelfLibrary implements ShelfLibrary {
       rethrow;
     }
 
+    final failures = <Object>[];
     if (deleteRecordings) {
       try {
         await recordCleaner.deleteForBook(book.libraryId);
       } catch (error) {
-        await pendingDelete.delete(recursive: true);
-        throw PartialBookDeleteException(book: book, cause: error);
+        failures.add(error);
       }
     }
-    await pendingDelete.delete(recursive: true);
+    try {
+      await _deleteDirectory(pendingDelete);
+    } catch (error) {
+      failures.add(error);
+    }
+    if (failures.isNotEmpty) {
+      throw PartialBookDeleteException(book: book, causes: failures);
+    }
   }
 }
+
+Future<void> _deleteDirectoryRecursively(Directory directory) =>
+    directory.delete(recursive: true);

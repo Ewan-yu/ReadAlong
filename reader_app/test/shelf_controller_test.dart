@@ -105,7 +105,7 @@ void main() {
   setUp(() async {
     library = _FakeShelfLibrary(
       books: [_book('existing')],
-      importResult: ImportResult.failed(['not configured']),
+      importResult: ImportResult.operationFailure(['not configured']),
     );
     picker = _FakeBookPackPicker();
     container = ProviderContainer(overrides: [
@@ -230,7 +230,7 @@ void main() {
       bytes: Uint8List.fromList([0]),
     );
     library.importResult =
-        ImportResult.failed(['missing manifest', 'bad audio']);
+        ImportResult.validationFailure(['missing manifest', 'bad audio']);
 
     final result = await controller.pickAndImport();
 
@@ -239,6 +239,22 @@ void main() {
     expect(container.read(shelfControllerProvider).value!.books,
         [_book('existing')]);
     expect(container.read(shelfControllerProvider).value!.isMutating, isFalse);
+  });
+
+  test('operation import failure maps to failed and retains the shelf',
+      () async {
+    final existing = library.books.single;
+    picker.selection = BookPackSelection(
+      name: 'valid-but-unwritable.readalongbook',
+      bytes: Uint8List.fromList([1]),
+    );
+    library.importResult = ImportResult.operationFailure(['disk full']);
+
+    final result = await controller.pickAndImport();
+
+    expect(result.kind, ShelfActionKind.failed);
+    expect(result.errors, ['disk full']);
+    expect(container.read(shelfControllerProvider).value!.books, [existing]);
   });
 
   test('resolves overwrite using the pending conflict target', () async {
@@ -303,7 +319,7 @@ void main() {
     final book = library.books.single;
     library.deleteError = PartialBookDeleteException(
       book: book,
-      cause: StateError('record cleanup failed'),
+      causes: [StateError('record cleanup failed')],
     );
 
     final partial = await controller.deleteBook(book, deleteRecordings: true);
@@ -330,7 +346,7 @@ void main() {
     final replacementBook = _book('replacement');
     final replacement = _FakeShelfLibrary(
       books: [replacementBook],
-      importResult: ImportResult.failed(['not configured']),
+      importResult: ImportResult.operationFailure(['not configured']),
     );
 
     library = replacement;

@@ -8,9 +8,12 @@ import 'package:path/path.dart' as p;
 import 'package:sqflite/sqflite.dart' as sqflite;
 
 import '../appdb/shelf_index.dart';
+import 'archive_entries.dart';
 import 'book_pack_validator.dart';
 
 enum ImportConflictResolution { reject, overwrite, saveCopy }
+
+enum ImportFailureCategory { validation, operation }
 
 class ImportResult {
   final bool ok;
@@ -18,6 +21,7 @@ class ImportResult {
   final bool isAlreadyImported;
   final ShelfBook? entry;
   final ShelfBook? conflictEntry;
+  final ImportFailureCategory? failureCategory;
   final List<String> errors;
 
   const ImportResult._({
@@ -26,6 +30,7 @@ class ImportResult {
     required this.isAlreadyImported,
     this.entry,
     this.conflictEntry,
+    this.failureCategory,
     this.errors = const [],
   });
 
@@ -52,10 +57,19 @@ class ImportResult {
         conflictEntry: conflictEntry,
       );
 
-  factory ImportResult.failed(List<String> errors) => ImportResult._(
+  factory ImportResult.validationFailure(List<String> errors) => ImportResult._(
         ok: false,
         isConflict: false,
         isAlreadyImported: false,
+        failureCategory: ImportFailureCategory.validation,
+        errors: List.unmodifiable(errors),
+      );
+
+  factory ImportResult.operationFailure(List<String> errors) => ImportResult._(
+        ok: false,
+        isConflict: false,
+        isAlreadyImported: false,
+        failureCategory: ImportFailureCategory.operation,
         errors: List.unmodifiable(errors),
       );
 }
@@ -77,63 +91,86 @@ class BookPackImporter {
     ImportConflictResolution resolution = ImportConflictResolution.reject,
     String? targetLibraryId,
   }) async {
-    final validation = await BookPackValidator.validateBytes(
-      zipBytes,
-      databaseFactory: validationDatabaseFactory,
-    );
-    if (!validation.ok) return ImportResult.failed(validation.errors);
+    ValidationResult validation;
+    try {
+      validation = await BookPackValidator.validateBytes(
+        zipBytes,
+        databaseFactory: validationDatabaseFactory,
+      );
+    } catch (error) {
+      return ImportResult.operationFailure(['校验资源包时发生本地错误: $error']);
+    }
+    if (!validation.ok) {
+      return ImportResult.validationFailure(validation.errors);
+    }
 
-    final archive = ZipDecoder().decodeBytes(zipBytes);
-    final manifest = _readManifest(archive);
-    final sourceBookId = manifest['book_id'] as String;
-    final packageSha256 = sha256.convert(zipBytes).toString();
-    final sourceEntries = await shelfIndex.findBySourceBookId(sourceBookId);
+    try {
+      final decoder = ZipDecoder();
+      final archive = decoder.decodeBytes(zipBytes);
+      final canonical = CanonicalArchiveEntries.fromArchive(
+        archive,
+        archivePaths:
+            decoder.directory.fileHeaders.map((header) => header.filename),
+      );
+      if (canonical.errors.isNotEmpty) {
+        return ImportResult.validationFailure(canonical.errors);
+      }
+      final entries = canonical.entries;
+      final manifest = _readManifest(entries);
+      final sourceBookId = manifest['book_id'] as String;
+      final packageSha256 = sha256.convert(zipBytes).toString();
+      final sourceEntries = await shelfIndex.findBySourceBookId(sourceBookId);
 
-    switch (resolution) {
-      case ImportConflictResolution.reject:
-        final identical = sourceEntries.where(
-          (entry) => entry.packageSha256 == packageSha256,
-        );
-        if (identical.isNotEmpty) {
-          return ImportResult.alreadyImported(entry: identical.first);
-        }
-        if (sourceEntries.isNotEmpty) {
-          return ImportResult.conflict(
-            conflictEntry: _preferredConflict(sourceEntries, sourceBookId),
+      switch (resolution) {
+        case ImportConflictResolution.reject:
+          final identical = sourceEntries.where(
+            (entry) => entry.packageSha256 == packageSha256,
           );
-        }
-        final bookDir = p.join(booksDir, sourceBookId);
-        if (await Directory(bookDir).exists()) {
-          return ImportResult.failed(['书籍目录已存在但未被书架索引管理: $bookDir']);
-        }
-        return _installNew(
-          archive: archive,
-          manifest: manifest,
-          libraryId: sourceBookId,
-          packageSha256: packageSha256,
-        );
-      case ImportConflictResolution.overwrite:
-        final target = _overwriteTarget(
-          entries: sourceEntries,
-          sourceBookId: sourceBookId,
-          targetLibraryId: targetLibraryId,
-        );
-        if (target == null) {
-          return ImportResult.failed(['未找到可覆盖的本地书籍']);
-        }
-        return _overwrite(
-          archive: archive,
-          manifest: manifest,
-          existing: target,
-          packageSha256: packageSha256,
-        );
-      case ImportConflictResolution.saveCopy:
-        return _saveCopy(
-          archive: archive,
-          manifest: manifest,
-          sourceBookId: sourceBookId,
-          packageSha256: packageSha256,
-        );
+          if (identical.isNotEmpty) {
+            return ImportResult.alreadyImported(entry: identical.first);
+          }
+          if (sourceEntries.isNotEmpty) {
+            return ImportResult.conflict(
+              conflictEntry: _preferredConflict(sourceEntries, sourceBookId),
+            );
+          }
+          final bookDir = p.join(booksDir, sourceBookId);
+          if (await Directory(bookDir).exists()) {
+            return ImportResult.operationFailure(
+              ['书籍目录已存在但未被书架索引管理: $bookDir'],
+            );
+          }
+          return _installNew(
+            entries: entries,
+            manifest: manifest,
+            libraryId: sourceBookId,
+            packageSha256: packageSha256,
+          );
+        case ImportConflictResolution.overwrite:
+          final target = _overwriteTarget(
+            entries: sourceEntries,
+            sourceBookId: sourceBookId,
+            targetLibraryId: targetLibraryId,
+          );
+          if (target == null) {
+            return ImportResult.operationFailure(['未找到可覆盖的本地书籍']);
+          }
+          return _overwrite(
+            entries: entries,
+            manifest: manifest,
+            existing: target,
+            packageSha256: packageSha256,
+          );
+        case ImportConflictResolution.saveCopy:
+          return _saveCopy(
+            entries: entries,
+            manifest: manifest,
+            sourceBookId: sourceBookId,
+            packageSha256: packageSha256,
+          );
+      }
+    } catch (error) {
+      return ImportResult.operationFailure(['导入资源包失败: $error']);
     }
   }
 
@@ -147,6 +184,30 @@ class BookPackImporter {
       final name = p.basename(entity.path);
       if (_importDirectoryPattern.hasMatch(name)) {
         await entity.delete(recursive: true);
+        continue;
+      }
+
+      final deleteMatch = _deleteDirectoryPattern.firstMatch(name);
+      if (deleteMatch != null) {
+        final libraryId = deleteMatch.group(2)!;
+        final targetPath = p.join(booksDir, libraryId);
+        final indexed = await shelfIndex.findByLibraryId(libraryId);
+        if (indexed == null) {
+          await entity.delete(recursive: true);
+        } else if (!p.equals(
+          p.normalize(indexed.bookDir),
+          p.normalize(targetPath),
+        )) {
+          unresolved.add('索引目录 ${indexed.bookDir} 不属于删除暂存目录 ${entity.path}');
+        } else if (await FileSystemEntity.type(
+              targetPath,
+              followLinks: false,
+            ) ==
+            FileSystemEntityType.notFound) {
+          await entity.rename(targetPath);
+        } else {
+          unresolved.add('目标 $targetPath 与删除暂存目录 ${entity.path} 同时存在');
+        }
         continue;
       }
 
@@ -167,7 +228,7 @@ class BookPackImporter {
   }
 
   Future<ImportResult> _installNew({
-    required Archive archive,
+    required Map<String, ArchiveFile> entries,
     required Map<String, dynamic> manifest,
     required String libraryId,
     required String packageSha256,
@@ -176,12 +237,12 @@ class BookPackImporter {
     final stagingDir = _stagingPath(libraryId);
     var movedToBookDir = false;
     try {
-      await _extract(archive, stagingDir);
+      await _extract(entries, stagingDir);
       await Directory(stagingDir).rename(bookDir);
       movedToBookDir = true;
       final entry = _entryFromManifest(
         manifest: manifest,
-        archive: archive,
+        entries: entries,
         libraryId: libraryId,
         bookDir: bookDir,
         packageSha256: packageSha256,
@@ -190,12 +251,12 @@ class BookPackImporter {
       return ImportResult.success(entry: entry);
     } catch (error) {
       await _deleteIfExists(movedToBookDir ? bookDir : stagingDir);
-      return ImportResult.failed(['导入资源包失败: $error']);
+      return ImportResult.operationFailure(['导入资源包失败: $error']);
     }
   }
 
   Future<ImportResult> _saveCopy({
-    required Archive archive,
+    required Map<String, ArchiveFile> entries,
     required Map<String, dynamic> manifest,
     required String sourceBookId,
     required String packageSha256,
@@ -208,7 +269,7 @@ class BookPackImporter {
       libraryId = '$sourceBookId-copy-$copyNumber';
     }
     return _installNew(
-      archive: archive,
+      entries: entries,
       manifest: manifest,
       libraryId: libraryId,
       packageSha256: packageSha256,
@@ -216,7 +277,7 @@ class BookPackImporter {
   }
 
   Future<ImportResult> _overwrite({
-    required Archive archive,
+    required Map<String, ArchiveFile> entries,
     required Map<String, dynamic> manifest,
     required ShelfBook existing,
     required String packageSha256,
@@ -226,13 +287,13 @@ class BookPackImporter {
     final backupDir = _backupPath(existing.libraryId);
     var backupCreated = false;
     try {
-      await _extract(archive, stagingDir);
+      await _extract(entries, stagingDir);
       await Directory(targetDir).rename(backupDir);
       backupCreated = true;
       await Directory(stagingDir).rename(targetDir);
       final updated = _entryFromManifest(
         manifest: manifest,
-        archive: archive,
+        entries: entries,
         libraryId: existing.libraryId,
         bookDir: targetDir,
         packageSha256: packageSha256,
@@ -249,7 +310,7 @@ class BookPackImporter {
       } else {
         await _deleteIfExists(stagingDir);
       }
-      return ImportResult.failed(errors);
+      return ImportResult.operationFailure(errors);
     }
   }
 
@@ -287,13 +348,17 @@ class BookPackImporter {
     return errors;
   }
 
-  Future<void> _extract(Archive archive, String destination) async {
+  Future<void> _extract(
+    Map<String, ArchiveFile> entries,
+    String destination,
+  ) async {
     await Directory(booksDir).create(recursive: true);
     await Directory(destination).create();
-    for (final file in archive) {
+    for (final entry in entries.entries) {
+      final file = entry.value;
       if (!file.isFile) continue;
       final outFile = File(
-        p.join(destination, file.name.replaceAll('/', p.separator)),
+        p.join(destination, entry.key.replaceAll('/', p.separator)),
       );
       await outFile.parent.create(recursive: true);
       await outFile.writeAsBytes(file.content as List<int>);
@@ -302,13 +367,13 @@ class BookPackImporter {
 
   ShelfBook _entryFromManifest({
     required Map<String, dynamic> manifest,
-    required Archive archive,
+    required Map<String, ArchiveFile> entries,
     required String libraryId,
     required String bookDir,
     required String packageSha256,
   }) {
     final pages = (manifest['pages'] as List).cast<Map<String, dynamic>>();
-    final thumbnailPath = archive.any((file) => file.name == 'cover.jpg')
+    final thumbnailPath = entries.containsKey('cover.jpg')
         ? 'cover.jpg'
         : pages.first['thumbnail'] as String;
     return ShelfBook(
@@ -329,15 +394,20 @@ class BookPackImporter {
   String _backupPath(String libraryId) =>
       p.join(booksDir, '.backup-$libraryId-${_nonce()}');
 
+  String deleteStagingPath(String libraryId) =>
+      p.join(booksDir, '.delete-${_nonce()}-$libraryId');
+
   static Future<void> _deleteIfExists(String path) async {
     final directory = Directory(path);
     if (await directory.exists()) await directory.delete(recursive: true);
   }
 
-  static Map<String, dynamic> _readManifest(Archive archive) => jsonDecode(
+  static Map<String, dynamic> _readManifest(
+    Map<String, ArchiveFile> entries,
+  ) =>
+      jsonDecode(
         utf8.decode(
-          archive.firstWhere((file) => file.name == 'manifest.json').content
-              as List<int>,
+          entries['manifest.json']!.content as List<int>,
         ),
       ) as Map<String, dynamic>;
 
@@ -380,4 +450,7 @@ final _importDirectoryPattern = RegExp(
 );
 final _backupDirectoryPattern = RegExp(
   r'^\.backup-([a-z0-9][a-z0-9-]{2,63})-\d+$',
+);
+final _deleteDirectoryPattern = RegExp(
+  r'^\.delete-(\d+)-([a-z0-9][a-z0-9-]{2,126})$',
 );

@@ -265,7 +265,7 @@ class ShelfPage extends ConsumerWidget {
         context: context,
         builder: (context) => AlertDialog(
           title: const Text('操作没有完成'),
-          content: const Text('请稍后再试。如果还是不行，请重新导出绘本资源包。'),
+          content: const Text('请稍后再试。若问题持续，请重启应用后重试。'),
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(context),

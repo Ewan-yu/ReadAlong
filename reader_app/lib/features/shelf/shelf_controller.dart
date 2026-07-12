@@ -167,7 +167,7 @@ class ShelfController extends AsyncNotifier<ShelfState> {
       return ShelfActionResult(
         kind: ShelfActionKind.partialDelete,
         book: error.book,
-        errors: [error.cause.toString()],
+        errors: error.causes.map((cause) => cause.toString()).toList(),
       );
     } catch (error) {
       return _failed(error);
@@ -204,7 +204,9 @@ class ShelfController extends AsyncNotifier<ShelfState> {
       );
     }
     return ShelfActionResult(
-      kind: ShelfActionKind.validationFailed,
+      kind: result.failureCategory == ImportFailureCategory.validation
+          ? ShelfActionKind.validationFailed
+          : ShelfActionKind.failed,
       importResult: result,
       errors: result.errors,
     );

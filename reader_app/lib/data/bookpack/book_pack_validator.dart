@@ -3,9 +3,9 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:archive/archive_io.dart';
-import 'package:path/path.dart' as p;
 import 'package:sqflite/sqflite.dart' as sqflite;
 
+import 'archive_entries.dart';
 import 'schema_constants.dart';
 
 class ValidationResult {
@@ -27,22 +27,23 @@ class BookPackValidator {
 
     // 1. zip 解析
     Archive archive;
+    final decoder = ZipDecoder();
     try {
-      archive = ZipDecoder().decodeBytes(zipBytes);
+      archive = decoder.decodeBytes(zipBytes);
     } catch (e) {
       return ValidationResult.fail(['无法解析 zip 格式: $e']);
     }
 
-    // 2. 路径逃逸（优先拦截，防恶意包）
-    for (final f in archive) {
-      final name = f.name;
-      if (name.contains('..') || p.isAbsolute(name) || name.startsWith('/')) {
-        errors.add('路径逃逸: $name');
-      }
+    // 2. 路径逃逸和重复路径必须先于清单、必需文件校验。
+    final canonical = CanonicalArchiveEntries.fromArchive(
+      archive,
+      archivePaths:
+          decoder.directory.fileHeaders.map((header) => header.filename),
+    );
+    if (canonical.errors.isNotEmpty) {
+      return ValidationResult.fail(canonical.errors);
     }
-    if (errors.isNotEmpty) return ValidationResult.fail(errors);
-
-    final byName = {for (final f in archive) f.name: f};
+    final byName = canonical.entries;
 
     // 3. 必需条目
     for (final entry in BookPackSchema.requiredEntries) {

@@ -188,6 +188,106 @@ void main() {
       expect(await index.findByLibraryId(book.libraryId), isNull);
     });
 
+    test('final staged-directory deletion failure is a partial deletion',
+        () async {
+      final book = await importFixture();
+      library = LocalShelfLibrary(
+        importer: importer,
+        shelfIndex: index,
+        recordCleaner: recordCleaner,
+        deleteDirectory: (_) async => throw FileSystemException(
+          'final delete failed',
+        ),
+      );
+
+      await expectLater(
+        library.deleteBook(book, deleteRecordings: false),
+        throwsA(isA<PartialBookDeleteException>()),
+      );
+
+      expect(await index.findByLibraryId(book.libraryId), isNull);
+      expect(Directory(book.bookDir).existsSync(), isFalse);
+      expect(pendingDeleteDirectories(), hasLength(1));
+    });
+
+    test('cleaner and staged-directory cleanup are both attempted and reported',
+        () async {
+      final book = await importFixture();
+      recordCleaner.error = StateError('record cleanup failed');
+      var deleteAttempts = 0;
+      library = LocalShelfLibrary(
+        importer: importer,
+        shelfIndex: index,
+        recordCleaner: recordCleaner,
+        deleteDirectory: (_) async {
+          deleteAttempts++;
+          throw FileSystemException('final delete failed');
+        },
+      );
+
+      try {
+        await library.deleteBook(book, deleteRecordings: true);
+        fail('deleteBook should report partial deletion');
+      } on PartialBookDeleteException catch (error) {
+        expect(error.causes, hasLength(2));
+        expect(error.toString(), contains('record cleanup failed'));
+        expect(error.toString(), contains('final delete failed'));
+      }
+
+      expect(recordCleaner.deletedIds, [book.libraryId]);
+      expect(deleteAttempts, 1);
+      expect(await index.findByLibraryId(book.libraryId), isNull);
+      expect(pendingDeleteDirectories(), hasLength(1));
+    });
+
+    test('startup recovery restores indexed direct delete staging directory',
+        () async {
+      final book = await importFixture();
+      final staged = Directory(
+        '${tempDir.path}/books/.delete-100-${book.libraryId}',
+      );
+      await Directory(book.bookDir).rename(staged.path);
+
+      await library.recoverInterruptedImports();
+
+      expect(staged.existsSync(), isFalse);
+      expect(Directory(book.bookDir).existsSync(), isTrue);
+      expect(await index.findByLibraryId(book.libraryId), book);
+    });
+
+    test('startup recovery removes unindexed direct delete staging directory',
+        () async {
+      final book = await importFixture();
+      final staged = Directory(
+        '${tempDir.path}/books/.delete-101-${book.libraryId}',
+      );
+      await Directory(book.bookDir).rename(staged.path);
+      await index.delete(book.libraryId);
+
+      await library.recoverInterruptedImports();
+
+      expect(staged.existsSync(), isFalse);
+      expect(Directory(book.bookDir).existsSync(), isFalse);
+      expect(await index.findByLibraryId(book.libraryId), isNull);
+    });
+
+    test('startup recovery ignores non-owned and nested delete paths',
+        () async {
+      final booksDir = Directory('${tempDir.path}/books');
+      await booksDir.create(recursive: true);
+      final nonOwned = Directory('${booksDir.path}/.delete-not-owned');
+      final nested = Directory(
+        '${booksDir.path}/ordinary/.delete-102-fixture-book-0001',
+      );
+      await nonOwned.create();
+      await nested.create(recursive: true);
+
+      await library.recoverInterruptedImports();
+
+      expect(nonOwned.existsSync(), isTrue);
+      expect(nested.existsSync(), isTrue);
+    });
+
     test('does not invoke the cleaner when recordings are retained', () async {
       final book = await importFixture();
 

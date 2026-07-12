@@ -385,7 +385,8 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('操作没有完成'), findsOneWidget);
-    expect(find.text('请稍后再试。如果还是不行，请重新导出绘本资源包。'), findsOneWidget);
+    expect(find.text('请稍后再试。若问题持续，请重启应用后重试。'), findsOneWidget);
+    expect(find.textContaining('重新导出'), findsNothing);
     _expectMinTouchTarget(
       tester,
       find.widgetWithText(TextButton, '知道了'),
