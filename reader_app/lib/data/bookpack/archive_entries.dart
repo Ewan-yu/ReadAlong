@@ -12,7 +12,7 @@ class CanonicalArchiveEntries {
     Iterable<String>? archivePaths,
   }) {
     final errors = <String>[];
-    final seenPaths = <String>{};
+    final seenPaths = <String, String>{};
 
     for (final rawPath in archivePaths ?? archive.map((file) => file.name)) {
       final canonicalPath = canonicalArchivePath(rawPath);
@@ -20,8 +20,14 @@ class CanonicalArchiveEntries {
         errors.add('路径逃逸: $rawPath');
         continue;
       }
-      if (!seenPaths.add(canonicalPath)) {
+      final comparisonKey = archivePathComparisonKey(canonicalPath);
+      final existingPath = seenPaths[comparisonKey];
+      if (existingPath == null) {
+        seenPaths[comparisonKey] = canonicalPath;
+      } else if (existingPath == canonicalPath) {
         errors.add('压缩包包含重复路径: $canonicalPath');
+      } else {
+        errors.add('压缩包包含重复路径: $existingPath 与 $canonicalPath');
       }
     }
 
@@ -36,6 +42,18 @@ class CanonicalArchiveEntries {
       List.unmodifiable(errors),
     );
   }
+}
+
+/// Uses ASCII case-folding only so package collision detection is portable
+/// across common case-insensitive and case-sensitive filesystems.
+String archivePathComparisonKey(String canonicalPath) {
+  final buffer = StringBuffer();
+  for (final codeUnit in canonicalPath.codeUnits) {
+    buffer.writeCharCode(
+      codeUnit >= 0x41 && codeUnit <= 0x5a ? codeUnit + 0x20 : codeUnit,
+    );
+  }
+  return buffer.toString();
 }
 
 String? canonicalArchivePath(String rawPath) {

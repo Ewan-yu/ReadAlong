@@ -393,7 +393,7 @@ void main() {
     );
   });
 
-  testWidgets('partialDelete 结果提示部分录音未清理', (tester) async {
+  testWidgets('partialDelete 结果提示部分本地文件未清理', (tester) async {
     final book = _book('partial', title: '星星绘本');
     final controller = await _pumpShelf(tester, books: [book]);
     controller.deleteResult = ShelfActionResult(
@@ -405,7 +405,7 @@ void main() {
     await tester.tap(find.text('删除绘本'));
     await tester.pump();
 
-    expect(find.text('绘本已删除，部分录音未能清理'), findsOneWidget);
+    expect(find.text('绘本已删除，但部分本地文件未能清理'), findsOneWidget);
   });
 
   testWidgets('deleted 结果显示删除完成反馈', (tester) async {

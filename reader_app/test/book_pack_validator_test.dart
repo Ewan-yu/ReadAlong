@@ -42,6 +42,7 @@ Uint8List _withDuplicateEntry(
   Uint8List source,
   String path, {
   List<int>? duplicateContent,
+  String? duplicatePath,
 }) {
   final sourceArchive = ZipDecoder().decodeBytes(source);
   final output = OutputStream();
@@ -52,7 +53,9 @@ Uint8List _withDuplicateEntry(
   final original = sourceArchive.files.firstWhere((file) => file.name == path);
   final content =
       duplicateContent ?? List<int>.from(original.content as List<int>);
-  encoder.addFile(ArchiveFile(path, content.length, content));
+  encoder.addFile(
+    ArchiveFile(duplicatePath ?? path, content.length, content),
+  );
   encoder.endEncode();
   return Uint8List.fromList(output.getBytes());
 }
@@ -194,6 +197,40 @@ void main() {
       expect(result.ok, isFalse);
       expect(result.errors, contains(contains('重复')));
       expect(result.errors, contains(contains('manifest.json')));
+      expect(result.errors, isNot(contains(contains('缺少必需文件'))));
+    });
+
+    test('坏包：大小写变体 manifest.json 在清单校验前被拒绝', () async {
+      final result = await BookPackValidator.validateBytes(
+        _withDuplicateEntry(
+          _fixture('fixture_book.readalongbook'),
+          'manifest.json',
+          duplicatePath: 'MANIFEST.JSON',
+        ),
+        databaseFactory: databaseFactoryFfi,
+      );
+
+      expect(result.ok, isFalse);
+      expect(result.errors, contains(contains('重复')));
+      expect(result.errors, contains(contains('manifest.json')));
+      expect(result.errors, contains(contains('MANIFEST.JSON')));
+      expect(result.errors, isNot(contains(contains('缺少必需文件'))));
+    });
+
+    test('坏包：大小写变体必需资源在必需文件校验前被拒绝', () async {
+      final result = await BookPackValidator.validateBytes(
+        _withDuplicateEntry(
+          _fixture('fixture_book.readalongbook'),
+          'align/alignment.db',
+          duplicatePath: 'ALIGN/alignment.db',
+        ),
+        databaseFactory: databaseFactoryFfi,
+      );
+
+      expect(result.ok, isFalse);
+      expect(result.errors, contains(contains('重复')));
+      expect(result.errors, contains(contains('align/alignment.db')));
+      expect(result.errors, contains(contains('ALIGN/alignment.db')));
       expect(result.errors, isNot(contains(contains('缺少必需文件'))));
     });
 
@@ -496,6 +533,44 @@ void main() {
       expect(result.ok, isFalse);
       expect(result.failureCategory, ImportFailureCategory.validation);
       expect(result.errors, contains(contains('align/alignment.db')));
+      expect(await shelfIndex.listBooks(), isEmpty);
+      final booksDir = Directory('${tempDir.path}/books');
+      expect(booksDir.existsSync() ? booksDir.listSync() : const [], isEmpty);
+    });
+
+    test('大小写变体 manifest.json 属于校验失败且不创建索引或残留目录', () async {
+      final result = await importer.import(
+        _withDuplicateEntry(
+          _fixture('fixture_book.readalongbook'),
+          'manifest.json',
+          duplicatePath: 'MANIFEST.JSON',
+        ),
+      );
+
+      expect(result.ok, isFalse);
+      expect(result.failureCategory, ImportFailureCategory.validation);
+      expect(result.errors, contains(contains('重复')));
+      expect(result.errors, contains(contains('manifest.json')));
+      expect(result.errors, contains(contains('MANIFEST.JSON')));
+      expect(await shelfIndex.listBooks(), isEmpty);
+      final booksDir = Directory('${tempDir.path}/books');
+      expect(booksDir.existsSync() ? booksDir.listSync() : const [], isEmpty);
+    });
+
+    test('大小写变体必需资源属于校验失败且不创建索引或残留目录', () async {
+      final result = await importer.import(
+        _withDuplicateEntry(
+          _fixture('fixture_book.readalongbook'),
+          'align/alignment.db',
+          duplicatePath: 'ALIGN/alignment.db',
+        ),
+      );
+
+      expect(result.ok, isFalse);
+      expect(result.failureCategory, ImportFailureCategory.validation);
+      expect(result.errors, contains(contains('重复')));
+      expect(result.errors, contains(contains('align/alignment.db')));
+      expect(result.errors, contains(contains('ALIGN/alignment.db')));
       expect(await shelfIndex.listBooks(), isEmpty);
       final booksDir = Directory('${tempDir.path}/books');
       expect(booksDir.existsSync() ? booksDir.listSync() : const [], isEmpty);

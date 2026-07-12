@@ -108,7 +108,7 @@ class ShelfPage extends ConsumerWidget {
         await _showFailure(context);
         return;
       case ShelfActionKind.partialDelete:
-        _showMessage(context, '绘本已删除，部分录音未能清理');
+        _showMessage(context, '绘本已删除，但部分本地文件未能清理');
         return;
     }
   }
