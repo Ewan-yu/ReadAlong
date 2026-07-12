@@ -10,6 +10,8 @@ desktop.ini
 .idea/
 .worktrees/
 .superpowers/sdd/
+# 本地独立 Git 仓库；产品与工程文档不上传公开仓库
+/docs/
 *.iml
 *.swp
 *~
