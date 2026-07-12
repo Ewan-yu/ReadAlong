@@ -124,6 +124,12 @@ int _visibleFirstRowCount(WidgetTester tester) {
       .length;
 }
 
+void _expectMinTouchTarget(WidgetTester tester, Finder finder) {
+  final size = tester.getSize(finder);
+  expect(size.width, greaterThanOrEqualTo(AppSizes.minTouchTarget));
+  expect(size.height, greaterThanOrEqualTo(AppSizes.minTouchTarget));
+}
+
 Future<void> _openDeleteDialog(
   WidgetTester tester,
   ShelfBook book,
@@ -148,17 +154,24 @@ void main() {
           .onPressed,
       isNotNull,
     );
+    _expectMinTouchTarget(tester, find.byType(FloatingActionButton));
   });
 
-  testWidgets('书架显示标题、页数和稳定的 3:4 封面占位', (tester) async {
+  testWidgets('书架标题省略且封面边界稳定保持 3:4', (tester) async {
     final book = _book('one', title: '月亮晚安', pageCount: 18);
     await _pumpShelf(tester, books: [book]);
 
     expect(find.text('月亮晚安'), findsOneWidget);
     expect(find.text('18 页'), findsOneWidget);
     expect(find.byIcon(Icons.auto_stories), findsOneWidget);
-    final cover = tester.widget<AspectRatio>(find.byType(AspectRatio).first);
+    final coverFinder = find.byType(AspectRatio).first;
+    final cover = tester.widget<AspectRatio>(coverFinder);
+    final coverSize = tester.getSize(coverFinder);
+    final title = tester.widget<Text>(find.text(book.title));
     expect(cover.aspectRatio, 3 / 4);
+    expect(coverSize.width / coverSize.height, closeTo(3 / 4, 0.001));
+    expect(title.maxLines, 1);
+    expect(title.overflow, TextOverflow.ellipsis);
   });
 
   testWidgets('窄屏和宽屏自适应列数且不溢出', (tester) async {
@@ -186,30 +199,41 @@ void main() {
     expect(tester.takeException(), isNull);
     final wideFirstRow = _visibleFirstRowCount(tester);
 
-    expect(narrowFirstRow, inInclusiveRange(2, 3));
-    expect(wideFirstRow, greaterThan(narrowFirstRow));
+    expect(narrowFirstRow, 2);
+    expect(wideFirstRow, 5);
   });
 
-  testWidgets('校验错误对话框列出全部错误并可滚动', (tester) async {
+  testWidgets('校验错误对话框可滚动到最末错误', (tester) async {
     final controller = await _pumpShelf(tester);
-    controller.pickResult = const ShelfActionResult(
+    final errors = List.generate(30, (index) => '校验错误 ${index + 1}');
+    controller.pickResult = ShelfActionResult(
       kind: ShelfActionKind.validationFailed,
-      errors: ['缺少 manifest.json', '第 2 页音频不存在', '数据库格式错误'],
+      errors: errors,
     );
 
     await _tapImport(tester);
     await tester.pumpAndSettle();
 
     expect(find.text('绘本无法导入'), findsOneWidget);
-    expect(find.text('缺少 manifest.json'), findsOneWidget);
-    expect(find.text('第 2 页音频不存在'), findsOneWidget);
-    expect(find.text('数据库格式错误'), findsOneWidget);
+    expect(find.text('校验错误 1'), findsOneWidget);
+    expect(find.text('校验错误 30'), findsNothing);
     expect(
         find.descendant(
           of: find.byType(AlertDialog),
           matching: find.byType(Scrollable),
         ),
         findsWidgets);
+    _expectMinTouchTarget(
+      tester,
+      find.widgetWithText(TextButton, '知道了'),
+    );
+
+    await tester.scrollUntilVisible(
+      find.text('校验错误 30'),
+      240,
+      scrollable: find.byType(Scrollable).last,
+    );
+    expect(find.text('校验错误 30'), findsOneWidget);
   });
 
   testWidgets('冲突对话框可覆盖、存为副本或保留绘本', (tester) async {
@@ -229,6 +253,18 @@ void main() {
     expect(find.text('覆盖绘本'), findsOneWidget);
     expect(find.text('存为副本'), findsOneWidget);
     expect(find.text('保留绘本'), findsOneWidget);
+    _expectMinTouchTarget(
+      tester,
+      find.widgetWithText(FilledButton, '覆盖绘本'),
+    );
+    _expectMinTouchTarget(
+      tester,
+      find.widgetWithText(OutlinedButton, '存为副本'),
+    );
+    _expectMinTouchTarget(
+      tester,
+      find.widgetWithText(TextButton, '保留绘本'),
+    );
 
     await tester.tap(find.text('覆盖绘本'));
     await tester.pumpAndSettle();
@@ -259,6 +295,14 @@ void main() {
     expect(
       tester.widget<Checkbox>(find.byType(Checkbox)).value,
       isFalse,
+    );
+    _expectMinTouchTarget(
+      tester,
+      find.widgetWithText(TextButton, '保留绘本'),
+    );
+    _expectMinTouchTarget(
+      tester,
+      find.widgetWithText(TextButton, '删除绘本'),
     );
     await tester.tap(find.text('同时删除我的录音'));
     await tester.pump();
@@ -302,6 +346,67 @@ void main() {
     expect(controller.pickCalls, 1);
   });
 
+  testWidgets('imported 结果显示绘本名称', (tester) async {
+    final imported = _book('imported', title: '小熊看月亮');
+    final controller = await _pumpShelf(tester);
+    controller.pickResult = ShelfActionResult(
+      kind: ShelfActionKind.imported,
+      book: imported,
+    );
+
+    await _tapImport(tester);
+    await tester.pump();
+
+    expect(find.text('已导入《小熊看月亮》'), findsOneWidget);
+  });
+
+  testWidgets('alreadyImported 结果提示绘本已在书架', (tester) async {
+    final existing = _book('existing', title: '云朵面包');
+    final controller = await _pumpShelf(tester, books: [existing]);
+    controller.pickResult = ShelfActionResult(
+      kind: ShelfActionKind.alreadyImported,
+      book: existing,
+    );
+
+    await _tapImport(tester);
+    await tester.pump();
+
+    expect(find.text('《云朵面包》已经在书架里'), findsOneWidget);
+  });
+
+  testWidgets('failed 结果显示可理解的失败对话框', (tester) async {
+    final controller = await _pumpShelf(tester);
+    controller.pickResult = const ShelfActionResult(
+      kind: ShelfActionKind.failed,
+      errors: ['internal detail'],
+    );
+
+    await _tapImport(tester);
+    await tester.pumpAndSettle();
+
+    expect(find.text('操作没有完成'), findsOneWidget);
+    expect(find.text('请稍后再试。如果还是不行，请重新导出绘本资源包。'), findsOneWidget);
+    _expectMinTouchTarget(
+      tester,
+      find.widgetWithText(TextButton, '知道了'),
+    );
+  });
+
+  testWidgets('partialDelete 结果提示部分录音未清理', (tester) async {
+    final book = _book('partial', title: '星星绘本');
+    final controller = await _pumpShelf(tester, books: [book]);
+    controller.deleteResult = ShelfActionResult(
+      kind: ShelfActionKind.partialDelete,
+      book: book,
+    );
+
+    await _openDeleteDialog(tester, book);
+    await tester.tap(find.text('删除绘本'));
+    await tester.pump();
+
+    expect(find.text('绘本已删除，部分录音未能清理'), findsOneWidget);
+  });
+
   testWidgets('deleted 结果显示删除完成反馈', (tester) async {
     final book = _book('deleted', title: '要删除的绘本');
     final controller = await _pumpShelf(tester, books: [book]);
@@ -315,6 +420,34 @@ void main() {
     await tester.pump();
 
     expect(find.text('已删除《要删除的绘本》'), findsOneWidget);
+  });
+
+  testWidgets('绘本点击保持惰性且不声明按钮语义', (tester) async {
+    final book = _book('inert', title: '暂不打开的绘本');
+    final controller = await _pumpShelf(tester, books: [book]);
+    final inkWell = find.ancestor(
+      of: find.text(book.title),
+      matching: find.byType(InkWell),
+    );
+    final gesture = find.byKey(ValueKey('book-tile-gesture-${book.libraryId}'));
+    final semantics = find.ancestor(
+      of: find.text(book.title),
+      matching: find.byWidgetPredicate(
+        (widget) =>
+            widget is Semantics &&
+            widget.properties.label?.startsWith(book.title) == true,
+      ),
+    );
+
+    expect(inkWell, findsNothing);
+    expect(tester.widget<GestureDetector>(gesture).onTap, isNull);
+    expect(tester.widget<Semantics>(semantics).properties.button, isNot(true));
+    await tester.tap(find.text(book.title));
+    await tester.pumpAndSettle();
+
+    expect(find.byType(AlertDialog), findsNothing);
+    expect(find.byType(SnackBar), findsNothing);
+    expect(controller.deleteRecordings, isEmpty);
   });
 
   testWidgets('导入等待期间页面销毁后不显示反馈', (tester) async {

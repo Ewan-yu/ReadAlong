@@ -309,7 +309,7 @@ class _ShelfContents extends StatelessWidget {
           ),
           sliver: SliverGrid(
             gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-              maxCrossAxisExtent: 220,
+              maxCrossAxisExtent: 240,
               mainAxisSpacing: AppSpacing.pageMargin,
               crossAxisSpacing: AppSpacing.cardPadding,
               childAspectRatio: 0.68,
@@ -373,15 +373,14 @@ class _BookTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Semantics(
-        button: true,
         label: '${book.title}，${book.pageCount} 页',
         hint: onLongPress == null ? null : '长按可删除绘本',
         child: Material(
           color: AppColors.bg,
-          child: InkWell(
-            onTap: () {},
+          child: GestureDetector(
+            key: ValueKey('book-tile-gesture-${book.libraryId}'),
+            behavior: HitTestBehavior.opaque,
             onLongPress: onLongPress,
-            borderRadius: BorderRadius.circular(AppRadius.card),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
