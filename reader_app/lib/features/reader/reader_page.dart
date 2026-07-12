@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../core/theme/tokens.dart';
 import 'reader_models.dart';
@@ -17,10 +18,11 @@ class ReaderPage extends ConsumerWidget {
     final book = ref.watch(readerBookProvider(libraryId));
     return book.when(
       loading: () => const Scaffold(
+        appBar: _ReaderBackAppBar(),
         body: Center(child: CircularProgressIndicator()),
       ),
       error: (_, __) => const Scaffold(
-        appBar: _ReaderErrorAppBar(),
+        appBar: _ReaderBackAppBar(),
         body: _ReaderLoadError(),
       ),
       data: (value) => _ReaderView(
@@ -31,9 +33,8 @@ class ReaderPage extends ConsumerWidget {
   }
 }
 
-class _ReaderErrorAppBar extends StatelessWidget
-    implements PreferredSizeWidget {
-  const _ReaderErrorAppBar();
+class _ReaderBackAppBar extends StatelessWidget implements PreferredSizeWidget {
+  const _ReaderBackAppBar();
 
   @override
   Size get preferredSize => const Size.fromHeight(kToolbarHeight);
@@ -41,7 +42,7 @@ class _ReaderErrorAppBar extends StatelessWidget
   @override
   Widget build(BuildContext context) => AppBar(
         leading: IconButton(
-          onPressed: () => Navigator.maybePop(context),
+          onPressed: () => _returnToShelf(context),
           icon: const Icon(Icons.arrow_back),
           tooltip: '返回书架',
         ),
@@ -244,7 +245,7 @@ class _ReaderViewState extends State<_ReaderView> {
     return Scaffold(
       appBar: AppBar(
         leading: IconButton(
-          onPressed: () => Navigator.maybePop(context),
+          onPressed: () => _returnToShelf(context),
           icon: const Icon(Icons.arrow_back),
           tooltip: '返回书架',
         ),
@@ -303,6 +304,14 @@ class _ReaderViewState extends State<_ReaderView> {
         },
       ),
     );
+  }
+}
+
+void _returnToShelf(BuildContext context) {
+  if (context.canPop()) {
+    context.pop();
+  } else {
+    context.go('/shelf');
   }
 }
 

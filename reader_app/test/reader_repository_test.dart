@@ -180,6 +180,25 @@ void main() {
     );
   });
 
+  test('零页书籍在进入 Widget 前被拒绝', () async {
+    await shelfIndex.add(ShelfBook(
+      libraryId: shelfBook.libraryId,
+      sourceBookId: shelfBook.sourceBookId,
+      title: shelfBook.title,
+      pageCount: 0,
+      bookDir: shelfBook.bookDir,
+      thumbnailPath: shelfBook.thumbnailPath,
+      packageSha256: shelfBook.packageSha256,
+      importedAt: shelfBook.importedAt,
+    ));
+    await writeManifest(pageCount: 0, pages: []);
+
+    expect(
+      () => repository.loadBook(shelfBook.libraryId),
+      throwsA(isA<ReaderManifestException>()),
+    );
+  });
+
   test('页码不连续时拒绝打开', () async {
     await shelfIndex.add(shelfBook);
     await writeManifest(pages: [page(1), page(3)]);

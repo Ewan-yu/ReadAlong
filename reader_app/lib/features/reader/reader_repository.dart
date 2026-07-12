@@ -51,6 +51,7 @@ class LocalReaderRepository implements ReaderRepository {
       final pageCount = decoded['page_count'];
       final rawPages = decoded['pages'];
       if (pageCount is! int ||
+          pageCount < 1 ||
           pageCount != shelfBook.pageCount ||
           rawPages is! List ||
           rawPages.length != pageCount) {

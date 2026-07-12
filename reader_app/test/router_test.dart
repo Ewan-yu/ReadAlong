@@ -6,6 +6,12 @@ import 'package:reader_app/core/router.dart';
 import 'package:reader_app/core/theme/tokens.dart';
 import 'package:reader_app/features/reader/reader_models.dart';
 import 'package:reader_app/features/reader/reader_repository.dart';
+import 'package:reader_app/features/shelf/shelf_controller.dart';
+
+class _EmptyShelfController extends ShelfController {
+  @override
+  Future<ShelfState> build() async => ShelfState(books: const []);
+}
 
 void main() {
   testWidgets('reader route loads the requested library instance',
@@ -35,6 +41,7 @@ void main() {
           readerBookProvider('story-copy-2').overrideWith(
             (_) async => book,
           ),
+          shelfControllerProvider.overrideWith(_EmptyShelfController.new),
         ],
         child: MaterialApp.router(
           theme: buildAppTheme(),
@@ -47,5 +54,10 @@ void main() {
     expect(find.text('Routed Story'), findsOneWidget);
     expect(find.text('1 / 1'), findsOneWidget);
     expect(find.text('这一页的图片缺失'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('返回书架'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('书架还是空的'), findsOneWidget);
   });
 }

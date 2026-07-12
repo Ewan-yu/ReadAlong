@@ -108,6 +108,7 @@ void main() {
     await pumpReader(tester, book: completer.future);
 
     expect(find.byType(CircularProgressIndicator), findsOneWidget);
+    expect(find.byTooltip('返回书架'), findsOneWidget);
 
     completer.complete(readyBook);
     await tester.pump();
@@ -189,6 +190,13 @@ void main() {
     first.transformationController!.value = Matrix4.identity()..scale(2.0);
     await tester.pump();
 
+    await tester.drag(
+      find.byKey(const ValueKey('reader-page-view')),
+      const Offset(-600, 0),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('1 / 2'), findsOneWidget);
+
     await tester.tap(find.byKey(const ValueKey('reader-thumbnail-2')));
     await tester.pumpAndSettle();
 
@@ -226,13 +234,21 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('窄屏使用底部横向缩略条且没有布局溢出', (tester) async {
+  testWidgets('窗口从宽屏缩到窄屏后切换为底部缩略条且没有溢出', (tester) async {
     final book = await prepareBook(tester);
     await pumpReader(
       tester,
       book: Future.value(book),
-      size: const Size(360, 800),
+      size: const Size(1280, 800),
     );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const ValueKey('reader-thumbnail-strip-vertical')),
+      findsOneWidget,
+    );
+
+    await tester.binding.setSurfaceSize(const Size(360, 800));
     await tester.pumpAndSettle();
 
     expect(
