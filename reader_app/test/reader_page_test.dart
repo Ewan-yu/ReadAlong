@@ -9,12 +9,45 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
 
 import 'package:reader_app/core/theme/tokens.dart';
+import 'package:reader_app/features/reader/alignment_repository.dart';
+import 'package:reader_app/features/reader/point_reading_models.dart';
+import 'package:reader_app/features/reader/reader_geometry.dart';
 import 'package:reader_app/features/reader/reader_models.dart';
 import 'package:reader_app/features/reader/reader_page.dart';
 import 'package:reader_app/features/reader/reader_repository.dart';
+import 'package:reader_app/features/reader/sentence_audio_player.dart';
 
 const _png =
     'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+
+final class _WidgetAudioPlayer implements SentenceAudioPlayer {
+  final played = <SentenceAudioClip>[];
+  final pending = <Completer<void>>[];
+  var stopCalls = 0;
+  var disposeCalls = 0;
+  Object? nextFailure;
+
+  @override
+  Future<void> play(SentenceAudioClip clip) {
+    played.add(clip);
+    final failure = nextFailure;
+    nextFailure = null;
+    if (failure != null) return Future.error(failure);
+    final completer = Completer<void>();
+    pending.add(completer);
+    return completer.future;
+  }
+
+  @override
+  Future<void> stop() async {
+    stopCalls++;
+  }
+
+  @override
+  Future<void> dispose() async {
+    disposeCalls++;
+  }
+}
 
 void main() {
   late Directory tempDir;
@@ -86,13 +119,25 @@ void main() {
     WidgetTester tester, {
     required Future<ReaderBook> book,
     Size size = const Size(1280, 800),
+    Future<PointReadingBook>? pointReadingBook,
+    SentenceAudioPlayer? audioPlayer,
   }) async {
+    final effectivePlayer = audioPlayer ?? _WidgetAudioPlayer();
     await tester.binding.setSurfaceSize(size);
     addTearDown(() => tester.binding.setSurfaceSize(null));
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
           readerBookProvider('story-copy-2').overrideWith((_) => book),
+          pointReadingBookProvider('story-copy-2').overrideWith(
+            (_) =>
+                pointReadingBook ??
+                Future.value(PointReadingBook(
+                  libraryId: 'story-copy-2',
+                  sentences: const [],
+                )),
+          ),
+          sentenceAudioPlayerProvider.overrideWith((_) => effectivePlayer),
         ],
         child: MaterialApp(
           theme: buildAppTheme(),
@@ -100,6 +145,50 @@ void main() {
         ),
       ),
     );
+  }
+
+  ReaderSentence sentence({
+    required String id,
+    required int sequence,
+    required NormalizedRect bbox,
+    int pageNumber = 1,
+  }) =>
+      ReaderSentence(
+        id: id,
+        pageNumber: pageNumber,
+        sequence: sequence,
+        text: id,
+        bbox: bbox,
+        sharedBbox: false,
+        audio: SentenceAudioClip(
+          path: '$id.ogg',
+          start: Duration.zero,
+          end: const Duration(seconds: 1),
+        ),
+      );
+
+  Future<void> tapNormalized(
+    WidgetTester tester, {
+    required int pageNumber,
+    required Offset normalized,
+    Matrix4? transform,
+  }) async {
+    final surface = find.byKey(ValueKey('reader-tap-surface-$pageNumber'));
+    final size = tester.getSize(surface);
+    final imageRect = containedImageRect(
+      canvasSize: size,
+      imageSize: const Size(1200, 1600),
+    );
+    final scenePoint = Offset(
+      imageRect.left + imageRect.width * normalized.dx,
+      imageRect.top + imageRect.height * normalized.dy,
+    );
+    final viewportPoint = transform == null
+        ? scenePoint
+        : MatrixUtils.transformPoint(transform, scenePoint);
+    await tester.tapAt(tester.getTopLeft(surface) + viewportPoint);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 160));
   }
 
   testWidgets('加载时显示进度，完成后显示书名和页码', (tester) async {
@@ -293,5 +382,262 @@ void main() {
     expect(isCached(2), isTrue);
     expect(isCached(3), isFalse);
     expect(isCached(4), isFalse);
+  });
+
+  testWidgets('未缩放点击播放正确句并显示与图片对齐的高亮', (tester) async {
+    const bbox = NormalizedRect(
+      x: 0.1,
+      y: 0.2,
+      width: 0.3,
+      height: 0.1,
+    );
+    final book = await prepareBook(tester, pageCount: 1);
+    final pointBook = PointReadingBook(
+      libraryId: book.libraryId,
+      sentences: [sentence(id: 'first', sequence: 1, bbox: bbox)],
+    );
+    final player = _WidgetAudioPlayer();
+    await pumpReader(
+      tester,
+      book: Future.value(book),
+      pointReadingBook: Future.value(pointBook),
+      audioPlayer: player,
+    );
+    await tester.pumpAndSettle();
+
+    await tapNormalized(
+      tester,
+      pageNumber: 1,
+      normalized: const Offset(0.25, 0.25),
+    );
+
+    expect(player.played.map((clip) => clip.path), ['first.ogg']);
+    final highlight = find.byKey(const ValueKey('reader-highlight-first'));
+    expect(highlight, findsOneWidget);
+    final surface = find.byKey(const ValueKey('reader-tap-surface-1'));
+    final surfaceSize = tester.getSize(surface);
+    final imageRect = containedImageRect(
+      canvasSize: surfaceSize,
+      imageSize: const Size(1200, 1600),
+    );
+    final expected = Rect.fromLTWH(
+      tester.getTopLeft(surface).dx + imageRect.left + bbox.x * imageRect.width,
+      tester.getTopLeft(surface).dy + imageRect.top + bbox.y * imageRect.height,
+      bbox.width * imageRect.width,
+      bbox.height * imageRect.height,
+    );
+    final actual = tester.getRect(highlight);
+    expect(actual.left, closeTo(expected.left, 0.01));
+    expect(actual.top, closeTo(expected.top, 0.01));
+    expect(actual.width, closeTo(expected.width, 0.01));
+    expect(actual.height, closeTo(expected.height, 0.01));
+  });
+
+  testWidgets('2x 缩放和平移后点击仍命中且高亮同步变换', (tester) async {
+    const bbox = NormalizedRect(
+      x: 0.1,
+      y: 0.2,
+      width: 0.3,
+      height: 0.1,
+    );
+    final book = await prepareBook(tester, pageCount: 1);
+    final pointBook = PointReadingBook(
+      libraryId: book.libraryId,
+      sentences: [sentence(id: 'zoomed', sequence: 1, bbox: bbox)],
+    );
+    final player = _WidgetAudioPlayer();
+    await pumpReader(
+      tester,
+      book: Future.value(book),
+      pointReadingBook: Future.value(pointBook),
+      audioPlayer: player,
+    );
+    await tester.pumpAndSettle();
+    final canvas = tester.widget<InteractiveViewer>(
+      find.byKey(const ValueKey('reader-canvas-1')),
+    );
+    final matrix = Matrix4.identity()
+      ..translate(-300.0, -100.0)
+      ..scale(2.0);
+    canvas.transformationController!.value = matrix;
+    await tester.pump();
+
+    await tapNormalized(
+      tester,
+      pageNumber: 1,
+      normalized: const Offset(0.25, 0.25),
+      transform: matrix,
+    );
+
+    expect(player.played.map((clip) => clip.path), ['zoomed.ogg']);
+    final highlight = find.byKey(const ValueKey('reader-highlight-zoomed'));
+    expect(highlight, findsOneWidget);
+    final surfaceSize = tester.getSize(
+      find.byKey(const ValueKey('reader-tap-surface-1')),
+    );
+    final imageRect = containedImageRect(
+      canvasSize: surfaceSize,
+      imageSize: const Size(1200, 1600),
+    );
+    expect(
+      tester.getRect(highlight).width,
+      closeTo(bbox.width * imageRect.width * 2, 0.01),
+    );
+  });
+
+  testWidgets('点击 BoxFit.contain 留白不触发点读', (tester) async {
+    final book = await prepareBook(tester, pageCount: 1);
+    final pointBook = PointReadingBook(
+      libraryId: book.libraryId,
+      sentences: [
+        sentence(
+          id: 'first',
+          sequence: 1,
+          bbox: const NormalizedRect(
+            x: 0,
+            y: 0,
+            width: 1,
+            height: 1,
+          ),
+        ),
+      ],
+    );
+    final player = _WidgetAudioPlayer();
+    await pumpReader(
+      tester,
+      book: Future.value(book),
+      pointReadingBook: Future.value(pointBook),
+      audioPlayer: player,
+    );
+    await tester.pumpAndSettle();
+    final surface = find.byKey(const ValueKey('reader-tap-surface-1'));
+
+    await tester.tapAt(
+      tester.getTopLeft(surface) +
+          Offset(10, tester.getSize(surface).height / 2),
+    );
+    await tester.pump();
+
+    expect(player.played, isEmpty);
+    expect(find.byKey(const ValueKey('reader-highlight-first')), findsNothing);
+  });
+
+  testWidgets('翻页立即停止并清除当前高亮', (tester) async {
+    final book = await prepareBook(tester, pageCount: 2);
+    final pointBook = PointReadingBook(
+      libraryId: book.libraryId,
+      sentences: [
+        sentence(
+          id: 'first',
+          sequence: 1,
+          bbox: const NormalizedRect(
+            x: 0.1,
+            y: 0.2,
+            width: 0.3,
+            height: 0.1,
+          ),
+        ),
+      ],
+    );
+    final player = _WidgetAudioPlayer();
+    await pumpReader(
+      tester,
+      book: Future.value(book),
+      pointReadingBook: Future.value(pointBook),
+      audioPlayer: player,
+    );
+    await tester.pumpAndSettle();
+    await tapNormalized(
+      tester,
+      pageNumber: 1,
+      normalized: const Offset(0.2, 0.25),
+    );
+    expect(
+        find.byKey(const ValueKey('reader-highlight-first')), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('reader-thumbnail-2')));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('reader-highlight-first')), findsNothing);
+    expect(player.stopCalls, greaterThanOrEqualTo(2));
+    expect(find.text('2 / 2'), findsOneWidget);
+  });
+
+  testWidgets('alignment 加载失败提示一次且不阻断图片翻页', (tester) async {
+    final book = await prepareBook(tester, pageCount: 2);
+    final alignment = Completer<PointReadingBook>();
+    await pumpReader(
+      tester,
+      book: Future.value(book),
+      pointReadingBook: alignment.future,
+    );
+    await tester.pump();
+    alignment.completeError(StateError('broken alignment path'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('点读资源暂时不可用，请重新导入绘本'), findsOneWidget);
+    expect(find.textContaining('broken alignment path'), findsNothing);
+    expect(find.byKey(const ValueKey('reader-canvas-1')), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('reader-thumbnail-2')));
+    await tester.pumpAndSettle();
+    expect(find.text('2 / 2'), findsOneWidget);
+  });
+
+  testWidgets('音频失败提示后可继续点击其他句', (tester) async {
+    final book = await prepareBook(tester, pageCount: 1);
+    final pointBook = PointReadingBook(
+      libraryId: book.libraryId,
+      sentences: [
+        sentence(
+          id: 'first',
+          sequence: 1,
+          bbox: const NormalizedRect(
+            x: 0.1,
+            y: 0.2,
+            width: 0.3,
+            height: 0.1,
+          ),
+        ),
+        sentence(
+          id: 'second',
+          sequence: 2,
+          bbox: const NormalizedRect(
+            x: 0.1,
+            y: 0.5,
+            width: 0.3,
+            height: 0.1,
+          ),
+        ),
+      ],
+    );
+    final player = _WidgetAudioPlayer()
+      ..nextFailure = const SentencePlaybackException();
+    await pumpReader(
+      tester,
+      book: Future.value(book),
+      pointReadingBook: Future.value(pointBook),
+      audioPlayer: player,
+    );
+    await tester.pumpAndSettle();
+
+    await tapNormalized(
+      tester,
+      pageNumber: 1,
+      normalized: const Offset(0.2, 0.25),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('这一句暂时无法播放，请重新导入绘本'), findsOneWidget);
+    expect(find.byKey(const ValueKey('reader-highlight-first')), findsNothing);
+
+    await tapNormalized(
+      tester,
+      pageNumber: 1,
+      normalized: const Offset(0.2, 0.55),
+    );
+    expect(player.played.map((clip) => clip.path), ['first.ogg', 'second.ogg']);
+    expect(
+        find.byKey(const ValueKey('reader-highlight-second')), findsOneWidget);
   });
 }

@@ -10,6 +10,7 @@ abstract final class AppColors {
   static const accent = Color(0xFFF08C1B); // 暖橙：录音/麦克风专用
   static const accentContainer = Color(0xFFFDF0DC);
   static const highlight = Color(0xFFF7E9A8); // 暖黄：bbox 高亮/当前词底色
+  static const highlightBorder = Color(0xFFD0A52E); // 点读 bbox 专用描边
   static const danger = Color(0xFFD9534F); // 错词标红/删除
   static const success = Color(0xFF3BA55D);
 

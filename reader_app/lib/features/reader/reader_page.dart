@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -5,6 +6,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/theme/tokens.dart';
+import 'point_reading_controller.dart';
+import 'point_reading_models.dart';
+import 'reader_geometry.dart';
 import 'reader_models.dart';
 import 'reader_repository.dart';
 
@@ -88,16 +92,16 @@ class _ReaderLoadError extends StatelessWidget {
       );
 }
 
-class _ReaderView extends StatefulWidget {
+class _ReaderView extends ConsumerStatefulWidget {
   const _ReaderView({super.key, required this.book});
 
   final ReaderBook book;
 
   @override
-  State<_ReaderView> createState() => _ReaderViewState();
+  ConsumerState<_ReaderView> createState() => _ReaderViewState();
 }
 
-class _ReaderViewState extends State<_ReaderView> {
+class _ReaderViewState extends ConsumerState<_ReaderView> {
   late final PageController _pageController;
   late final ScrollController _thumbnailController;
   late final List<TransformationController> _transforms;
@@ -105,6 +109,8 @@ class _ReaderViewState extends State<_ReaderView> {
   var _currentIndex = 0;
   var _isStripVisible = true;
   var _horizontalSwipeDistance = 0.0;
+  var _alignmentFailureShown = false;
+  var _playbackFeedbackScheduled = false;
 
   @override
   void initState() {
@@ -142,6 +148,11 @@ class _ReaderViewState extends State<_ReaderView> {
   }
 
   void _onPageChanged(int index) {
+    unawaited(
+      ref
+          .read(pointReadingControllerProvider(widget.book.libraryId).notifier)
+          .stopForPageChange(),
+    );
     final previous = _currentIndex;
     _zoomedPages[previous] = false;
     _transforms[previous].value = Matrix4.identity();
@@ -208,6 +219,17 @@ class _ReaderViewState extends State<_ReaderView> {
 
   @override
   Widget build(BuildContext context) {
+    final pointReadingProvider =
+        pointReadingControllerProvider(widget.book.libraryId);
+    ref.listen<AsyncValue<PointReadingState>>(
+      pointReadingProvider,
+      (previous, next) => _handlePointReadingFeedback(
+        previous,
+        next,
+      ),
+    );
+    final pointReading = ref.watch(pointReadingProvider);
+    final activeSentence = pointReading.valueOrNull?.activeSentence;
     final pageView = PageView.builder(
       key: const ValueKey('reader-page-view'),
       controller: _pageController,
@@ -217,27 +239,64 @@ class _ReaderViewState extends State<_ReaderView> {
       itemBuilder: (context, index) {
         final page = widget.book.pages[index];
         final imageFile = File(page.imagePath);
-        return InteractiveViewer(
-          key: ValueKey('reader-canvas-${page.pageNumber}'),
-          transformationController: _transforms[index],
-          minScale: 1,
-          maxScale: 4,
-          panEnabled: _zoomedPages[index],
-          onInteractionStart: (_) => _startPageInteraction(index),
-          onInteractionUpdate: (details) =>
-              _updatePageInteraction(index, details),
-          onInteractionEnd: (details) => _endPageInteraction(index, details),
-          child: SizedBox.expand(
-            child: imageFile.existsSync()
-                ? Image.file(
-                    imageFile,
-                    fit: BoxFit.contain,
-                    errorBuilder: (_, __, ___) => _MissingReaderPage(
-                      pageNumber: page.pageNumber,
-                    ),
-                  )
-                : _MissingReaderPage(pageNumber: page.pageNumber),
-          ),
+        if (!imageFile.existsSync()) {
+          return _MissingReaderPage(pageNumber: page.pageNumber);
+        }
+        return LayoutBuilder(
+          builder: (context, constraints) {
+            final canvasSize = constraints.biggest;
+            final imageRect = containedImageRect(
+              canvasSize: canvasSize,
+              imageSize: Size(
+                page.widthPx.toDouble(),
+                page.heightPx.toDouble(),
+              ),
+            );
+            return GestureDetector(
+              key: ValueKey('reader-tap-surface-${page.pageNumber}'),
+              behavior: HitTestBehavior.opaque,
+              onTapUp: (details) => _handlePageTap(
+                pageNumber: page.pageNumber,
+                viewportPoint: details.localPosition,
+                imageRect: imageRect,
+                transformation: _transforms[index],
+              ),
+              child: InteractiveViewer(
+                key: ValueKey('reader-canvas-${page.pageNumber}'),
+                transformationController: _transforms[index],
+                minScale: 1,
+                maxScale: 4,
+                panEnabled: _zoomedPages[index],
+                onInteractionStart: (_) => _startPageInteraction(index),
+                onInteractionUpdate: (details) =>
+                    _updatePageInteraction(index, details),
+                onInteractionEnd: (details) =>
+                    _endPageInteraction(index, details),
+                child: SizedBox.fromSize(
+                  size: canvasSize,
+                  child: Stack(
+                    key: ValueKey('reader-image-stack-${page.pageNumber}'),
+                    fit: StackFit.expand,
+                    children: [
+                      Image.file(
+                        imageFile,
+                        fit: BoxFit.contain,
+                        errorBuilder: (_, __, ___) => _MissingReaderPage(
+                          pageNumber: page.pageNumber,
+                        ),
+                      ),
+                      _ReaderHighlight(
+                        sentence: activeSentence?.pageNumber == page.pageNumber
+                            ? activeSentence
+                            : null,
+                        imageRect: imageRect,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          },
         );
       },
     );
@@ -305,6 +364,136 @@ class _ReaderViewState extends State<_ReaderView> {
       ),
     );
   }
+
+  void _handlePageTap({
+    required int pageNumber,
+    required Offset viewportPoint,
+    required Rect imageRect,
+    required TransformationController transformation,
+  }) {
+    final normalized = viewportPointToNormalized(
+      viewportPoint: viewportPoint,
+      transformation: transformation,
+      imageRect: imageRect,
+    );
+    if (normalized == null) return;
+    unawaited(
+      ref
+          .read(pointReadingControllerProvider(widget.book.libraryId).notifier)
+          .playAt(pageNumber, normalized),
+    );
+  }
+
+  void _handlePointReadingFeedback(
+    AsyncValue<PointReadingState>? previous,
+    AsyncValue<PointReadingState> next,
+  ) {
+    if (next.hasError && !_alignmentFailureShown) {
+      _alignmentFailureShown = true;
+      _showMessageAfterFrame('点读资源暂时不可用，请重新导入绘本');
+      return;
+    }
+    final failure = next.valueOrNull?.failure;
+    if (failure == null ||
+        previous?.valueOrNull?.failure == failure ||
+        _playbackFeedbackScheduled) {
+      return;
+    }
+    _playbackFeedbackScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('这一句暂时无法播放，请重新导入绘本')),
+      );
+      ref
+          .read(pointReadingControllerProvider(widget.book.libraryId).notifier)
+          .clearFailure();
+      _playbackFeedbackScheduled = false;
+    });
+  }
+
+  void _showMessageAfterFrame(String message) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(message)),
+      );
+    });
+  }
+}
+
+class _ReaderHighlight extends StatelessWidget {
+  const _ReaderHighlight({required this.sentence, required this.imageRect});
+
+  final ReaderSentence? sentence;
+  final Rect imageRect;
+
+  @override
+  Widget build(BuildContext context) {
+    final active = sentence;
+    return IgnorePointer(
+      child: AnimatedSwitcher(
+        duration: const Duration(milliseconds: 150),
+        reverseDuration: const Duration(milliseconds: 300),
+        layoutBuilder: (currentChild, previousChildren) => Stack(
+          fit: StackFit.expand,
+          children: [
+            ...previousChildren,
+            if (currentChild != null) currentChild,
+          ],
+        ),
+        child: active == null
+            ? const SizedBox.expand(key: ValueKey('reader-highlight-empty'))
+            : SizedBox.expand(
+                key: ValueKey('reader-highlight-layer-${active.id}'),
+                child: Stack(
+                  children: [
+                    Positioned(
+                      left: imageRect.left + active.bbox.x * imageRect.width,
+                      top: imageRect.top + active.bbox.y * imageRect.height,
+                      width: active.bbox.width * imageRect.width,
+                      height: active.bbox.height * imageRect.height,
+                      child: CustomPaint(
+                        key: ValueKey('reader-highlight-${active.id}'),
+                        painter: const _ReaderHighlightPainter(),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+      ),
+    );
+  }
+}
+
+class _ReaderHighlightPainter extends CustomPainter {
+  const _ReaderHighlightPainter();
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final rect = Offset.zero & size;
+    canvas.drawRect(
+      rect,
+      Paint()..color = AppColors.highlight.withOpacity(0.3),
+    );
+    canvas.drawRect(
+      rect.deflate(1),
+      Paint()
+        ..color = AppColors.highlightBorder
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2,
+    );
+    canvas.drawRect(
+      rect.deflate(2.5),
+      Paint()
+        ..color = AppColors.bgAlt
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _ReaderHighlightPainter oldDelegate) => false;
 }
 
 void _returnToShelf(BuildContext context) {
