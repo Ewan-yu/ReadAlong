@@ -52,14 +52,14 @@ final class PointReadingController
   var _disposed = false;
 
   @override
-  Future<PointReadingState> build(String libraryId) async {
+  Future<PointReadingState> build(String arg) async {
     _disposed = false;
     _player = ref.watch(sentenceAudioPlayerProvider);
     ref.onDispose(() {
       _disposed = true;
       _generation++;
     });
-    final book = await ref.watch(pointReadingBookProvider(libraryId).future);
+    final book = await ref.watch(pointReadingBookProvider(arg).future);
     return PointReadingState(book: book);
   }
 
