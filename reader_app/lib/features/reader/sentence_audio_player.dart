@@ -42,9 +42,22 @@ final class SentencePlaybackException implements Exception {
 final sentenceAudioPlayerProvider =
     Provider.autoDispose<SentenceAudioPlayer>((ref) {
   final player = JustAudioSentencePlayer();
-  ref.onDispose(() => unawaited(player.dispose()));
+  ref.onDispose(() => unawaited(_stopAndDispose(player)));
   return player;
 });
+
+Future<void> _stopAndDispose(SentenceAudioPlayer player) async {
+  try {
+    await player.stop();
+  } on Object {
+    // Provider cleanup must not surface plugin failures after the page closes.
+  }
+  try {
+    await player.dispose();
+  } on Object {
+    // The player is already unreachable; there is no recovery action here.
+  }
+}
 
 final class JustAudioSentencePlayer implements SentenceAudioPlayer {
   JustAudioSentencePlayer({SentenceAudioEngine? engine})
