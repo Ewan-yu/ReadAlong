@@ -7,7 +7,10 @@ import 'package:just_audio/just_audio.dart' as just_audio;
 import 'point_reading_models.dart';
 
 abstract interface class SentenceAudioPlayer {
-  Future<void> play(SentenceAudioClip clip);
+  Future<void> play(
+    SentenceAudioClip clip, {
+    void Function(Duration elapsed)? onPosition,
+  });
 
   Future<void> stop();
 
@@ -15,6 +18,8 @@ abstract interface class SentenceAudioPlayer {
 }
 
 abstract interface class SentenceAudioEngine {
+  Stream<Duration> get positionStream;
+
   Future<void> configureClip({
     required String path,
     required Duration start,
@@ -67,8 +72,12 @@ final class JustAudioSentencePlayer implements SentenceAudioPlayer {
   var _disposed = false;
 
   @override
-  Future<void> play(SentenceAudioClip clip) async {
+  Future<void> play(
+    SentenceAudioClip clip, {
+    void Function(Duration elapsed)? onPosition,
+  }) async {
     if (_disposed) throw const SentencePlaybackException();
+    StreamSubscription<Duration>? positionSubscription;
     try {
       if (!await File(clip.path).exists()) {
         throw const SentencePlaybackException();
@@ -78,11 +87,39 @@ final class JustAudioSentencePlayer implements SentenceAudioPlayer {
         start: clip.start,
         end: clip.end,
       );
-      await _engine.play();
+      final positionFailure = Completer<void>();
+      if (onPosition != null) {
+        final clipDuration = clip.end - clip.start;
+        var lastPosition = Duration.zero;
+        positionSubscription = _engine.positionStream.listen(
+          (position) {
+            final clamped = _clampPosition(position, clipDuration);
+            if (clamped == lastPosition) return;
+            lastPosition = clamped;
+            onPosition(clamped);
+          },
+          onError: (Object error, StackTrace stackTrace) {
+            if (!positionFailure.isCompleted) {
+              positionFailure.completeError(error, stackTrace);
+            }
+          },
+        );
+        onPosition(Duration.zero);
+        await Future.any([_engine.play(), positionFailure.future]);
+      } else {
+        await _engine.play();
+      }
     } on SentencePlaybackException {
       rethrow;
     } on Object {
+      try {
+        await _engine.stop();
+      } on Object {
+        // Preserve the original playback/position failure.
+      }
       throw const SentencePlaybackException();
+    } finally {
+      await positionSubscription?.cancel();
     }
   }
 
@@ -112,6 +149,12 @@ final class _JustAudioSentenceAudioEngine implements SentenceAudioEngine {
   final just_audio.AudioPlayer _player = just_audio.AudioPlayer();
 
   @override
+  Stream<Duration> get positionStream => _player.createPositionStream(
+        minPeriod: const Duration(milliseconds: 60),
+        maxPeriod: const Duration(milliseconds: 60),
+      );
+
+  @override
   Future<void> configureClip({
     required String path,
     required Duration start,
@@ -134,4 +177,10 @@ final class _JustAudioSentenceAudioEngine implements SentenceAudioEngine {
 
   @override
   Future<void> dispose() => _player.dispose();
+}
+
+Duration _clampPosition(Duration position, Duration clipDuration) {
+  if (position < Duration.zero) return Duration.zero;
+  if (position > clipDuration) return clipDuration;
+  return position;
 }

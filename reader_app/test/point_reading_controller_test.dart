@@ -16,7 +16,10 @@ final class _ControlledAudioPlayer implements SentenceAudioPlayer {
   Object? nextFailure;
 
   @override
-  Future<void> play(SentenceAudioClip clip) {
+  Future<void> play(
+    SentenceAudioClip clip, {
+    void Function(Duration elapsed)? onPosition,
+  }) {
     played.add(clip);
     final failure = nextFailure;
     nextFailure = null;

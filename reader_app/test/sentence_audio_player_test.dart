@@ -8,10 +8,14 @@ import 'package:reader_app/features/reader/sentence_audio_player.dart';
 
 final class _FakeSentenceAudioEngine implements SentenceAudioEngine {
   final configured = <({String path, Duration start, Duration end})>[];
+  final positions = StreamController<Duration>.broadcast(sync: true);
   var stopCalls = 0;
   var disposeCalls = 0;
   Object? configureFailure;
   Completer<void>? playCompleter;
+
+  @override
+  Stream<Duration> get positionStream => positions.stream;
 
   @override
   Future<void> configureClip({
@@ -83,6 +87,46 @@ void main() {
     engine.playCompleter!.complete();
     await playing;
     expect(completed, isTrue);
+  });
+
+  test('配置完成后转发裁剪去重的位置并在播放完成时取消订阅', () async {
+    engine.playCompleter = Completer<void>();
+    final reported = <Duration>[];
+
+    final playing = player.play(clip(), onPosition: reported.add);
+    await pumpEventQueue();
+    expect(reported, [Duration.zero]);
+
+    engine.positions
+      ..add(const Duration(milliseconds: -10))
+      ..add(Duration.zero)
+      ..add(const Duration(milliseconds: 500))
+      ..add(const Duration(seconds: 2))
+      ..add(const Duration(seconds: 3));
+    expect(
+      reported,
+      [
+        Duration.zero,
+        const Duration(milliseconds: 500),
+        const Duration(milliseconds: 1150),
+      ],
+    );
+
+    engine.playCompleter!.complete();
+    await playing;
+    engine.positions.add(const Duration(milliseconds: 250));
+    expect(reported, hasLength(3));
+  });
+
+  test('位置流异常停止引擎并映射为播放异常', () async {
+    engine.playCompleter = Completer<void>();
+    final playing = player.play(clip(), onPosition: (_) {});
+    await pumpEventQueue();
+
+    engine.positions.addError(StateError('position stream failed'));
+
+    await expectLater(playing, throwsA(isA<SentencePlaybackException>()));
+    expect(engine.stopCalls, 1);
   });
 
   test('stop 委托给音频引擎', () async {
