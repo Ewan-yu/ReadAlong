@@ -8,6 +8,7 @@ import 'package:sqflite/sqflite.dart';
 import '../../data/appdb/app_database_providers.dart';
 import '../../data/appdb/shelf_index.dart';
 import 'point_reading_models.dart';
+import 'subtitle_timing.dart';
 
 abstract interface class PointReadingRepository {
   Future<PointReadingBook> loadBook(String libraryId);
@@ -231,9 +232,9 @@ bool _validTimingGroup(
     }
     previousEnd = timing.end;
   }
-  final sentenceWords = _normalizedWords(sentence.text);
+  final sentenceWords = normalizedSubtitleWords(sentence.text);
   final timingWords = timings
-      .map((timing) => _normalizedWords(timing.word))
+      .map((timing) => normalizedSubtitleWords(timing.word))
       .toList(growable: false);
   if (sentenceWords.length != timingWords.length) return false;
   for (var index = 0; index < sentenceWords.length; index++) {
@@ -244,13 +245,6 @@ bool _validTimingGroup(
   }
   return true;
 }
-
-List<String> _normalizedWords(String text) => RegExp(
-      r"[A-Za-z0-9]+(?:['\u2019-][A-Za-z0-9]+)*",
-    )
-        .allMatches(text)
-        .map((match) => match.group(0)!.toLowerCase())
-        .toList(growable: false);
 
 ReaderSentence _parseSentence(
   ShelfBook shelfBook,
