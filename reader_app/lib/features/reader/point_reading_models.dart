@@ -64,8 +64,24 @@ final class SentenceAudioClip {
   final Duration end;
 }
 
+final class ReaderWordTiming {
+  const ReaderWordTiming({
+    required this.id,
+    required this.sequence,
+    required this.word,
+    required this.start,
+    required this.end,
+  });
+
+  final String id;
+  final int sequence;
+  final String word;
+  final Duration start;
+  final Duration end;
+}
+
 final class ReaderSentence {
-  const ReaderSentence({
+  ReaderSentence({
     required this.id,
     required this.pageNumber,
     required this.sequence,
@@ -73,7 +89,8 @@ final class ReaderSentence {
     required this.bbox,
     required this.sharedBbox,
     required this.audio,
-  });
+    List<ReaderWordTiming> wordTimings = const [],
+  }) : wordTimings = List.unmodifiable(wordTimings);
 
   final String id;
   final int pageNumber;
@@ -82,6 +99,19 @@ final class ReaderSentence {
   final NormalizedRect bbox;
   final bool sharedBbox;
   final SentenceAudioClip audio;
+  final List<ReaderWordTiming> wordTimings;
+
+  ReaderSentence withWordTimings(List<ReaderWordTiming> timings) =>
+      ReaderSentence(
+        id: id,
+        pageNumber: pageNumber,
+        sequence: sequence,
+        text: text,
+        bbox: bbox,
+        sharedBbox: sharedBbox,
+        audio: audio,
+        wordTimings: timings,
+      );
 }
 
 final class PointReadingBook {

@@ -91,9 +91,27 @@ void main() {
         't_end': end,
       };
 
+  Map<String, Object?> wordTiming({
+    required String id,
+    required String sentenceId,
+    required int sequence,
+    required String word,
+    required double start,
+    required double end,
+  }) =>
+      {
+        'id': id,
+        'sentence_id': sentenceId,
+        'seq': sequence,
+        'word': word,
+        't_start': start,
+        't_end': end,
+      };
+
   Future<void> writeAlignment({
     String sourceBookId = 'source-book',
     List<Map<String, Object?>>? sentences,
+    List<Map<String, Object?>>? wordTimings,
   }) async {
     final db = await databaseFactoryFfi.openDatabase(
       alignmentFile.path,
@@ -124,6 +142,18 @@ void main() {
           audio_source TEXT NOT NULL
         )
       ''');
+      if (wordTimings != null) {
+        await db.execute('''
+          CREATE TABLE word_timing (
+            id TEXT PRIMARY KEY,
+            sentence_id TEXT NOT NULL,
+            seq INTEGER NOT NULL,
+            word TEXT NOT NULL,
+            t_start REAL NOT NULL,
+            t_end REAL NOT NULL
+          )
+        ''');
+      }
       await db.insert('book', {
         'id': sourceBookId,
         'title': 'Moon Story',
@@ -137,6 +167,9 @@ void main() {
           'bbox_json': jsonEncode(row['bbox_json']),
           'audio_source': 'tts',
         });
+      }
+      for (final row in wordTimings ?? const <Map<String, Object?>>[]) {
+        await db.insert('word_timing', row);
       }
     } finally {
       await db.close();
@@ -251,6 +284,110 @@ void main() {
     expect(book.sentencesByPage[1], hasLength(1));
     expect(
         File(book.sentencesByPage[1]!.single.audio.path).existsSync(), isFalse);
+  });
+
+  test('合法 word_timing 按 seq 解析为不可变绝对时间列表', () async {
+    await writeAlignment(
+      sentences: [
+        sentence(text: 'Good night.', start: 0.5, end: 2.0),
+      ],
+      wordTimings: [
+        wordTiming(
+          id: 'w2',
+          sentenceId: 's0001',
+          sequence: 2,
+          word: 'night.',
+          start: 1.1,
+          end: 2.0,
+        ),
+        wordTiming(
+          id: 'w1',
+          sentenceId: 's0001',
+          sequence: 1,
+          word: 'Good',
+          start: 0.5,
+          end: 1.0,
+        ),
+      ],
+    );
+
+    final loaded = await repository.loadBook(shelfBook.libraryId);
+    final timings = loaded.sentencesByPage[1]!.single.wordTimings;
+
+    expect(timings.map((timing) => timing.word), ['Good', 'night.']);
+    expect(timings.first.start, const Duration(milliseconds: 500));
+    expect(timings.last.end, const Duration(seconds: 2));
+    expect(() => timings.add(timings.first), throwsUnsupportedError);
+  });
+
+  test('非法词时间只降级对应句且保留其他句点读和词高亮', () async {
+    await writeAlignment(
+      sentences: [
+        sentence(text: 'Good night.'),
+        sentence(id: 's0002', sequence: 2, text: 'Sleep tight.'),
+      ],
+      wordTimings: [
+        wordTiming(
+          id: 'bad-1',
+          sentenceId: 's0001',
+          sequence: 1,
+          word: 'Wrong',
+          start: 0,
+          end: 0.6,
+        ),
+        wordTiming(
+          id: 'bad-2',
+          sentenceId: 's0001',
+          sequence: 2,
+          word: 'night.',
+          start: 0.5,
+          end: 1.2,
+        ),
+        wordTiming(
+          id: 'good-1',
+          sentenceId: 's0002',
+          sequence: 1,
+          word: 'Sleep',
+          start: 0,
+          end: 0.5,
+        ),
+        wordTiming(
+          id: 'good-2',
+          sentenceId: 's0002',
+          sequence: 2,
+          word: 'tight.',
+          start: 0.5,
+          end: 1.2,
+        ),
+      ],
+    );
+
+    final loaded = await repository.loadBook(shelfBook.libraryId);
+
+    expect(loaded.sentencesByPage[1]![0].wordTimings, isEmpty);
+    expect(
+      loaded.sentencesByPage[1]![1].wordTimings.map((timing) => timing.word),
+      ['Sleep', 'tight.'],
+    );
+  });
+
+  test('孤儿 timing 行被忽略且不影响合法句子', () async {
+    await writeAlignment(
+      wordTimings: [
+        wordTiming(
+          id: 'orphan',
+          sentenceId: 'missing',
+          sequence: 1,
+          word: 'Ghost',
+          start: 0,
+          end: 0.5,
+        ),
+      ],
+    );
+
+    final loaded = await repository.loadBook(shelfBook.libraryId);
+
+    expect(loaded.sentencesByPage[1]!.single.wordTimings, isEmpty);
   });
 
   test('pointReadingBookProvider 转发精确 libraryId', () async {
