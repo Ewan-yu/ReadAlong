@@ -11,6 +11,7 @@ import 'package:reader_app/features/reader/sentence_audio_player.dart';
 final class _ControlledAudioPlayer implements SentenceAudioPlayer {
   final played = <SentenceAudioClip>[];
   final pending = <Completer<void>>[];
+  final positionCallbacks = <void Function(Duration elapsed)?>[];
   var stopCalls = 0;
   var disposeCalls = 0;
   Object? nextFailure;
@@ -21,6 +22,7 @@ final class _ControlledAudioPlayer implements SentenceAudioPlayer {
     void Function(Duration elapsed)? onPosition,
   }) {
     played.add(clip);
+    positionCallbacks.add(onPosition);
     final failure = nextFailure;
     nextFailure = null;
     if (failure != null) return Future.error(failure);
@@ -46,6 +48,9 @@ ReaderSentence _sentence({
   required NormalizedRect bbox,
   bool shared = false,
   int pageNumber = 1,
+  Duration clipStart = Duration.zero,
+  Duration clipEnd = const Duration(seconds: 1),
+  List<ReaderWordTiming> wordTimings = const [],
 }) =>
     ReaderSentence(
       id: id,
@@ -56,9 +61,10 @@ ReaderSentence _sentence({
       sharedBbox: shared,
       audio: SentenceAudioClip(
         path: '$id.ogg',
-        start: Duration.zero,
-        end: const Duration(seconds: 1),
+        start: clipStart,
+        end: clipEnd,
       ),
+      wordTimings: wordTimings,
     );
 
 void main() {
@@ -144,12 +150,64 @@ void main() {
     expect(player.stopCalls, 1);
     expect(player.played.map((clip) => clip.path), ['first.ogg']);
     expect(currentState().activeSentence?.id, 'first');
+    expect(currentState().subtitleSentence?.id, 'first');
+    expect(currentState().playbackPosition, Duration.zero);
+    expect(currentState().playbackDuration, const Duration(seconds: 1));
     expect(currentState().isPlaying, isTrue);
 
     player.pending.single.complete();
     await playing;
     expect(currentState().activeSentence, isNull);
     expect(currentState().isPlaying, isFalse);
+    expect(currentState().subtitleSentence?.id, 'first');
+    expect(currentState().playbackPosition, const Duration(seconds: 1));
+    expect(currentState().activeWordIndex, isNull);
+  });
+
+  test('位置回调更新片段进度和当前词', () async {
+    book = PointReadingBook(
+      libraryId: 'copy-2',
+      sentences: [
+        _sentence(
+          id: 'first',
+          sequence: 1,
+          bbox: firstBox,
+          clipStart: const Duration(seconds: 5),
+          clipEnd: const Duration(seconds: 6),
+          wordTimings: const [
+            ReaderWordTiming(
+              id: 'w1',
+              sequence: 1,
+              word: 'first',
+              start: Duration(seconds: 5),
+              end: Duration(milliseconds: 5400),
+            ),
+            ReaderWordTiming(
+              id: 'w2',
+              sequence: 2,
+              word: 'again',
+              start: Duration(milliseconds: 5600),
+              end: Duration(seconds: 6),
+            ),
+          ],
+        ),
+      ],
+    );
+    final controller = await readyController();
+    final playing = controller.playAt(1, const Offset(0.2, 0.15));
+    await pumpEventQueue();
+
+    player.positionCallbacks.single!(const Duration(milliseconds: 200));
+    expect(currentState().playbackPosition, const Duration(milliseconds: 200));
+    expect(currentState().activeWordIndex, 0);
+
+    player.positionCallbacks.single!(const Duration(milliseconds: 500));
+    expect(currentState().activeWordIndex, isNull);
+
+    player.positionCallbacks.single!(const Duration(milliseconds: 700));
+    expect(currentState().activeWordIndex, 1);
+    player.pending.single.complete();
+    await playing;
   });
 
   test('共享 bbox 按 seq 连续播放并逐句更新高亮', () async {
@@ -170,6 +228,8 @@ void main() {
     await pumpEventQueue();
     expect(player.played.map((clip) => clip.path), ['first.ogg', 'second.ogg']);
     expect(currentState().activeSentence?.id, 'second');
+    expect(currentState().subtitleSentence?.id, 'second');
+    expect(currentState().playbackPosition, Duration.zero);
 
     player.pending[1].complete();
     await playing;
@@ -186,6 +246,9 @@ void main() {
 
     expect(player.stopCalls, 2);
     expect(currentState().activeSentence?.id, 'second');
+    player.positionCallbacks[0]!(const Duration(milliseconds: 800));
+    expect(currentState().subtitleSentence?.id, 'second');
+    expect(currentState().playbackPosition, Duration.zero);
     player.pending[0].complete();
     await firstPlay;
     expect(currentState().activeSentence?.id, 'second');
@@ -205,6 +268,7 @@ void main() {
 
     expect(player.stopCalls, stopsBeforeMiss);
     expect(currentState().activeSentence?.id, 'first');
+    expect(currentState().subtitleSentence?.id, 'first');
     player.pending.single.complete();
     await playing;
   });
@@ -218,6 +282,7 @@ void main() {
 
     expect(player.stopCalls, 2);
     expect(currentState().activeSentence, isNull);
+    expect(currentState().subtitleSentence, isNull);
     player.pending.single.complete();
     await playing;
     expect(currentState().activeSentence, isNull);
@@ -230,6 +295,7 @@ void main() {
     await controller.playAt(1, const Offset(0.2, 0.15));
 
     expect(currentState().activeSentence, isNull);
+    expect(currentState().subtitleSentence?.id, 'first');
     expect(currentState().failure, PointReadingFailure.playback);
     controller.clearFailure();
     expect(currentState().failure, isNull);
