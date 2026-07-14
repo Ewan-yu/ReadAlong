@@ -11,6 +11,7 @@ import 'point_reading_models.dart';
 import 'reader_geometry.dart';
 import 'reader_models.dart';
 import 'reader_repository.dart';
+import 'subtitle_timing.dart';
 
 class ReaderPage extends ConsumerWidget {
   const ReaderPage({super.key, required this.libraryId});
@@ -332,8 +333,9 @@ class _ReaderViewState extends ConsumerState<_ReaderView> {
       ),
       body: LayoutBuilder(
         builder: (context, constraints) {
+          late final Widget readerArea;
           if (constraints.maxWidth >= AppSizes.readerWideLayout) {
-            return Row(
+            readerArea = Row(
               children: [
                 Expanded(child: pageView),
                 _VerticalThumbnailRail(
@@ -348,15 +350,34 @@ class _ReaderViewState extends ConsumerState<_ReaderView> {
                 ),
               ],
             );
+          } else {
+            readerArea = Column(
+              children: [
+                Expanded(child: pageView),
+                _HorizontalThumbnailStrip(
+                  book: widget.book,
+                  currentIndex: _currentIndex,
+                  controller: _thumbnailController,
+                  onSelected: _selectPage,
+                ),
+              ],
+            );
           }
           return Column(
             children: [
-              Expanded(child: pageView),
-              _HorizontalThumbnailStrip(
-                book: widget.book,
-                currentIndex: _currentIndex,
-                controller: _thumbnailController,
-                onSelected: _selectPage,
+              Expanded(child: readerArea),
+              AnimatedSize(
+                duration: const Duration(milliseconds: 180),
+                curve: Curves.easeOut,
+                child: pointReading.valueOrNull?.subtitleSentence == null
+                    ? const SizedBox.shrink()
+                    : _ReaderSubtitleBand(
+                        state: pointReading.requireValue,
+                        compact:
+                            constraints.maxWidth < AppSizes.readerWideLayout,
+                        maxHeight:
+                            (constraints.maxHeight * 0.35).clamp(0.0, 220.0),
+                      ),
               ),
             ],
           );
@@ -494,6 +515,176 @@ class _ReaderHighlightPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _ReaderHighlightPainter oldDelegate) => false;
+}
+
+class _ReaderSubtitleBand extends StatelessWidget {
+  const _ReaderSubtitleBand({
+    required this.state,
+    required this.compact,
+    required this.maxHeight,
+  });
+
+  final PointReadingState state;
+  final bool compact;
+  final double maxHeight;
+
+  @override
+  Widget build(BuildContext context) {
+    final sentence = state.subtitleSentence!;
+    final segments = buildSubtitleSegments(
+      sentence.text,
+      sentence.wordTimings,
+    );
+    final fontSize = compact ? 20.0 : 26.0;
+    final progress = playbackProgress(
+      state.playbackPosition,
+      state.playbackDuration,
+    );
+    return ConstrainedBox(
+      key: const ValueKey('reader-subtitle-band'),
+      constraints: BoxConstraints(maxHeight: maxHeight),
+      child: DecoratedBox(
+        decoration: const BoxDecoration(
+          color: AppColors.bgAlt,
+          border: Border(top: BorderSide(color: AppColors.border)),
+        ),
+        child: Padding(
+          padding: EdgeInsets.symmetric(
+            horizontal:
+                compact ? AppSpacing.cardPadding : AppSpacing.pageMargin,
+            vertical: compact ? AppSpacing.unit : AppSpacing.cardPadding,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Flexible(
+                child: SingleChildScrollView(
+                  child: Semantics(
+                    label: sentence.text,
+                    container: true,
+                    child: ExcludeSemantics(
+                      child: _SubtitleText(
+                        sentence: sentence,
+                        segments: segments,
+                        activeWordIndex: state.activeWordIndex,
+                        fontSize: fontSize,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: AppSpacing.unit),
+              Row(
+                children: [
+                  SizedBox(
+                    width: 48,
+                    child: Text(
+                      _formatPlaybackTime(state.playbackPosition),
+                      key: const ValueKey('reader-subtitle-elapsed'),
+                      style: const TextStyle(color: AppColors.textSecondary),
+                    ),
+                  ),
+                  Expanded(
+                    child: LinearProgressIndicator(
+                      key: const ValueKey('reader-subtitle-progress'),
+                      value: progress,
+                      minHeight: 5,
+                      color: AppColors.primary,
+                      backgroundColor: AppColors.border,
+                      borderRadius: BorderRadius.circular(3),
+                    ),
+                  ),
+                  SizedBox(
+                    width: 48,
+                    child: Text(
+                      _formatPlaybackTime(state.playbackDuration),
+                      key: const ValueKey('reader-subtitle-duration'),
+                      textAlign: TextAlign.end,
+                      style: const TextStyle(color: AppColors.textSecondary),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _SubtitleText extends StatelessWidget {
+  const _SubtitleText({
+    required this.sentence,
+    required this.segments,
+    required this.activeWordIndex,
+    required this.fontSize,
+  });
+
+  final ReaderSentence sentence;
+  final List<SubtitleTextSegment> segments;
+  final int? activeWordIndex;
+  final double fontSize;
+
+  @override
+  Widget build(BuildContext context) {
+    final baseStyle = TextStyle(
+      color: AppColors.textPrimary,
+      fontSize: fontSize,
+      fontWeight: FontWeight.w500,
+    );
+    if (sentence.wordTimings.isEmpty ||
+        !segments.any((segment) => segment.wordIndex != null)) {
+      return Text(
+        sentence.text,
+        textAlign: TextAlign.center,
+        style: baseStyle,
+      );
+    }
+    return Text.rich(
+      TextSpan(
+        style: baseStyle,
+        children: [
+          for (final segment in segments)
+            if (segment.wordIndex == activeWordIndex)
+              WidgetSpan(
+                alignment: PlaceholderAlignment.baseline,
+                baseline: TextBaseline.alphabetic,
+                child: DecoratedBox(
+                  key: ValueKey(
+                    'reader-subtitle-active-word-${segment.wordIndex}',
+                  ),
+                  decoration: BoxDecoration(
+                    color: AppColors.highlight,
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: AppSpacing.unit / 2,
+                      vertical: 2,
+                    ),
+                    child: Text(
+                      segment.text,
+                      style: baseStyle.copyWith(color: AppColors.primaryDark),
+                    ),
+                  ),
+                ),
+              )
+            else
+              TextSpan(text: segment.text),
+        ],
+      ),
+      textAlign: TextAlign.center,
+    );
+  }
+}
+
+String _formatPlaybackTime(Duration duration) {
+  final totalSeconds = duration.inSeconds.clamp(0, 5999);
+  final minutes = totalSeconds ~/ 60;
+  final seconds = totalSeconds % 60;
+  return '${minutes.toString().padLeft(2, '0')}:'
+      '${seconds.toString().padLeft(2, '0')}';
 }
 
 void _returnToShelf(BuildContext context) {

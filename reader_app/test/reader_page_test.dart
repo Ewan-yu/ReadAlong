@@ -23,6 +23,7 @@ const _png =
 final class _WidgetAudioPlayer implements SentenceAudioPlayer {
   final played = <SentenceAudioClip>[];
   final pending = <Completer<void>>[];
+  final positionCallbacks = <void Function(Duration elapsed)?>[];
   var stopCalls = 0;
   var disposeCalls = 0;
   Object? nextFailure;
@@ -33,6 +34,7 @@ final class _WidgetAudioPlayer implements SentenceAudioPlayer {
     void Function(Duration elapsed)? onPosition,
   }) {
     played.add(clip);
+    positionCallbacks.add(onPosition);
     final failure = nextFailure;
     nextFailure = null;
     if (failure != null) return Future.error(failure);
@@ -155,19 +157,25 @@ void main() {
     required int sequence,
     required NormalizedRect bbox,
     int pageNumber = 1,
+    String? text,
+    bool shared = false,
+    Duration clipStart = Duration.zero,
+    Duration clipEnd = const Duration(seconds: 1),
+    List<ReaderWordTiming> wordTimings = const [],
   }) =>
       ReaderSentence(
         id: id,
         pageNumber: pageNumber,
         sequence: sequence,
-        text: id,
+        text: text ?? id,
         bbox: bbox,
-        sharedBbox: false,
+        sharedBbox: shared,
         audio: SentenceAudioClip(
           path: '$id.ogg',
-          start: Duration.zero,
-          end: const Duration(seconds: 1),
+          start: clipStart,
+          end: clipEnd,
         ),
+        wordTimings: wordTimings,
       );
 
   Future<void> tapNormalized(
@@ -642,5 +650,211 @@ void main() {
     expect(player.played.map((clip) => clip.path), ['first.ogg', 'second.ogg']);
     expect(
         find.byKey(const ValueKey('reader-highlight-second')), findsOneWidget);
+  });
+
+  testWidgets('点句显示字幕并按位置更新当前词和只读进度', (tester) async {
+    final book = await prepareBook(tester, pageCount: 1);
+    final pointBook = PointReadingBook(
+      libraryId: book.libraryId,
+      sentences: [
+        sentence(
+          id: 'timed',
+          sequence: 1,
+          text: 'Good night.',
+          bbox: const NormalizedRect(
+            x: 0.1,
+            y: 0.2,
+            width: 0.3,
+            height: 0.1,
+          ),
+          clipEnd: const Duration(seconds: 3),
+          wordTimings: const [
+            ReaderWordTiming(
+              id: 'w1',
+              sequence: 1,
+              word: 'Good',
+              start: Duration.zero,
+              end: Duration(seconds: 1),
+            ),
+            ReaderWordTiming(
+              id: 'w2',
+              sequence: 2,
+              word: 'night.',
+              start: Duration(seconds: 1),
+              end: Duration(seconds: 3),
+            ),
+          ],
+        ),
+      ],
+    );
+    final player = _WidgetAudioPlayer();
+    await pumpReader(
+      tester,
+      book: Future.value(book),
+      pointReadingBook: Future.value(pointBook),
+      audioPlayer: player,
+    );
+    await tester.pumpAndSettle();
+
+    await tapNormalized(
+      tester,
+      pageNumber: 1,
+      normalized: const Offset(0.2, 0.25),
+    );
+
+    expect(find.byKey(const ValueKey('reader-subtitle-band')), findsOneWidget);
+    expect(find.bySemanticsLabel('Good night.'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('reader-subtitle-active-word-0')),
+      findsOneWidget,
+    );
+    expect(find.text('00:03'), findsOneWidget);
+
+    player.positionCallbacks.single!(const Duration(milliseconds: 1500));
+    await tester.pump();
+
+    expect(
+      find.byKey(const ValueKey('reader-subtitle-active-word-1')),
+      findsOneWidget,
+    );
+    expect(find.text('00:01'), findsOneWidget);
+    final progress = tester.widget<LinearProgressIndicator>(
+      find.byKey(const ValueKey('reader-subtitle-progress')),
+    );
+    expect(progress.value, closeTo(0.5, 0.000001));
+
+    player.pending.single.complete();
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('reader-subtitle-band')), findsOneWidget);
+    expect(find.text('00:03'), findsNWidgets(2));
+    expect(
+      find.byKey(const ValueKey('reader-subtitle-active-word-1')),
+      findsNothing,
+    );
+  });
+
+  testWidgets('无 timing 句显示完整原文且没有词高亮', (tester) async {
+    final book = await prepareBook(tester, pageCount: 1);
+    const fullText = 'This sentence has no word timing.';
+    final pointBook = PointReadingBook(
+      libraryId: book.libraryId,
+      sentences: [
+        sentence(
+          id: 'plain',
+          sequence: 1,
+          text: fullText,
+          bbox: const NormalizedRect(
+            x: 0.1,
+            y: 0.2,
+            width: 0.3,
+            height: 0.1,
+          ),
+        ),
+      ],
+    );
+    await pumpReader(
+      tester,
+      book: Future.value(book),
+      pointReadingBook: Future.value(pointBook),
+    );
+    await tester.pumpAndSettle();
+
+    await tapNormalized(
+      tester,
+      pageNumber: 1,
+      normalized: const Offset(0.2, 0.25),
+    );
+
+    expect(find.text(fullText), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('reader-subtitle-active-word-0')),
+      findsNothing,
+    );
+  });
+
+  testWidgets('翻页收起字幕且不恢复上一页内容', (tester) async {
+    final book = await prepareBook(tester, pageCount: 2);
+    final pointBook = PointReadingBook(
+      libraryId: book.libraryId,
+      sentences: [
+        sentence(
+          id: 'page-one',
+          sequence: 1,
+          text: 'Page one sentence.',
+          bbox: const NormalizedRect(
+            x: 0.1,
+            y: 0.2,
+            width: 0.3,
+            height: 0.1,
+          ),
+        ),
+      ],
+    );
+    final player = _WidgetAudioPlayer();
+    await pumpReader(
+      tester,
+      book: Future.value(book),
+      pointReadingBook: Future.value(pointBook),
+      audioPlayer: player,
+    );
+    await tester.pumpAndSettle();
+    await tapNormalized(
+      tester,
+      pageNumber: 1,
+      normalized: const Offset(0.2, 0.25),
+    );
+    expect(find.byKey(const ValueKey('reader-subtitle-band')), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('reader-thumbnail-2')));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('reader-subtitle-band')), findsNothing);
+    player.positionCallbacks.single!(const Duration(milliseconds: 700));
+    await tester.pump();
+    expect(find.byKey(const ValueKey('reader-subtitle-band')), findsNothing);
+  });
+
+  testWidgets('360 高度下长字幕可读且不显示延后控件', (tester) async {
+    final book = await prepareBook(tester, pageCount: 1);
+    final longText = List.filled(
+      18,
+      'A thoughtfully illustrated sentence wraps safely',
+    ).join(' ');
+    final pointBook = PointReadingBook(
+      libraryId: book.libraryId,
+      sentences: [
+        sentence(
+          id: 'long',
+          sequence: 1,
+          text: longText,
+          bbox: const NormalizedRect(
+            x: 0.1,
+            y: 0.2,
+            width: 0.3,
+            height: 0.1,
+          ),
+        ),
+      ],
+    );
+    await pumpReader(
+      tester,
+      book: Future.value(book),
+      pointReadingBook: Future.value(pointBook),
+      size: const Size(360, 800),
+    );
+    await tester.pumpAndSettle();
+
+    await tapNormalized(
+      tester,
+      pageNumber: 1,
+      normalized: const Offset(0.2, 0.25),
+    );
+
+    expect(find.byKey(const ValueKey('reader-subtitle-band')), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    expect(find.text('全文播放'), findsNothing);
+    expect(find.text('重播本句'), findsNothing);
+    expect(find.text('开始录音'), findsNothing);
+    expect(find.byType(Slider), findsNothing);
   });
 }
