@@ -53,32 +53,33 @@ def create_app(
             instance_lock.acquire()
         except portalocker.exceptions.LockException as exc:
             raise RuntimeError("另一个 ReadAlong 家长端实例正在使用该工作区。") from exc
-
-        states = StateRepository(paths)
-        artifacts = ArtifactStore(paths)
-        jobs = JobRepository(paths)
-        events = EventBus()
-        engine = PipelineEngine(states, artifacts, registry)
-        manager = JobManager(engine, jobs, events, executor=make_executor())
-        manager.recover()
-        for book_id in states.list_books():
-            try:
-                state = states.recover_interrupted(book_id)
-                artifacts.cleanup_abandoned_staging(book_id)
-                artifacts.cleanup_unreferenced(state)
-            except PipelineError:
-                continue
-        application.state.settings = resolved_settings
-        application.state.state_repository = states
-        application.state.artifact_store = artifacts
-        application.state.job_repository = jobs
-        application.state.event_bus = events
-        application.state.pipeline_engine = engine
-        application.state.job_manager = manager
+        manager: JobManager | None = None
         try:
+            states = StateRepository(paths)
+            artifacts = ArtifactStore(paths)
+            jobs = JobRepository(paths)
+            events = EventBus()
+            engine = PipelineEngine(states, artifacts, registry)
+            manager = JobManager(engine, jobs, events, executor=make_executor())
+            manager.recover()
+            for book_id in states.list_books():
+                try:
+                    state = states.recover_interrupted(book_id)
+                    artifacts.cleanup_abandoned_staging(book_id)
+                    artifacts.cleanup_unreferenced(state)
+                except PipelineError:
+                    continue
+            application.state.settings = resolved_settings
+            application.state.state_repository = states
+            application.state.artifact_store = artifacts
+            application.state.job_repository = jobs
+            application.state.event_bus = events
+            application.state.pipeline_engine = engine
+            application.state.job_manager = manager
             yield
         finally:
-            manager.shutdown()
+            if manager is not None:
+                manager.shutdown()
             instance_lock.release()
 
     application = FastAPI(

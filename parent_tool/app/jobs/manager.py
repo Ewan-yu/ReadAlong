@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+import logging
 from concurrent.futures import Future, ThreadPoolExecutor
 from threading import RLock
 from typing import Any, Callable
@@ -13,6 +14,9 @@ from app.models.jobs import JobSnapshot, JobStatus
 from app.models.pipeline import PipelineErrorInfo, StepId, utc_now
 from app.pipeline.definitions import CancellationToken
 from app.pipeline.engine import PipelineEngine, PreparedRun, SkippedRun
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 class JobManager:
@@ -85,7 +89,9 @@ class JobManager:
             self._tokens[job_id] = token
             self._last_persisted_progress[job_id] = self.clock()
             self._publish(snapshot, "snapshot")
-            self._futures[job_id] = self.executor.submit(self._run, prepared, token)
+            future = self.executor.submit(self._run, prepared, token)
+            self._futures[job_id] = future
+            future.add_done_callback(lambda _future: self._forget_future(job_id))
             return snapshot
 
     def get(self, job_id: str) -> JobSnapshot:
@@ -148,9 +154,8 @@ class JobManager:
                 lambda progress, message: self._report(job_id, progress, message),
                 token,
             )
-            self._release_slot(job_id)
             completed_at = utc_now()
-            completed = self.jobs.replace(
+            completed = self._finish_terminal(
                 job_id,
                 status=JobStatus.SUCCEEDED,
                 progress=1,
@@ -162,10 +167,9 @@ class JobManager:
             self._publish(completed, "succeeded")
         except Exception as exc:
             cancelled = isinstance(exc, PipelineError) and exc.code == "JOB_CANCELLED"
-            self._release_slot(job_id)
             completed_at = utc_now()
             error = self._error_info(exc)
-            completed = self.jobs.replace(
+            completed = self._finish_terminal(
                 job_id,
                 status=JobStatus.CANCELLED if cancelled else JobStatus.FAILED,
                 message="任务已取消。" if cancelled else "处理失败。",
@@ -218,8 +222,24 @@ class JobManager:
             self._tokens.pop(job_id, None)
             self._last_persisted_progress.pop(job_id, None)
 
+    def _finish_terminal(self, job_id: str, **updates: Any) -> JobSnapshot:
+        with self._lock:
+            completed = self.jobs.replace(job_id, **updates)
+            if self._active_job_id == job_id:
+                self._active_job_id = None
+            self._tokens.pop(job_id, None)
+            self._last_persisted_progress.pop(job_id, None)
+            return completed
+
+    def _forget_future(self, job_id: str) -> None:
+        with self._lock:
+            self._futures.pop(job_id, None)
+
     def _publish(self, snapshot: JobSnapshot, event: str) -> None:
-        self.jobs.append_log(snapshot, event)
+        try:
+            self.jobs.append_log(snapshot, event)
+        except OSError:
+            LOGGER.exception("Failed to append job log for %s", snapshot.job_id)
         self.events.publish(
             JobEvent(event=event, data=snapshot.model_dump(mode="json")),
             job_id=snapshot.job_id,

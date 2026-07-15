@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -32,6 +33,9 @@ from app.pipeline.definitions import (
 )
 from app.pipeline.hashing import canonical_sha256, input_fingerprint
 from app.pipeline.state_repository import StateRepository
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -283,7 +287,10 @@ class PipelineEngine:
                     )
 
             committed = self.states.update(plan.book_id, commit)
-            self.artifacts.cleanup_unreferenced(committed)
+            try:
+                self.artifacts.cleanup_unreferenced(committed)
+            except Exception:
+                LOGGER.exception("Failed to clean unreferenced revisions for %s", plan.book_id)
             return success
         except Exception as exc:
             if published_root is not None:

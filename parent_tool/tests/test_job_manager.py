@@ -158,3 +158,21 @@ def test_event_bus_drops_intermediate_events_without_blocking() -> None:
             return [str(event.data["index"]) for event in events]
 
     assert asyncio.run(scenario()) == ["3", "4"]
+
+
+def test_log_failure_does_not_fail_job(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manager, jobs = _manager(tmp_path, BlockingStep(blocking=False))
+    monkeypatch.setattr(
+        jobs,
+        "append_log",
+        lambda _snapshot, _event: (_ for _ in ()).throw(OSError("disk busy")),
+    )
+    try:
+        started = manager.start("book-1", StepId.PAGES, {"value": "ok"})
+        assert not isinstance(started, SkippedRun)
+
+        assert manager.wait(started.job_id, timeout=2).status is JobStatus.SUCCEEDED
+    finally:
+        manager.shutdown()

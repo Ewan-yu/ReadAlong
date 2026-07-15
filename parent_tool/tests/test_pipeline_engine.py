@@ -157,3 +157,26 @@ def test_successful_upstream_rerun_stales_completed_downstream(tmp_path: Path) -
     assert state.steps[StepId.OCR].status is StepStatus.STALE
     assert state.steps[StepId.OCR].stale_reason is not None
     assert state.steps[StepId.OCR].stale_reason.source_step is StepId.PAGES
+
+
+def test_cleanup_failure_does_not_rollback_committed_success(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine, repository = _engine(tmp_path, FakeStep(StepId.PAGES))
+
+    def fail_cleanup(_state) -> None:
+        raise OSError("cleanup unavailable")
+
+    monkeypatch.setattr(engine.artifacts, "cleanup_unreferenced", fail_cleanup)
+
+    success = _run(
+        engine,
+        StepId.PAGES,
+        "first",
+        job="12345678-1234-4234-8234-123456789abc",
+    )
+
+    state = repository.load("book-1")
+    assert state.steps[StepId.PAGES].status is StepStatus.DONE
+    assert state.steps[StepId.PAGES].success == success
+    assert (tmp_path / "book-1" / success.output_root / "result.txt").is_file()

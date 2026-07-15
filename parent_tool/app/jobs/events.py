@@ -49,7 +49,10 @@ class EventBus:
         with self._lock:
             subscribers = tuple(self._subscribers.get(job_id, ()))
         for subscriber in subscribers:
-            subscriber.loop.call_soon_threadsafe(self._offer, subscriber.queue, event)
+            try:
+                subscriber.loop.call_soon_threadsafe(self._offer, subscriber.queue, event)
+            except RuntimeError:
+                continue
 
     @staticmethod
     def _offer(queue: asyncio.Queue[JobEvent], event: JobEvent) -> None:

@@ -203,6 +203,34 @@ def test_second_app_instance_cannot_share_workspace(tmp_path: Path) -> None:
                 pass
 
 
+def test_lifespan_releases_instance_lock_when_setup_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import app.main as main_module
+
+    class FakeLock:
+        released = False
+
+        def acquire(self):
+            return self
+
+        def release(self):
+            self.released = True
+
+    lock = FakeLock()
+    monkeypatch.setattr(main_module.portalocker, "Lock", lambda *_args, **_kwargs: lock)
+    app = create_app(
+        settings=Settings(workspace_root=tmp_path),
+        executor_factory=lambda: (_ for _ in ()).throw(RuntimeError("executor failed")),
+    )
+
+    with pytest.raises(RuntimeError, match="executor failed"):
+        with TestClient(app):
+            pass
+
+    assert lock.released is True
+
+
 def test_openapi_contains_typed_pipeline_paths(tmp_path: Path) -> None:
     with _client(tmp_path) as client:
         schema = client.get("/openapi.json").json()
