@@ -57,6 +57,7 @@ class StepRunContext:
     book_id: str
     workspace_dir: Path
     staging_dir: Path
+    source_pdf_sha256: str | None
     dependency_outputs: dict[StepId, Path]
     progress: ProgressReporter
     cancellation: CancellationToken

@@ -1,4 +1,5 @@
 import time
+from io import BytesIO
 from pathlib import Path
 from threading import Event, Timer
 
@@ -13,6 +14,18 @@ from app.models.pipeline import PipelineState, StepId, StepResult
 from app.pipeline.definitions import StepRegistry
 from app.pipeline.paths import WorkspacePaths
 from app.pipeline.state_repository import StateRepository
+
+
+def _pdf_upload() -> bytes:
+    import fitz
+
+    document = fitz.open()
+    try:
+        page = document.new_page(width=300, height=400)
+        page.insert_text((40, 50), "ReadAlong")
+        return document.tobytes()
+    finally:
+        document.close()
 
 
 class ApiParams(BaseModel):
@@ -67,6 +80,20 @@ def test_run_step_exposes_job_and_state(tmp_path: Path) -> None:
         assert job["status"] == "succeeded"
         state = client.get("/api/books/book-1/state").json()
         assert state["steps"]["pages"]["status"] == "done"
+
+
+def test_create_book_uploads_pdf_into_new_workspace(tmp_path: Path) -> None:
+    with _client(tmp_path) as client:
+        response = client.post(
+            "/api/books",
+            files={"pdf": ("My Granny.pdf", BytesIO(_pdf_upload()), "application/pdf")},
+        )
+
+    assert response.status_code == 201
+    state = response.json()
+    assert state["book_id"].startswith("my-granny-")
+    assert state["source"]["pdf_path"] == "source.pdf"
+    assert (tmp_path / state["book_id"] / "source.pdf").is_file()
 
 
 def test_identical_step_request_returns_skipped(tmp_path: Path) -> None:

@@ -222,6 +222,11 @@ class PipelineEngine:
                 book_id=plan.book_id,
                 workspace_dir=self.artifacts.paths.book(plan.book_id),
                 staging_dir=prepared.staging_dir,
+                source_pdf_sha256=(
+                    self.states.load(plan.book_id).source.pdf_sha256
+                    if plan.step_id is StepId.PAGES
+                    else None
+                ),
                 dependency_outputs=plan.dependency_outputs,
                 progress=reporter,
                 cancellation=cancellation,

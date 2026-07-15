@@ -27,6 +27,8 @@ from app.pipeline.definitions import StepRegistry
 from app.pipeline.engine import PipelineEngine
 from app.pipeline.paths import WorkspacePaths
 from app.pipeline.state_repository import StateRepository
+from app.pipeline.steps import PageProcessingStep
+from app.services.workspace_service import WorkspaceService
 
 
 ExecutorFactory = Callable[[], ThreadPoolExecutor]
@@ -39,7 +41,7 @@ def create_app(
     executor_factory: ExecutorFactory | None = None,
 ) -> FastAPI:
     resolved_settings = settings or Settings.from_environment()
-    registry = step_registry or StepRegistry()
+    registry = step_registry or StepRegistry((PageProcessingStep(),))
     make_executor = executor_factory or (
         lambda: ThreadPoolExecutor(max_workers=1, thread_name_prefix="readalong-pipeline")
     )
@@ -61,6 +63,7 @@ def create_app(
             events = EventBus()
             engine = PipelineEngine(states, artifacts, registry)
             manager = JobManager(engine, jobs, events, executor=make_executor())
+            workspace_service = WorkspaceService(paths, states)
             manager.recover()
             for book_id in states.list_books():
                 try:
@@ -76,6 +79,7 @@ def create_app(
             application.state.event_bus = events
             application.state.pipeline_engine = engine
             application.state.job_manager = manager
+            application.state.workspace_service = workspace_service
             yield
         finally:
             if manager is not None:
