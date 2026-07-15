@@ -118,6 +118,23 @@ class PipelineEngine:
             dependencies=dependency_fingerprints,
         )
         current = state.steps[step_id]
+        if (
+            current.status is StepStatus.DONE
+            and current.success is not None
+            and not self.artifacts.verify(book_id, step_id, current.success)
+        ):
+            state = self.states.update(
+                book_id,
+                lambda updated: updated.steps.__setitem__(
+                    step_id,
+                    StepState(
+                        status=StepStatus.FAILED,
+                        success=updated.steps[step_id].success,
+                        last_attempt=updated.steps[step_id].last_attempt,
+                    ),
+                ),
+            )
+            current = state.steps[step_id]
         same_input = (
             current.success is not None
             and current.success.params_hash == params_hash

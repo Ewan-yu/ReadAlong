@@ -30,9 +30,10 @@ class StateRepository:
         self.lock_timeout = lock_timeout
 
     @contextmanager
-    def _lock(self, book_id: str) -> Iterator[None]:
+    def _lock(self, book_id: str, *, create_parent: bool = True) -> Iterator[None]:
         book_dir = self.paths.book(book_id)
-        book_dir.mkdir(parents=True, exist_ok=True)
+        if create_parent:
+            book_dir.mkdir(parents=True, exist_ok=True)
         lock_path = self.paths.state_lock(book_id)
         try:
             with portalocker.Lock(str(lock_path), mode="a+", timeout=self.lock_timeout):
@@ -60,7 +61,8 @@ class StateRepository:
             return validated.model_copy(deep=True)
 
     def load(self, book_id: str) -> PipelineState:
-        with self._lock(book_id):
+        self._ensure_exists(book_id)
+        with self._lock(book_id, create_parent=False):
             return self._load_unlocked(book_id).model_copy(deep=True)
 
     def update(
@@ -68,7 +70,8 @@ class StateRepository:
         book_id: str,
         mutate: Callable[[PipelineState], None],
     ) -> PipelineState:
-        with self._lock(book_id):
+        self._ensure_exists(book_id)
+        with self._lock(book_id, create_parent=False):
             state = self._load_unlocked(book_id)
             mutate(state)
             state.revision += 1
@@ -92,7 +95,8 @@ class StateRepository:
         return tuple(sorted(book_ids))
 
     def recover_interrupted(self, book_id: str) -> PipelineState:
-        with self._lock(book_id):
+        self._ensure_exists(book_id)
+        with self._lock(book_id, create_parent=False):
             state = self._load_unlocked(book_id)
             changed = False
             now = utc_now()
@@ -168,6 +172,15 @@ class StateRepository:
                 details={"book_id": book_id},
                 status_code=500,
             ) from exc
+
+    def _ensure_exists(self, book_id: str) -> None:
+        if not self.paths.state(book_id).is_file():
+            raise PipelineError(
+                "BOOK_NOT_FOUND",
+                "没有找到该书籍工作区。",
+                details={"book_id": book_id},
+                status_code=404,
+            )
 
     @staticmethod
     def _write_unlocked(path: Path, state: PipelineState) -> None:

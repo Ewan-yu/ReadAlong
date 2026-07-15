@@ -40,6 +40,7 @@ def test_load_missing_book_has_fixed_error(tmp_path: Path) -> None:
 
     assert caught.value.code == "BOOK_NOT_FOUND"
     assert caught.value.status_code == 404
+    assert not (tmp_path / "missing").exists()
 
 
 def test_update_increments_revision_once(tmp_path: Path) -> None:

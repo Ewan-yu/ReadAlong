@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import json
 from pathlib import Path
 from threading import RLock
 from typing import Any
@@ -67,7 +68,11 @@ class JobRepository:
                 return ()
             snapshots: list[JobSnapshot] = []
             for path in sorted(self.paths.jobs.glob("*.json")):
-                snapshots.append(self.load(path.stem))
+                try:
+                    snapshots.append(self.load(path.stem))
+                except PipelineError as exc:
+                    if exc.code != "JOB_STATE_CORRUPT":
+                        raise
             return tuple(snapshots)
 
     def recover_nonterminal(self) -> tuple[JobSnapshot, ...]:
@@ -89,6 +94,27 @@ class JobRepository:
                 )
             )
         return tuple(recovered)
+
+    def append_log(self, snapshot: JobSnapshot, event: str) -> None:
+        entry = {
+            "timestamp": utc_now().isoformat(),
+            "level": "error" if event == "failed" else "info",
+            "event": event,
+            "job_id": snapshot.job_id,
+            "book_id": snapshot.book_id,
+            "step_id": snapshot.step_id.value,
+            "status": snapshot.status.value,
+            "progress": snapshot.progress,
+            "message": snapshot.message,
+            "error_code": snapshot.error.code if snapshot.error is not None else None,
+        }
+        path = self.paths.job_log(snapshot.book_id, snapshot.job_id)
+        with self._lock:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("a", encoding="utf-8", newline="\n") as stream:
+                stream.write(json.dumps(entry, ensure_ascii=False, separators=(",", ":")))
+                stream.write("\n")
+                stream.flush()
 
     @staticmethod
     def _write(path: Path, snapshot: JobSnapshot) -> None:

@@ -79,7 +79,7 @@ def test_identical_valid_run_is_skipped(tmp_path: Path) -> None:
 
 
 def test_tampered_output_is_not_skipped(tmp_path: Path) -> None:
-    engine, _ = _engine(tmp_path, FakeStep(StepId.PAGES))
+    engine, repository = _engine(tmp_path, FakeStep(StepId.PAGES))
     success = _run(
         engine,
         StepId.PAGES,
@@ -91,6 +91,7 @@ def test_tampered_output_is_not_skipped(tmp_path: Path) -> None:
     )
 
     assert not isinstance(engine.plan("book-1", StepId.PAGES, {"value": "first"}), SkippedRun)
+    assert repository.load("book-1").steps[StepId.PAGES].status is StepStatus.FAILED
 
 
 def test_dependency_must_be_done(tmp_path: Path) -> None:

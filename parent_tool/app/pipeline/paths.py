@@ -62,6 +62,12 @@ class WorkspacePaths:
     def state_lock(self, book_id: str) -> Path:
         return self.book(book_id) / ".state.lock"
 
+    def job_log(self, book_id: str, job_id: str) -> Path:
+        self.validate_job_id(job_id)
+        return ensure_within(
+            self.book(book_id), self.book(book_id) / "logs" / f"{job_id}.jsonl"
+        )
+
     def staging(self, book_id: str, job_id: str) -> Path:
         self.validate_job_id(job_id)
         return ensure_within(self.book(book_id), self.book(book_id) / ".runs" / job_id)

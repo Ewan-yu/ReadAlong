@@ -84,6 +84,7 @@ class JobManager:
             self._active_job_id = job_id
             self._tokens[job_id] = token
             self._last_persisted_progress[job_id] = self.clock()
+            self._publish(snapshot, "snapshot")
             self._futures[job_id] = self.executor.submit(self._run, prepared, token)
             return snapshot
 
@@ -147,6 +148,7 @@ class JobManager:
                 lambda progress, message: self._report(job_id, progress, message),
                 token,
             )
+            self._release_slot(job_id)
             completed_at = utc_now()
             completed = self.jobs.replace(
                 job_id,
@@ -160,6 +162,7 @@ class JobManager:
             self._publish(completed, "succeeded")
         except Exception as exc:
             cancelled = isinstance(exc, PipelineError) and exc.code == "JOB_CANCELLED"
+            self._release_slot(job_id)
             completed_at = utc_now()
             error = self._error_info(exc)
             completed = self.jobs.replace(
@@ -173,11 +176,7 @@ class JobManager:
             )
             self._publish(completed, "cancelled" if cancelled else "failed")
         finally:
-            with self._lock:
-                if self._active_job_id == job_id:
-                    self._active_job_id = None
-                self._tokens.pop(job_id, None)
-                self._last_persisted_progress.pop(job_id, None)
+            self._release_slot(job_id)
 
     def _report(self, job_id: str, progress: float, message: str) -> None:
         with self._lock:
@@ -212,7 +211,15 @@ class JobManager:
         )
         self._publish(failed, "failed")
 
+    def _release_slot(self, job_id: str) -> None:
+        with self._lock:
+            if self._active_job_id == job_id:
+                self._active_job_id = None
+            self._tokens.pop(job_id, None)
+            self._last_persisted_progress.pop(job_id, None)
+
     def _publish(self, snapshot: JobSnapshot, event: str) -> None:
+        self.jobs.append_log(snapshot, event)
         self.events.publish(
             JobEvent(event=event, data=snapshot.model_dump(mode="json")),
             job_id=snapshot.job_id,

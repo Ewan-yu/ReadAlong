@@ -1,4 +1,5 @@
 import asyncio
+import json
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Event
@@ -73,6 +74,11 @@ def test_job_runs_to_persisted_success(tmp_path: Path) -> None:
         assert completed.progress == 1
         assert completed.finished_at is not None
         assert jobs.load(started.job_id) == completed
+        log_path = tmp_path / "book-1" / "logs" / f"{started.job_id}.jsonl"
+        entries = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
+        assert entries[0]["event"] == "snapshot"
+        assert entries[-1]["event"] == "succeeded"
+        assert all(entry["job_id"] == started.job_id for entry in entries)
     finally:
         manager.shutdown()
 

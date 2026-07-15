@@ -37,8 +37,9 @@ def get_state(
 
 @router.post(
     "/{book_id}/steps/{step_id}/run",
+    status_code=status.HTTP_202_ACCEPTED,
     response_model=RunStartedResponse | RunSkippedResponse,
-    responses=ERROR_RESPONSES,
+    responses={200: {"model": RunSkippedResponse}, **ERROR_RESPONSES},
 )
 def run_step(
     book_id: str,
