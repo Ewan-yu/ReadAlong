@@ -171,4 +171,9 @@ class RunSkippedResponse(FrozenModel):
     state: PipelineState
 
 
+class RunStepRequest(FrozenModel):
+    params: dict[str, Any] = Field(default_factory=dict)
+    force: bool = False
+
+
 ActiveAttempt.model_rebuild()

@@ -102,6 +102,14 @@ class ArtifactStore:
         if staging.exists():
             shutil.rmtree(staging, ignore_errors=True)
 
+    def cleanup_abandoned_staging(self, book_id: str) -> None:
+        runs = self.paths.book(book_id) / ".runs"
+        if not runs.is_dir():
+            return
+        for candidate in runs.iterdir():
+            if candidate.is_dir():
+                shutil.rmtree(candidate, ignore_errors=True)
+
     def discard_revision(self, book_id: str, output_root: str) -> None:
         candidate = ensure_within(
             self.paths.book(book_id), self.paths.book(book_id) / Path(output_root)
