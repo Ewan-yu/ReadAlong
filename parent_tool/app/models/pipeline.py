@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -117,7 +117,7 @@ class PipelineSource(FrozenModel):
 class PipelineState(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: int = 1
+    schema_version: Literal[1] = 1
     book_id: str
     revision: int = Field(default=0, ge=0)
     created_at: datetime
