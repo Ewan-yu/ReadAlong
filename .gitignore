@@ -68,6 +68,8 @@ ENV/
 *.onnx
 *.tflite
 models/
+!parent_tool/app/models/
+!parent_tool/app/models/*.py
 pretrained_models/
 checkpoints/
 .cache/
