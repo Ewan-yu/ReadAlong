@@ -47,6 +47,10 @@ class WorkspacePaths:
     def instance_lock(self) -> Path:
         return self.engine / "instance.lock"
 
+    def job(self, job_id: str) -> Path:
+        self.validate_job_id(job_id)
+        return ensure_within(self.jobs, self.jobs / f"{job_id}.json")
+
     def book(self, book_id: str) -> Path:
         if not _BOOK_ID.fullmatch(book_id):
             raise _invalid_path(book_id)
