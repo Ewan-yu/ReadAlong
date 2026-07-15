@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from uuid import UUID
 
 from app.models.errors import PipelineError
 from app.models.pipeline import StepId
@@ -58,7 +59,17 @@ class WorkspacePaths:
         return self.book(book_id) / ".state.lock"
 
     def staging(self, book_id: str, job_id: str) -> Path:
+        self.validate_job_id(job_id)
         return ensure_within(self.book(book_id), self.book(book_id) / ".runs" / job_id)
+
+    @staticmethod
+    def validate_job_id(job_id: str) -> None:
+        try:
+            parsed = UUID(job_id)
+        except (ValueError, AttributeError) as exc:
+            raise _invalid_path(job_id) from exc
+        if str(parsed) != job_id.lower() or parsed.version != 4:
+            raise _invalid_path(job_id)
 
     def revisions(self, book_id: str, step_id: StepId) -> Path:
         index = list(StepId).index(step_id) + 1
