@@ -22,7 +22,6 @@ dependencies:
   crypto: ^3.0.3
   # 音频
   just_audio: ^0.9.40
-  record: ^5.1.0
   # 评分（讯飞 ISE WebSocket）
   web_socket_channel: ^3.0.0
   xml: ^6.5.0

@@ -42,8 +42,11 @@ class FilePickerBookPackPicker implements BookPackPicker {
 
   static Future<FilePickerResult?> _pickFromPlatform() =>
       FilePicker.platform.pickFiles(
-        type: FileType.custom,
-        allowedExtensions: const ['readalongbook'],
+        // Android's DocumentsUI does not know the app-specific
+        // `.readalongbook` extension and rejects it as an unsupported MIME
+        // filter. Pick any local file, then let BookPackValidator validate
+        // the selected package and report a useful error to the user.
+        type: FileType.any,
         withData: true,
       );
 }
