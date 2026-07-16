@@ -27,7 +27,7 @@ from app.pipeline.definitions import StepRegistry
 from app.pipeline.engine import PipelineEngine
 from app.pipeline.paths import WorkspacePaths
 from app.pipeline.state_repository import StateRepository
-from app.pipeline.steps import AudioStep, AutoProofreadStep, OcrStep, PageProcessingStep
+from app.pipeline.steps import AudioStep, AutoProofreadStep, ExportStep, OcrStep, PageProcessingStep
 from app.providers.align import StableTsWordAligner
 from app.providers.ocr import PaddleOcrProvider
 from app.providers.tts import FfmpegOpusTranscoder, VoxCpmTtsProvider
@@ -50,6 +50,7 @@ def create_app(
             OcrStep(PaddleOcrProvider()),
             AutoProofreadStep(),
             AudioStep(VoxCpmTtsProvider(), StableTsWordAligner(), FfmpegOpusTranscoder()),
+            ExportStep(),
         )
     )
     make_executor = executor_factory or (

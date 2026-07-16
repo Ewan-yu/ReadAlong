@@ -16,7 +16,7 @@ STEP_DEPENDENCIES: dict[StepId, tuple[StepId, ...]] = {
     StepId.OCR: (StepId.PAGES,),
     StepId.PROOFREAD: (StepId.OCR,),
     StepId.AUDIO: (StepId.PROOFREAD,),
-    StepId.EXPORT: (StepId.AUDIO,),
+    StepId.EXPORT: (StepId.PAGES, StepId.PROOFREAD, StepId.AUDIO),
 }
 
 
