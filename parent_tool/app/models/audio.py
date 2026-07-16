@@ -48,3 +48,18 @@ class SynthesizedAudio(FrozenModel):
     wav_path: str = Field(min_length=1)
     sample_rate: int = Field(gt=0)
 
+
+class AudioSentenceReport(FrozenModel):
+    sentence_id: str = Field(pattern=r"^s[0-9]{4,}$")
+    audio_path: str | None = None
+    duration_seconds: float | None = Field(default=None, gt=0)
+    word_timing: tuple[AudioWordTiming, ...] | None = None
+    suspect_tts: bool = False
+    error_code: str | None = None
+
+
+class AudioGenerationReport(FrozenModel):
+    schema_version: int = 1
+    source_proofread_revision: str = Field(min_length=1)
+    params: AudioParams
+    sentences: tuple[AudioSentenceReport, ...]
