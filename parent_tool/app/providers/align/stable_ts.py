@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
+import sys
 from threading import Lock
 from typing import Protocol
 
@@ -28,6 +30,7 @@ class StableTsWordAligner:
     ) -> tuple[AudioWordTiming, ...]:
         cancellation.raise_if_cancelled()
         try:
+            self._ensure_ffmpeg_on_path()
             result = self._load_model().transcribe(str(wav_path), language=language)
             cancellation.raise_if_cancelled()
             timings = tuple(
@@ -66,3 +69,11 @@ class StableTsWordAligner:
                         status_code=500,
                     ) from exc
             return self._model
+
+    @staticmethod
+    def _ensure_ffmpeg_on_path() -> None:
+        conda_bin = Path(sys.prefix) / "Library" / "bin"
+        if (conda_bin / "ffmpeg.exe").is_file():
+            existing = os.environ.get("PATH", "").split(os.pathsep)
+            if str(conda_bin) not in existing:
+                os.environ["PATH"] = str(conda_bin) + os.pathsep + os.environ.get("PATH", "")
