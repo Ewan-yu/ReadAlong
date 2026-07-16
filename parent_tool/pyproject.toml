@@ -15,6 +15,8 @@ dependencies = [
     "portalocker>=2.10",
     "python-multipart>=0.0.9",
     "sse-starlette>=2.1",
+    "requests>=2.32",
+    "pyspellchecker>=0.8",
 ]
 
 [project.optional-dependencies]

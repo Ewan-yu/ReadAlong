@@ -27,7 +27,8 @@ from app.pipeline.definitions import StepRegistry
 from app.pipeline.engine import PipelineEngine
 from app.pipeline.paths import WorkspacePaths
 from app.pipeline.state_repository import StateRepository
-from app.pipeline.steps import PageProcessingStep
+from app.pipeline.steps import OcrStep, PageProcessingStep
+from app.providers.ocr import PaddleOcrProvider
 from app.services.workspace_service import WorkspaceService
 
 
@@ -41,7 +42,7 @@ def create_app(
     executor_factory: ExecutorFactory | None = None,
 ) -> FastAPI:
     resolved_settings = settings or Settings.from_environment()
-    registry = step_registry or StepRegistry((PageProcessingStep(),))
+    registry = step_registry or StepRegistry((PageProcessingStep(), OcrStep(PaddleOcrProvider())))
     make_executor = executor_factory or (
         lambda: ThreadPoolExecutor(max_workers=1, thread_name_prefix="readalong-pipeline")
     )
