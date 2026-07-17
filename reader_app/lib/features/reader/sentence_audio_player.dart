@@ -71,6 +71,8 @@ final class JustAudioSentencePlayer implements SentenceAudioPlayer {
 
   final SentenceAudioEngine _engine;
   var _disposed = false;
+  var _commandGeneration = 0;
+  Future<void> _configuration = Future.value();
 
   @override
   Future<void> play(
@@ -83,12 +85,13 @@ final class JustAudioSentencePlayer implements SentenceAudioPlayer {
       if (!await File(clip.path).exists()) {
         throw const SentencePlaybackException();
       }
-      await _engine.configureClip(
-        path: clip.path,
-        start: clip.start,
-        end: clip.end,
-        wholeFile: clip.wholeFile,
-      );
+      // setAudioSource reaches the Android decoder asynchronously.  A user can
+      // tap another sentence while the previous source is still being set up,
+      // so only let the newest command configure (and subsequently play) a
+      // source.  This prevents a stale decoder setup from racing a new tap.
+      final command = ++_commandGeneration;
+      if (!await _configure(command, clip)) return;
+      if (command != _commandGeneration || _disposed) return;
       final positionFailure = Completer<void>();
       if (onPosition != null) {
         final clipDuration = clip.end - clip.start;
@@ -125,10 +128,32 @@ final class JustAudioSentencePlayer implements SentenceAudioPlayer {
     }
   }
 
+  Future<bool> _configure(int command, SentenceAudioClip clip) async {
+    // Do not allow an earlier configuration failure to poison the queue.
+    final previous = _configuration.catchError((Object _) {});
+    final configuring = previous.then((_) async {
+      if (command != _commandGeneration || _disposed) return false;
+      await _engine.configureClip(
+        path: clip.path,
+        start: clip.start,
+        end: clip.end,
+        wholeFile: clip.wholeFile,
+      );
+      return command == _commandGeneration && !_disposed;
+    });
+    _configuration = configuring.then<void>((_) {}, onError: (_, __) {});
+    return configuring;
+  }
+
   @override
   Future<void> stop() async {
     if (_disposed) return;
+    ++_commandGeneration;
     try {
+      // Wait for an in-flight setAudioSource before stopping.  Calling stop
+      // while MediaCodec is still binding the old source causes intermittent
+      // discarded-buffer noise on Android emulators.
+      await _configuration;
       await _engine.stop();
     } on Object {
       throw const SentencePlaybackException();
@@ -139,7 +164,9 @@ final class JustAudioSentencePlayer implements SentenceAudioPlayer {
   Future<void> dispose() async {
     if (_disposed) return;
     _disposed = true;
+    ++_commandGeneration;
     try {
+      await _configuration;
       await _engine.dispose();
     } on Object {
       throw const SentencePlaybackException();

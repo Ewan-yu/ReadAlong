@@ -11,8 +11,10 @@ final class _FakeSentenceAudioEngine implements SentenceAudioEngine {
       <({String path, Duration start, Duration end, bool wholeFile})>[];
   final positions = StreamController<Duration>.broadcast(sync: true);
   var stopCalls = 0;
+  var playCalls = 0;
   var disposeCalls = 0;
   Object? configureFailure;
+  Completer<void>? configureCompleter;
   Completer<void>? playCompleter;
 
   @override
@@ -30,10 +32,14 @@ final class _FakeSentenceAudioEngine implements SentenceAudioEngine {
     configured.add(
       (path: path, start: start, end: end, wholeFile: wholeFile),
     );
+    await configureCompleter?.future;
   }
 
   @override
-  Future<void> play() => playCompleter?.future ?? Future.value();
+  Future<void> play() {
+    playCalls++;
+    return playCompleter?.future ?? Future.value();
+  }
 
   @override
   Future<void> stop() async {
@@ -146,6 +152,23 @@ void main() {
     await player.stop();
 
     expect(engine.stopCalls, 1);
+  });
+
+  test('等待进行中的换源完成后再停止，避免 Android 解码器并发释放', () async {
+    engine.configureCompleter = Completer<void>();
+    final playing = player.play(clip());
+    await pumpEventQueue();
+    expect(engine.configured, hasLength(1));
+
+    final stopping = player.stop();
+    await pumpEventQueue();
+    expect(engine.stopCalls, 0);
+
+    engine.configureCompleter!.complete();
+    await stopping;
+    await playing;
+    expect(engine.stopCalls, 1);
+    expect(engine.playCalls, 0);
   });
 
   test('dispose 幂等且释放后拒绝再次播放', () async {
