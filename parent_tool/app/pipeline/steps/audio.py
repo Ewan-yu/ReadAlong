@@ -8,6 +8,7 @@ from app.models.errors import PipelineError
 from app.models.ocr import OcrSentences
 from app.models.pipeline import StepId, StepResult
 from app.pipeline.audio_validation import is_suspect_duration, validate_word_timings
+from app.pipeline.audio_validation import normalized_words
 from app.pipeline.definitions import StepRunContext
 from app.providers.align import WordAligner
 from app.providers.tts import TtsProvider
@@ -56,7 +57,10 @@ class AudioStep:
             ogg_path = context.staging_dir / audio_path
             try:
                 synthesized = self._tts.synthesize(
-                    sentence.text, params.voice, wav_path, context.cancellation
+                    self._tts_input(sentence.text),
+                    params.voice,
+                    wav_path,
+                    context.cancellation,
                 )
                 duration = self._transcoder.transcode(
                     Path(synthesized.wav_path),
@@ -105,3 +109,10 @@ class AudioStep:
                 "failed_count": sum(item.audio_path is None for item in reports),
             },
         )
+
+    @staticmethod
+    def _tts_input(text: str) -> str:
+        stripped = text.strip()
+        if len(normalized_words(stripped)) == 1 and stripped[-1:] not in ".?!":
+            return f"{stripped}."
+        return stripped

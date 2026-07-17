@@ -131,3 +131,8 @@ def test_explicit_auto_accept_unlocks_audio_revision(tmp_path: Path) -> None:
     assert '"audio_path": "ogg/s0001.ogg"' in report
     assert '"word": "Hello"' in report
     assert not (revision / "wav/s0001.wav").exists()
+
+
+def test_single_word_tts_input_gets_terminal_punctuation() -> None:
+    assert AudioStep._tts_input("talk") == "talk."
+    assert AudioStep._tts_input("Hello world.") == "Hello world."
