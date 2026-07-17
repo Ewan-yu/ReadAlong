@@ -25,10 +25,11 @@ from app.pipeline.definitions import StepRunContext
 from app.providers.ocr import OcrProvider
 
 
-_TEXT_LABELS = {"text", "paragraph_title"}
+_TEXT_LABELS = {"text", "paragraph_title", "vision_footnote"}
 _WORDS = re.compile(r"[A-Za-z]+(?:['’-][A-Za-z]+)*")
 _SYMBOLS_ONLY = re.compile(r"^[\W_]+$", re.UNICODE)
 _CLOSING_QUOTES = "\"”’"
+_ENGLISH_LINE = re.compile(r"[A-Za-z][A-Za-z0-9\s.,!?;:'\"’\-]*")
 
 
 class EnglishSpellChecker:
@@ -193,8 +194,9 @@ class OcrStep:
                     text = candidate.get("block_content", candidate.get("text"))
                     bbox = candidate.get("block_bbox", candidate.get("bbox"))
                     parsed = cls._pixel_bbox(bbox, width, height)
-                    if label in _TEXT_LABELS and isinstance(text, str) and text.strip() and parsed:
-                        blocks.append(RawBlock(text=text.strip(), bbox=parsed))
+                    spoken = cls._english_text(text) if isinstance(text, str) else ""
+                    if label in _TEXT_LABELS and spoken and parsed:
+                        blocks.append(RawBlock(text=spoken, bbox=parsed))
         return tuple(sorted(blocks, key=lambda block: (block.bbox[1], block.bbox[0])))
 
     @staticmethod
@@ -220,6 +222,20 @@ class OcrStep:
         if x2 <= x1 or y2 <= y1:
             return None
         return x1, y1, x2 - x1, y2 - y1
+
+    @staticmethod
+    def _english_text(value: str) -> str:
+        """Keep the spoken English portion of bilingual OCR blocks, discard Chinese end matter."""
+
+        lines = []
+        for line in value.splitlines():
+            matched = _ENGLISH_LINE.search(line)
+            if matched:
+                lines.append(matched.group(0).strip())
+        if lines:
+            return " ".join(lines).strip()
+        stripped = value.strip()
+        return "" if re.search(r"[\u4e00-\u9fff]", stripped) else stripped
 
     @staticmethod
     def _normalise_bbox(bbox: tuple[float, float, float, float], width: int, height: int) -> BoundingBox:

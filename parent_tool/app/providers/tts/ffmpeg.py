@@ -31,6 +31,8 @@ class FfmpegOpusTranscoder:
                 "48000",
                 "-ac",
                 "1",
+                "-af",
+                "alimiter=limit=0.891:level=disabled",
                 "-c:a",
                 "libopus",
                 "-b:a",
