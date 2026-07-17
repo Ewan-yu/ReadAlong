@@ -197,7 +197,10 @@ class OcrStep:
                     spoken = cls._english_text(text) if isinstance(text, str) else ""
                     if label in _TEXT_LABELS and spoken and parsed:
                         blocks.append(RawBlock(text=spoken, bbox=parsed))
-        return tuple(sorted(blocks, key=lambda block: (block.bbox[1], block.bbox[0])))
+        ordered = tuple(sorted(blocks, key=lambda block: (block.bbox[1], block.bbox[0])))
+        # Dense publication/copyright pages contain scattered Latin fragments such as ISBN and URLs.
+        # They are not read-aloud content; keeping them produces long, noisy synthetic audio.
+        return () if len(ordered) >= 10 else ordered
 
     @staticmethod
     def _iter_layouts(record: dict[str, Any]) -> Iterable[dict[str, Any]]:
