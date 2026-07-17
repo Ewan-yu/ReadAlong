@@ -16,7 +16,12 @@ class FfmpegOpusTranscoder:
         self._executable = executable
 
     def transcode(
-        self, wav_path: Path, ogg_path: Path, bitrate_kbps: int, cancellation: CancellationToken
+        self,
+        wav_path: Path,
+        ogg_path: Path,
+        bitrate_kbps: int,
+        tempo: float,
+        cancellation: CancellationToken,
     ) -> float:
         ffmpeg = self._resolve_executable()
         cancellation.raise_if_cancelled()
@@ -32,7 +37,7 @@ class FfmpegOpusTranscoder:
                 "-ac",
                 "1",
                 "-af",
-                "alimiter=limit=0.891:level=disabled",
+                f"atempo={tempo},alimiter=limit=0.891:level=disabled",
                 "-c:a",
                 "libopus",
                 "-b:a",

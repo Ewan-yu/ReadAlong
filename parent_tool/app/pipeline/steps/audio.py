@@ -15,7 +15,12 @@ from app.providers.tts import TtsProvider
 
 class AudioTranscoder(Protocol):
     def transcode(
-        self, wav_path: Path, ogg_path: Path, bitrate_kbps: int, cancellation: object
+        self,
+        wav_path: Path,
+        ogg_path: Path,
+        bitrate_kbps: int,
+        tempo: float,
+        cancellation: object,
     ) -> float: ...
 
 
@@ -57,6 +62,7 @@ class AudioStep:
                     Path(synthesized.wav_path),
                     ogg_path,
                     params.opus_bitrate_kbps,
+                    params.tempo,
                     context.cancellation,
                 )
                 try:

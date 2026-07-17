@@ -24,6 +24,7 @@ abstract interface class SentenceAudioEngine {
     required String path,
     required Duration start,
     required Duration end,
+    required bool wholeFile,
   });
 
   Future<void> play();
@@ -86,6 +87,7 @@ final class JustAudioSentencePlayer implements SentenceAudioPlayer {
         path: clip.path,
         start: clip.start,
         end: clip.end,
+        wholeFile: clip.wholeFile,
       );
       final positionFailure = Completer<void>();
       if (onPosition != null) {
@@ -159,7 +161,12 @@ final class _JustAudioSentenceAudioEngine implements SentenceAudioEngine {
     required String path,
     required Duration start,
     required Duration end,
+    required bool wholeFile,
   }) async {
+    if (wholeFile) {
+      await _player.setAudioSource(just_audio.AudioSource.file(path));
+      return;
+    }
     await _player.setAudioSource(
       just_audio.ClippingAudioSource(
         child: just_audio.AudioSource.file(path),

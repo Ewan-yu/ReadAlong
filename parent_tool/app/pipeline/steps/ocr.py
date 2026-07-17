@@ -187,6 +187,18 @@ class OcrStep:
                 candidates = pruned.get("parsing_res_list", ()) if isinstance(pruned, dict) else ()
                 if not isinstance(candidates, list):
                     continue
+                image_boxes = tuple(
+                    parsed
+                    for candidate in candidates
+                    if isinstance(candidate, dict)
+                    and str(candidate.get("block_label", "")).casefold() == "image"
+                    and (
+                        parsed := cls._pixel_bbox(
+                            candidate.get("block_bbox", candidate.get("bbox")), width, height
+                        )
+                    )
+                    is not None
+                )
                 for candidate in candidates:
                     if not isinstance(candidate, dict):
                         continue
@@ -196,8 +208,16 @@ class OcrStep:
                     parsed = cls._pixel_bbox(bbox, width, height)
                     spoken = cls._english_text(text) if isinstance(text, str) else ""
                     if label in _TEXT_LABELS and spoken and parsed:
+                        if label == "vision_footnote":
+                            parsed = cls._include_nearest_image(parsed, image_boxes)
                         blocks.append(RawBlock(text=spoken, bbox=parsed))
-        ordered = tuple(sorted(blocks, key=lambda block: (block.bbox[1], block.bbox[0])))
+        row_height = max(height * 0.08, 1)
+        ordered = tuple(
+            sorted(
+                blocks,
+                key=lambda block: (round(block.bbox[1] / row_height), block.bbox[0]),
+            )
+        )
         # Dense publication/copyright pages contain scattered Latin fragments such as ISBN and URLs.
         # They are not read-aloud content; keeping them produces long, noisy synthetic audio.
         return () if len(ordered) >= 10 else ordered
@@ -225,6 +245,29 @@ class OcrStep:
         if x2 <= x1 or y2 <= y1:
             return None
         return x1, y1, x2 - x1, y2 - y1
+
+    @staticmethod
+    def _include_nearest_image(
+        label: tuple[float, float, float, float],
+        images: tuple[tuple[float, float, float, float], ...],
+    ) -> tuple[float, float, float, float]:
+        lx, ly, lw, lh = label
+        label_center = lx + lw / 2
+        candidates: list[tuple[float, tuple[float, float, float, float]]] = []
+        for image in images:
+            ix, iy, iw, ih = image
+            overlap = min(lx + lw, ix + iw) - max(lx, ix)
+            vertical_gap = ly - (iy + ih)
+            if overlap <= 0 or vertical_gap < -lh or vertical_gap > max(ih * 0.5, lh * 2):
+                continue
+            score = abs(label_center - (ix + iw / 2)) + abs(vertical_gap)
+            candidates.append((score, image))
+        if not candidates:
+            return label
+        _score, (ix, iy, iw, ih) = min(candidates, key=lambda item: item[0])
+        left, top = min(lx, ix), min(ly, iy)
+        right, bottom = max(lx + lw, ix + iw), max(ly + lh, iy + ih)
+        return left, top, right - left, bottom - top
 
     @staticmethod
     def _english_text(value: str) -> str:

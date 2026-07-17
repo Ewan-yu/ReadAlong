@@ -7,7 +7,8 @@ import 'package:reader_app/features/reader/point_reading_models.dart';
 import 'package:reader_app/features/reader/sentence_audio_player.dart';
 
 final class _FakeSentenceAudioEngine implements SentenceAudioEngine {
-  final configured = <({String path, Duration start, Duration end})>[];
+  final configured =
+      <({String path, Duration start, Duration end, bool wholeFile})>[];
   final positions = StreamController<Duration>.broadcast(sync: true);
   var stopCalls = 0;
   var disposeCalls = 0;
@@ -22,10 +23,13 @@ final class _FakeSentenceAudioEngine implements SentenceAudioEngine {
     required String path,
     required Duration start,
     required Duration end,
+    required bool wholeFile,
   }) async {
     final failure = configureFailure;
     if (failure != null) throw failure;
-    configured.add((path: path, start: start, end: end));
+    configured.add(
+      (path: path, start: start, end: end, wholeFile: wholeFile),
+    );
   }
 
   @override
@@ -59,10 +63,12 @@ void main() {
     await tempDir.delete(recursive: true);
   });
 
-  SentenceAudioClip clip({String? path}) => SentenceAudioClip(
+  SentenceAudioClip clip({String? path, bool wholeFile = false}) =>
+      SentenceAudioClip(
         path: path ?? audioFile.path,
         start: const Duration(milliseconds: 250),
         end: const Duration(milliseconds: 1400),
+        wholeFile: wholeFile,
       );
 
   test('配置本地文件裁剪区间后等待播放完成', () async {
@@ -79,6 +85,7 @@ void main() {
           path: audioFile.path,
           start: const Duration(milliseconds: 250),
           end: const Duration(milliseconds: 1400),
+          wholeFile: false,
         ),
       ],
     );
@@ -116,6 +123,12 @@ void main() {
     await playing;
     engine.positions.add(const Duration(milliseconds: 250));
     expect(reported, hasLength(3));
+  });
+
+  test('整句 TTS 文件转发 wholeFile 避免 Ogg 裁剪解码', () async {
+    await player.play(clip(wholeFile: true));
+
+    expect(engine.configured.single.wholeFile, isTrue);
   });
 
   test('位置流异常停止引擎并映射为播放异常', () async {

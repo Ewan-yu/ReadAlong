@@ -67,7 +67,7 @@ class FakeAligner:
 
 
 class FakeTranscoder:
-    def transcode(self, _wav_path, ogg_path, _bitrate, _cancellation):
+    def transcode(self, _wav_path, ogg_path, _bitrate, _tempo, _cancellation):
         ogg_path.parent.mkdir(parents=True, exist_ok=True)
         ogg_path.write_bytes(b"fake ogg")
         return 0.6

@@ -80,6 +80,7 @@ final class LocalPointReadingRepository implements PointReadingRepository {
           'audio_path',
           't_start',
           't_end',
+          'audio_source',
         ],
         orderBy: 'seq ASC',
       );
@@ -259,6 +260,7 @@ ReaderSentence _parseSentence(
   final audioPath = row['audio_path'];
   final start = row['t_start'];
   final end = row['t_end'];
+  final audioSource = row['audio_source'];
   if (id is! String ||
       id.isEmpty ||
       bookId != shelfBook.sourceBookId ||
@@ -294,6 +296,7 @@ ReaderSentence _parseSentence(
       path: _resolveInside(shelfBook.bookDir, audioPath),
       start: _secondsToDuration(startSeconds),
       end: _secondsToDuration(endSeconds),
+      wholeFile: audioSource == 'tts' || audioSource == 'azure-tts',
     ),
   );
 }

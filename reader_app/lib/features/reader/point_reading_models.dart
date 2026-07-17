@@ -57,11 +57,13 @@ final class SentenceAudioClip {
     required this.path,
     required this.start,
     required this.end,
+    this.wholeFile = false,
   });
 
   final String path;
   final Duration start;
   final Duration end;
+  final bool wholeFile;
 }
 
 final class ReaderWordTiming {

@@ -201,6 +201,7 @@ void main() {
     expect(first.audio.path, p.join(bookDir.path, 'tts', 'story.ogg'));
     expect(first.audio.start, Duration.zero);
     expect(first.audio.end, const Duration(milliseconds: 1200));
+    expect(first.audio.wholeFile, isTrue);
   });
 
   test('alignment book.id 与 sourceBookId 不一致时拒绝加载', () async {

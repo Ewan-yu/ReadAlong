@@ -76,6 +76,7 @@ def test_ocr_step_replays_response_and_builds_sentence_draft(tmp_path: Path) -> 
                                 },
                                 {"block_label": "number", "block_content": "4", "block_bbox": [1, 1, 10, 10]},
                                 {"block_label": "image", "block_bbox": [0, 0, 100, 100]},
+                                {"block_label": "image", "block_bbox": [210, 80, 330, 145]},
                             ]
                         }
                     }
@@ -107,6 +108,7 @@ def test_ocr_step_replays_response_and_builds_sentence_draft(tmp_path: Path) -> 
     assert output.pages[0].sentences_created == 4
     assert 0 <= output.sentences[0].bbox.x < 1
     assert output.sentences[0].bbox.x + output.sentences[0].bbox.width <= 1
+    assert output.sentences[-1].bbox.y < output.sentences[2].bbox.y
 
 
 def test_ocr_step_rejects_invalid_replayed_jsonl(tmp_path: Path) -> None:

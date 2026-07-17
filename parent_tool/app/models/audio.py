@@ -29,6 +29,7 @@ class VoiceConfig(FrozenModel):
 class AudioParams(FrozenModel):
     voice: VoiceConfig = Field(default_factory=VoiceConfig)
     opus_bitrate_kbps: int = Field(default=32, ge=16, le=128)
+    tempo: float = Field(default=0.9, ge=0.75, le=1.25)
     language: str = Field(default="en", pattern=r"^[a-z]{2,8}$")
 
 
