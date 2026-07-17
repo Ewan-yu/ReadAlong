@@ -3,13 +3,20 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Protocol
 
-from app.models.audio import AudioGenerationReport, AudioParams, AudioSentenceReport
+from app.models.audio import (
+    AudioGenerationReport,
+    AudioParams,
+    AudioSentenceReport,
+    SynthesizedAudio,
+    TtsProviderKind,
+    VoiceConfig,
+)
 from app.models.errors import PipelineError
 from app.models.ocr import OcrSentences
 from app.models.pipeline import StepId, StepResult
 from app.pipeline.audio_validation import is_suspect_duration, validate_word_timings
 from app.pipeline.audio_validation import normalized_words
-from app.pipeline.definitions import StepRunContext
+from app.pipeline.definitions import CancellationToken, StepRunContext
 from app.providers.align import WordAligner
 from app.providers.tts import TtsProvider
 
@@ -27,11 +34,19 @@ class AudioTranscoder(Protocol):
 
 class AudioStep:
     step_id = StepId.AUDIO
-    implementation_version = "audio-v1"
+    implementation_version = "audio-v2"
     params_model = AudioParams
 
-    def __init__(self, tts: TtsProvider, aligner: WordAligner, transcoder: AudioTranscoder) -> None:
+    def __init__(
+        self,
+        tts: TtsProvider,
+        aligner: WordAligner,
+        transcoder: AudioTranscoder,
+        *,
+        azure_tts: TtsProvider | None = None,
+    ) -> None:
         self._tts = tts
+        self._azure_tts = azure_tts
         self._aligner = aligner
         self._transcoder = transcoder
 
@@ -49,6 +64,15 @@ class AudioStep:
             ) from exc
         reports: list[AudioSentenceReport] = []
         outputs: list[str] = []
+        sentence_ids = {sentence.id for sentence in source.sentences}
+        unknown_azure_ids = set(params.azure_sentence_ids) - sentence_ids
+        if unknown_azure_ids:
+            raise PipelineError(
+                "AUDIO_PROVIDER_SENTENCE_UNKNOWN",
+                "指定 Azure 语音的句子不在当前校对版本中。",
+                details={"sentence_ids": sorted(unknown_azure_ids)},
+                status_code=422,
+            )
         total = max(len(source.sentences), 1)
         for index, sentence in enumerate(source.sentences, start=1):
             context.cancellation.raise_if_cancelled()
@@ -56,11 +80,17 @@ class AudioStep:
             audio_path = f"ogg/{sentence.id}.ogg"
             ogg_path = context.staging_dir / audio_path
             try:
-                synthesized = self._tts.synthesize(
+                synthesized, provider = self._synthesize(
                     self._tts_input(sentence.text),
                     params.voice,
                     wav_path,
                     context.cancellation,
+                    primary_provider=(
+                        TtsProviderKind.AZURE
+                        if sentence.id in params.azure_sentence_ids
+                        else params.primary_provider
+                    ),
+                    fallback_provider=params.fallback_provider,
                 )
                 duration = self._transcoder.transcode(
                     Path(synthesized.wav_path),
@@ -82,6 +112,7 @@ class AudioStep:
                         audio_path=audio_path,
                         duration_seconds=duration,
                         word_timing=timing,
+                        provider=provider,
                         suspect_tts=is_suspect_duration(sentence.text, duration),
                         error_code=reason,
                     )
@@ -108,6 +139,51 @@ class AudioStep:
                 "audio_count": sum(item.audio_path is not None for item in reports),
                 "failed_count": sum(item.audio_path is None for item in reports),
             },
+        )
+
+    def _synthesize(
+        self,
+        text: str,
+        voice: VoiceConfig,
+        output_wav: Path,
+        cancellation: CancellationToken,
+        *,
+        primary_provider: TtsProviderKind,
+        fallback_provider: TtsProviderKind | None,
+    ) -> tuple[SynthesizedAudio, TtsProviderKind]:
+        try:
+            provider = self._provider(primary_provider)
+            return provider.synthesize(text, voice, output_wav, cancellation), primary_provider
+        except PipelineError as primary_error:
+            if primary_error.code == "JOB_CANCELLED" or fallback_provider in (None, primary_provider):
+                raise
+            try:
+                fallback = self._provider(fallback_provider)
+                return fallback.synthesize(text, voice, output_wav, cancellation), fallback_provider
+            except PipelineError as fallback_error:
+                if fallback_error.code == "JOB_CANCELLED":
+                    raise
+                raise PipelineError(
+                    "TTS_FALLBACK_FAILED",
+                    "首选和备用语音服务均未能生成此句音频。",
+                    details={
+                        "primary_provider": primary_provider.value,
+                        "primary_error": primary_error.code,
+                        "fallback_provider": fallback_provider.value,
+                        "fallback_error": fallback_error.code,
+                    },
+                    status_code=502,
+                ) from fallback_error
+
+    def _provider(self, provider: TtsProviderKind) -> TtsProvider:
+        if provider is TtsProviderKind.VOXCPM:
+            return self._tts
+        if provider is TtsProviderKind.AZURE and self._azure_tts is not None:
+            return self._azure_tts
+        raise PipelineError(
+            "AZURE_TTS_UNAVAILABLE",
+            "当前服务未安装 Azure Speech Provider。",
+            status_code=422,
         )
 
     @staticmethod

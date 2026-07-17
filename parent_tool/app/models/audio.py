@@ -12,6 +12,11 @@ class VoiceMode(str, Enum):
     CLONE = "clone"
 
 
+class TtsProviderKind(str, Enum):
+    VOXCPM = "voxcpm"
+    AZURE = "azure"
+
+
 class VoiceConfig(FrozenModel):
     mode: VoiceMode = VoiceMode.DESIGN
     description: str = Field(
@@ -28,9 +33,23 @@ class VoiceConfig(FrozenModel):
 
 class AudioParams(FrozenModel):
     voice: VoiceConfig = Field(default_factory=VoiceConfig)
+    primary_provider: TtsProviderKind = TtsProviderKind.VOXCPM
+    fallback_provider: TtsProviderKind | None = TtsProviderKind.AZURE
+    azure_sentence_ids: tuple[str, ...] = ()
     opus_bitrate_kbps: int = Field(default=32, ge=16, le=128)
     tempo: float = Field(default=0.9, ge=0.75, le=1.25)
     language: str = Field(default="en", pattern=r"^[a-z]{2,8}$")
+
+    @model_validator(mode="after")
+    def validates_provider_selection(self) -> "AudioParams":
+        if len(set(self.azure_sentence_ids)) != len(self.azure_sentence_ids):
+            raise ValueError("azure_sentence_ids must not contain duplicates")
+        if any(not sentence_id.strip() for sentence_id in self.azure_sentence_ids):
+            raise ValueError("azure_sentence_ids must not contain empty IDs")
+        if self.primary_provider is TtsProviderKind.AZURE:
+            if self.fallback_provider is TtsProviderKind.AZURE:
+                raise ValueError("Azure cannot be its own fallback provider")
+        return self
 
 
 class AudioWordTiming(FrozenModel):
@@ -55,6 +74,7 @@ class AudioSentenceReport(FrozenModel):
     audio_path: str | None = None
     duration_seconds: float | None = Field(default=None, gt=0)
     word_timing: tuple[AudioWordTiming, ...] | None = None
+    provider: TtsProviderKind | None = None
     suspect_tts: bool = False
     error_code: str | None = None
 
