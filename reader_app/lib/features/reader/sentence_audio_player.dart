@@ -29,7 +29,8 @@ abstract interface class SentenceAudioEngine {
 
   Future<void> play();
 
-  Future<void> stop();
+  /// Halt point reading while retaining the native decoder for the next tap.
+  Future<void> pause();
 
   Future<void> dispose();
 }
@@ -118,7 +119,7 @@ final class JustAudioSentencePlayer implements SentenceAudioPlayer {
       rethrow;
     } on Object {
       try {
-        await _engine.stop();
+        await _engine.pause();
       } on Object {
         // Preserve the original playback/position failure.
       }
@@ -150,11 +151,11 @@ final class JustAudioSentencePlayer implements SentenceAudioPlayer {
     if (_disposed) return;
     ++_commandGeneration;
     try {
-      // Wait for an in-flight setAudioSource before stopping.  Calling stop
-      // while MediaCodec is still binding the old source causes intermittent
+      // Wait for an in-flight setAudioSource before pausing. Calling it while
+      // MediaCodec is still binding the old source causes intermittent
       // discarded-buffer noise on Android emulators.
       await _configuration;
-      await _engine.stop();
+      await _engine.pause();
     } on Object {
       throw const SentencePlaybackException();
     }
@@ -207,7 +208,9 @@ final class _JustAudioSentenceAudioEngine implements SentenceAudioEngine {
   Future<void> play() => _player.play();
 
   @override
-  Future<void> stop() => _player.stop();
+  // just_audio.stop() releases Android decoders. Point reading frequently
+  // changes source, so pause here and reserve dispose() for page teardown.
+  Future<void> pause() => _player.pause();
 
   @override
   Future<void> dispose() => _player.dispose();

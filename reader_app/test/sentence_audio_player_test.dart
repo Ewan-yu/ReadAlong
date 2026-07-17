@@ -10,7 +10,7 @@ final class _FakeSentenceAudioEngine implements SentenceAudioEngine {
   final configured =
       <({String path, Duration start, Duration end, bool wholeFile})>[];
   final positions = StreamController<Duration>.broadcast(sync: true);
-  var stopCalls = 0;
+  var pauseCalls = 0;
   var playCalls = 0;
   var disposeCalls = 0;
   Object? configureFailure;
@@ -42,8 +42,8 @@ final class _FakeSentenceAudioEngine implements SentenceAudioEngine {
   }
 
   @override
-  Future<void> stop() async {
-    stopCalls++;
+  Future<void> pause() async {
+    pauseCalls++;
   }
 
   @override
@@ -145,13 +145,13 @@ void main() {
     engine.positions.addError(StateError('position stream failed'));
 
     await expectLater(playing, throwsA(isA<SentencePlaybackException>()));
-    expect(engine.stopCalls, 1);
+    expect(engine.pauseCalls, 1);
   });
 
-  test('stop 委托给音频引擎', () async {
+  test('停止点读委托给音频引擎的暂停操作', () async {
     await player.stop();
 
-    expect(engine.stopCalls, 1);
+    expect(engine.pauseCalls, 1);
   });
 
   test('等待进行中的换源完成后再停止，避免 Android 解码器并发释放', () async {
@@ -162,12 +162,12 @@ void main() {
 
     final stopping = player.stop();
     await pumpEventQueue();
-    expect(engine.stopCalls, 0);
+    expect(engine.pauseCalls, 0);
 
     engine.configureCompleter!.complete();
     await stopping;
     await playing;
-    expect(engine.stopCalls, 1);
+    expect(engine.pauseCalls, 1);
     expect(engine.playCalls, 0);
   });
 
