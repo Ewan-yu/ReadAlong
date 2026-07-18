@@ -21,8 +21,15 @@ class WorkspaceService:
         self.paths = paths
         self.states = states
 
-    def create_from_pdf(self, source: Path, book_id: str) -> PipelineState:
+    def create_from_pdf(
+        self,
+        source: Path,
+        book_id: str,
+        *,
+        original_audio: Path | None = None,
+    ) -> PipelineState:
         source = source.expanduser().resolve()
+        original_audio = original_audio.expanduser().resolve() if original_audio else None
         target = self.paths.book(book_id)
         if target.exists():
             raise PipelineError(
@@ -37,6 +44,14 @@ class WorkspaceService:
                 "请选择可读取的 PDF 文件。",
                 status_code=422,
             )
+        if original_audio is not None and (
+            original_audio.suffix.lower() != ".mp3" or not original_audio.is_file()
+        ):
+            raise PipelineError(
+                "ORIGINAL_AUDIO_INVALID",
+                "请选择可读取的 MP3 原音文件。",
+                status_code=422,
+            )
         try:
             self._validate_pdf(source)
         except (OSError, fitz.FileDataError, fitz.EmptyFileError, RuntimeError) as exc:
@@ -48,16 +63,28 @@ class WorkspaceService:
         target.mkdir(parents=True)
         temporary = target / f".source-{uuid4().hex}.tmp"
         copied = target / "source.pdf"
+        audio_temporary = target / f".audio-{uuid4().hex}.tmp"
+        copied_audio = target / "original_audio.mp3"
         try:
             with source.open("rb") as input_stream, temporary.open("wb") as output_stream:
                 shutil.copyfileobj(input_stream, output_stream, length=1024 * 1024)
                 output_stream.flush()
                 os.fsync(output_stream.fileno())
             os.replace(temporary, copied)
+            if original_audio is not None:
+                with original_audio.open("rb") as input_stream, audio_temporary.open(
+                    "wb"
+                ) as output_stream:
+                    shutil.copyfileobj(input_stream, output_stream, length=1024 * 1024)
+                    output_stream.flush()
+                    os.fsync(output_stream.fileno())
+                os.replace(audio_temporary, copied_audio)
             state = PipelineState.new(
                 book_id=book_id,
                 pdf_path="source.pdf",
                 pdf_sha256=file_sha256(copied),
+                original_audio_path="original_audio.mp3" if original_audio else None,
+                original_audio_sha256=file_sha256(copied_audio) if original_audio else None,
             )
             return self.states.create(state)
         except PipelineError:
@@ -70,6 +97,7 @@ class WorkspaceService:
             ) from exc
         finally:
             temporary.unlink(missing_ok=True)
+            audio_temporary.unlink(missing_ok=True)
             if not (target / "state.json").is_file():
                 shutil.rmtree(target, ignore_errors=True)
 

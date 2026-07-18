@@ -40,6 +40,18 @@ class PageProcessingStep:
         try:
             if document.page_count < 1:
                 raise PipelineError("SOURCE_FILE_INVALID", "PDF 不包含可处理页面。", status_code=422)
+            invalid_pages = [
+                item.source_pdf_page
+                for item in params.page_decisions
+                if item.source_pdf_page > document.page_count
+            ]
+            if invalid_pages:
+                raise PipelineError(
+                    "PAGE_DECISION_INVALID",
+                    "页面决策包含不存在的源 PDF 页。",
+                    details={"source_pdf_pages": invalid_pages},
+                    status_code=422,
+                )
             entries, output_paths = self._render_document(document, context, params)
             plan = PagePlan(
                 source_pdf_sha256=context.source_pdf_sha256 or file_sha256(source),
@@ -73,12 +85,13 @@ class PageProcessingStep:
         final_page_no = 1
         total_units = max(document.page_count * 7, 1)
         completed_units = 0
+        overrides = {item.source_pdf_page: item.decision for item in params.page_decisions}
 
         for source_index, pdf_page in enumerate(document, start=1):
             context.cancellation.raise_if_cancelled()
             detection_image = self._render_page(pdf_page, params.detection_dpi)
             detect = self._detect_split(detection_image, params)
-            decision = self._default_decision(detect, params)
+            decision = overrides.get(source_index) or self._default_decision(detect, params)
             ocr_image = self._render_page(pdf_page, params.ocr_dpi)
             completed_units += 1
             context.progress(completed_units / total_units, f"正在渲染源页 {source_index}/{document.page_count}。")

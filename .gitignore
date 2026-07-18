@@ -43,6 +43,14 @@ ENV/
 .htmlcov/
 .ipynb_checkpoints/
 
+# ---- Node / 家长端 Web ----
+**/node_modules/
+parent_tool/web/dist/
+parent_tool/web/*.tsbuildinfo
+.playwright-cli/
+.tmp_pytest_*/
+output/playwright/
+
 # ---- Flutter / Dart（孩子端）----
 **/.dart_tool/
 **/.packages

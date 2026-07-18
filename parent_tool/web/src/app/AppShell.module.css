@@ -1,0 +1,157 @@
+.shell {
+  min-height: 100vh;
+  background: var(--color-bg);
+}
+
+.sidebar {
+  position: fixed;
+  inset: 0 auto 0 0;
+  z-index: var(--z-sticky);
+  display: flex;
+  width: var(--sidebar-width);
+  flex-direction: column;
+  border-right: 1px solid var(--color-border);
+  background: var(--color-sidebar);
+}
+
+.brand {
+  display: flex;
+  min-height: 7rem;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-6);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.brandMark {
+  display: grid;
+  width: 2.75rem;
+  height: 2.75rem;
+  place-items: center;
+  border-radius: var(--radius-sm);
+  background: var(--color-primary);
+  color: var(--color-surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.brandMark svg { width: 1.55rem; }
+
+.brand strong {
+  display: block;
+  font-family: var(--font-display);
+  font-size: var(--text-lg);
+  letter-spacing: -0.02em;
+}
+
+.brand small,
+.stepCopy small {
+  display: block;
+  color: var(--color-text-muted);
+  font-size: var(--text-xs);
+}
+
+.workflow {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  padding: var(--space-6) var(--space-3);
+}
+
+.step {
+  position: relative;
+  display: grid;
+  min-height: 5.25rem;
+  grid-template-columns: 2.5rem 1.75rem 1fr;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  padding: 0 var(--space-3) 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text);
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-out), transform var(--duration-fast) var(--ease-out);
+}
+
+.step:hover:not(:disabled) { background: var(--color-surface); }
+.step:active:not(:disabled) { transform: translateY(1px); }
+.step[data-active] { background: var(--color-primary-soft); color: var(--color-primary-ink); }
+.step:disabled { color: var(--ink-400); cursor: not-allowed; }
+.step:disabled .stepCopy small { color: var(--ink-400); }
+
+.stepRail {
+  align-self: stretch;
+  display: grid;
+  place-items: center;
+  background: linear-gradient(var(--color-border), var(--color-border)) center / 1px 100% no-repeat;
+}
+
+.step:first-child .stepRail { background-size: 1px 50%; background-position: center bottom; }
+.step:last-child .stepRail { background-size: 1px 50%; background-position: center top; }
+
+.stepNumber {
+  display: grid;
+  width: 2rem;
+  height: 2rem;
+  place-items: center;
+  border: 1px solid var(--color-border);
+  border-radius: 50%;
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-bold);
+  font-variant-numeric: tabular-nums;
+}
+
+.stepNumber svg { width: 1rem; }
+.step[data-active] .stepNumber { border-color: var(--color-primary); background: var(--color-primary); color: var(--color-surface); }
+.step[data-complete] .stepNumber { border-color: var(--color-success); background: var(--color-success); color: var(--color-surface); }
+.stepIcon { width: 1.25rem; color: var(--color-text-muted); }
+.step[data-active] .stepIcon { color: var(--color-primary); }
+.stepCopy strong { display: block; font-size: var(--text-sm); font-weight: var(--weight-medium); }
+
+.sidebarFooter {
+  display: grid;
+  gap: var(--space-1);
+  margin: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--color-border);
+}
+
+.sidebarFooter button,
+.account {
+  display: flex;
+  min-height: 2.75rem;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 0 var(--space-3);
+  border: 0;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+}
+
+.sidebarFooter button:disabled { opacity: 0.65; }
+.sidebarFooter svg { width: 1.1rem; }
+.account { margin-top: var(--space-2); color: var(--color-text); }
+
+.main {
+  min-height: 100vh;
+  margin-left: var(--sidebar-width);
+}
+
+@media (max-width: 70rem) {
+  :root { --sidebar-width: 5.25rem; }
+  .brand { justify-content: center; padding-inline: var(--space-3); }
+  .brand > span:last-child,
+  .stepCopy,
+  .stepIcon,
+  .sidebarFooter button span,
+  .account span { display: none; }
+  .step { grid-template-columns: 1fr; padding: 0; }
+  .stepRail { background: none; }
+  .sidebarFooter button,
+  .account { justify-content: center; padding: 0; }
+}

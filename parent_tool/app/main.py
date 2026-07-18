@@ -13,10 +13,14 @@ from typing import Callable
 import portalocker
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException as StarletteHttpException
+from starlette.responses import Response
 
 from app.api.errors import install_error_handlers
 from app.api.routes.jobs import router as jobs_router
+from app.api.routes.pages import router as pages_router
 from app.api.routes.pipeline import router as pipeline_router
+from app.api.routes.system import router as system_router
 from app.config import Settings
 from app.jobs.events import EventBus
 from app.jobs.manager import JobManager
@@ -32,9 +36,28 @@ from app.providers.align import StableTsWordAligner
 from app.providers.ocr import PaddleOcrProvider
 from app.providers.tts import AzureSpeechTtsProvider, FfmpegOpusTranscoder, VoxCpmTtsProvider
 from app.services.workspace_service import WorkspaceService
+from app.services.page_workspace_service import PageWorkspaceService
 
 
 ExecutorFactory = Callable[[], ThreadPoolExecutor]
+
+
+class SpaStaticFiles(StaticFiles):
+    """Serve Vite assets and fall back to index.html for client-side routes."""
+
+    async def get_response(self, path: str, scope: dict) -> Response:
+        try:
+            return await super().get_response(path, scope)
+        except StarletteHttpException as exc:
+            request_path = str(scope.get("path", "")).lstrip("/")
+            if (
+                exc.status_code != 404
+                or request_path == "api"
+                or request_path.startswith("api/")
+                or "." in Path(request_path).name
+            ):
+                raise
+            return await super().get_response("index.html", scope)
 
 
 def create_app(
@@ -96,6 +119,7 @@ def create_app(
             application.state.pipeline_engine = engine
             application.state.job_manager = manager
             application.state.workspace_service = workspace_service
+            application.state.page_workspace_service = PageWorkspaceService(paths, states, artifacts)
             yield
         finally:
             if manager is not None:
@@ -115,10 +139,12 @@ def create_app(
 
     application.include_router(pipeline_router)
     application.include_router(jobs_router)
+    application.include_router(pages_router)
+    application.include_router(system_router)
 
     web_dist = Path(__file__).parent.parent / "web" / "dist"
     if web_dist.exists():
-        application.mount("/", StaticFiles(directory=web_dist, html=True), name="web")
+        application.mount("/", SpaStaticFiles(directory=web_dist, html=True), name="web")
     return application
 
 

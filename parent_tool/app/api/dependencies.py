@@ -5,6 +5,7 @@ from fastapi import Request
 from app.jobs.events import EventBus
 from app.jobs.manager import JobManager
 from app.pipeline.state_repository import StateRepository
+from app.services.page_workspace_service import PageWorkspaceService
 from app.services.workspace_service import WorkspaceService
 
 
@@ -22,3 +23,7 @@ def get_event_bus(request: Request) -> EventBus:
 
 def get_workspace_service(request: Request) -> WorkspaceService:
     return request.app.state.workspace_service
+
+
+def get_page_workspace_service(request: Request) -> PageWorkspaceService:
+    return request.app.state.page_workspace_service

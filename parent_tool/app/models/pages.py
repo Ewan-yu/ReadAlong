@@ -46,6 +46,7 @@ class PageProcessParams(FrozenModel):
     center_window_start: float = Field(default=0.4, ge=0, lt=0.5)
     center_window_end: float = Field(default=0.6, gt=0.5, le=1)
     confirmation_confidence: int = Field(default=70, ge=0, le=100)
+    page_decisions: tuple["PageDecisionOverride", ...] = ()
 
     @model_validator(mode="before")
     @classmethod
@@ -58,6 +59,13 @@ class PageProcessParams(FrozenModel):
         data.setdefault("reading_long_edge", long_edge)
         data.setdefault("webp_quality", quality_value)
         return data
+
+    @model_validator(mode="after")
+    def validate_page_decisions(self) -> "PageProcessParams":
+        source_pages = [item.source_pdf_page for item in self.page_decisions]
+        if source_pages != sorted(set(source_pages)):
+            raise ValueError("page decisions must be unique and ordered by source page")
+        return self
 
 
 class PageCrop(FrozenModel):
@@ -87,6 +95,11 @@ class PageDecision(FrozenModel):
         if self.mode is PageMode.SPLIT_LR and self.split_ratio is None:
             raise ValueError("split decision requires split_ratio")
         return self
+
+
+class PageDecisionOverride(FrozenModel):
+    source_pdf_page: int = Field(ge=1)
+    decision: PageDecision
 
 
 class PageDetect(FrozenModel):

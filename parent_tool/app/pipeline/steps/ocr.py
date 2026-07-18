@@ -86,6 +86,16 @@ class OcrStep:
         except KeyError as exc:
             raise PipelineError("OCR_INPUT_MISSING", "缺少已完成的页面处理结果。", status_code=409) from exc
         plan = self._load_plan(pages_root)
+        unconfirmed_pages = [
+            entry.source_pdf_page for entry in plan.pages if not entry.decision.confirmed
+        ]
+        if unconfirmed_pages:
+            raise PipelineError(
+                "PAGE_DECISIONS_NOT_CONFIRMED",
+                "仍有页面处理决策未确认，请先完成拆分、旋转和裁边检查。",
+                details={"source_pdf_pages": unconfirmed_pages},
+                status_code=409,
+            )
         page_outputs = tuple(output for entry in plan.pages for output in entry.outputs)
         sentences: list[OcrSentence] = []
         pages: list[OcrPage] = []

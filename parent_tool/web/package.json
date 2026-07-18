@@ -1,0 +1,44 @@
+{
+  "name": "readalong-parent-web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "generate:api": "openapi-typescript http://127.0.0.1:8760/openapi.json -o src/api/generated.ts",
+    "lint": "tsc -b --pretty false",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@hookform/resolvers": "latest",
+    "@radix-ui/react-tooltip": "latest",
+    "@tanstack/react-query": "latest",
+    "@tanstack/react-router": "latest",
+    "konva": "^10.3.0",
+    "lucide-react": "latest",
+    "openapi-fetch": "latest",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "react-dropzone": "latest",
+    "react-hook-form": "latest",
+    "react-konva": "^19.2.5",
+    "zod": "latest",
+    "zustand": "latest"
+  },
+  "devDependencies": {
+    "@testing-library/jest-dom": "latest",
+    "@testing-library/react": "latest",
+    "@testing-library/user-event": "latest",
+    "@types/react": "latest",
+    "@types/react-dom": "latest",
+    "@vitejs/plugin-react": "latest",
+    "jsdom": "latest",
+    "openapi-typescript": "latest",
+    "typescript": "5.9.3",
+    "vite": "latest",
+    "vitest": "latest"
+  },
+  "packageManager": "pnpm@11.9.0"
+}

@@ -4,16 +4,18 @@ from pathlib import Path
 from threading import Event, Timer
 
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pydantic import BaseModel, ConfigDict
 
 from app.config import Settings
-from app.main import create_app
+from app.main import SpaStaticFiles, create_app
 from app.models.jobs import JobStatus
 from app.models.pipeline import PipelineState, StepId, StepResult
 from app.pipeline.definitions import StepRegistry
 from app.pipeline.paths import WorkspacePaths
 from app.pipeline.state_repository import StateRepository
+from app.pipeline.steps.pages import PageProcessingStep
 
 
 def _pdf_upload() -> bytes:
@@ -94,6 +96,38 @@ def test_create_book_uploads_pdf_into_new_workspace(tmp_path: Path) -> None:
     assert state["book_id"].startswith("my-granny-")
     assert state["source"]["pdf_path"] == "source.pdf"
     assert (tmp_path / state["book_id"] / "source.pdf").is_file()
+
+
+def test_create_book_preserves_optional_original_audio(tmp_path: Path) -> None:
+    audio = b"ID3" + b"\x00" * 32
+    with _client(tmp_path) as client:
+        response = client.post(
+            "/api/books",
+            files={
+                "pdf": ("My Granny.pdf", BytesIO(_pdf_upload()), "application/pdf"),
+                "original_audio": ("narration.mp3", BytesIO(audio), "audio/mpeg"),
+            },
+        )
+
+    assert response.status_code == 201
+    state = response.json()
+    assert state["source"]["original_audio_path"] == "original_audio.mp3"
+    assert len(state["source"]["original_audio_sha256"]) == 64
+    assert (tmp_path / state["book_id"] / "original_audio.mp3").read_bytes() == audio
+
+
+def test_create_book_rejects_non_mp3_original_audio(tmp_path: Path) -> None:
+    with _client(tmp_path) as client:
+        response = client.post(
+            "/api/books",
+            files={
+                "pdf": ("book.pdf", BytesIO(_pdf_upload()), "application/pdf"),
+                "original_audio": ("narration.wav", BytesIO(b"RIFF"), "audio/wav"),
+            },
+        )
+
+    assert response.status_code == 422
+    assert response.json()["code"] == "ORIGINAL_AUDIO_INVALID"
 
 
 def test_identical_step_request_returns_skipped(tmp_path: Path) -> None:
@@ -268,9 +302,81 @@ def test_openapi_contains_typed_pipeline_paths(tmp_path: Path) -> None:
     assert "/api/jobs/{job_id}" in paths
     assert "/api/jobs/{job_id}/events" in paths
     assert "/api/jobs/{job_id}/cancel" in paths
+    assert "/api/capabilities" in paths
+    assert "/api/books/{book_id}/pages/workspace" in paths
+    assert "/api/books/{book_id}/pages/source/{source_pdf_page}.webp" in paths
+    assert "/api/books/{book_id}/pages/revisions/{revision_id}/assets/{asset_path}" in paths
     assert "PipelineState" in schema["components"]["schemas"]
     assert "JobSnapshot" in schema["components"]["schemas"]
     assert "ApiErrorResponse" in schema["components"]["schemas"]
+    assert "CapabilitiesResponse" in schema["components"]["schemas"]
+    assert "PageWorkspaceResponse" in schema["components"]["schemas"]
     run_responses = paths["/api/books/{book_id}/steps/{step_id}/run"]["post"]["responses"]
     assert "200" in run_responses
     assert "202" in run_responses
+
+
+def test_spa_static_files_only_falls_back_for_client_routes(tmp_path: Path) -> None:
+    web_dist = tmp_path / "web-dist"
+    web_dist.mkdir()
+    (web_dist / "index.html").write_text("<main>ReadAlong</main>", encoding="utf-8")
+
+    static_app = FastAPI()
+    static_app.mount("/", SpaStaticFiles(directory=web_dist, html=True), name="web")
+
+    with TestClient(static_app) as client:
+        deep_link = client.get("/books/book-1/pages")
+        missing_asset = client.get("/assets/missing.js")
+        missing_api = client.get("/api/missing")
+
+    assert deep_link.status_code == 200
+    assert "ReadAlong" in deep_link.text
+    assert missing_asset.status_code == 404
+    assert missing_api.status_code == 404
+
+
+def test_page_workspace_exposes_plan_preview_and_declared_assets(tmp_path: Path) -> None:
+    app = create_app(
+        settings=Settings(workspace_root=tmp_path),
+        step_registry=StepRegistry((PageProcessingStep(),)),
+    )
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/books",
+            files={"pdf": ("Preview Book.pdf", BytesIO(_pdf_upload()), "application/pdf")},
+        ).json()
+        book_id = created["book_id"]
+        started = client.post(
+            f"/api/books/{book_id}/steps/pages/run",
+            json={
+                "params": {
+                    "reading_long_edge": 800,
+                    "ocr_dpi": 150,
+                    "detection_dpi": 48,
+                    "thumbnail_long_edge": 120,
+                }
+            },
+        )
+        assert started.status_code == 202
+        assert _wait_for_terminal(client, started.json()["job_id"])["status"] == "succeeded"
+
+        workspace = client.get(f"/api/books/{book_id}/pages/workspace")
+        body = workspace.json()
+        preview = client.get(f"/api/books/{book_id}/pages/source/1.webp?max_edge=240")
+        thumbnail_path = body["plan"]["pages"][0]["outputs"][0]["thumbnail"]
+        asset = client.get(
+            f"/api/books/{book_id}/pages/revisions/{body['revision_id']}/assets/{thumbnail_path}"
+        )
+        undeclared = client.get(
+            f"/api/books/{book_id}/pages/revisions/{body['revision_id']}/assets/page_plan.json"
+        )
+
+    assert workspace.status_code == 200
+    assert body["plan"]["source_pdf_page_count"] == 1
+    assert body["sentences"] == []
+    assert preview.status_code == 200
+    assert preview.headers["content-type"] == "image/webp"
+    assert asset.status_code == 200
+    assert asset.headers["content-type"] == "image/jpeg"
+    assert undeclared.status_code == 404
+    assert undeclared.json()["code"] == "PAGE_ASSET_NOT_FOUND"

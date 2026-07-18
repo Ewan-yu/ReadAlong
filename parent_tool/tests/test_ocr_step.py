@@ -4,7 +4,9 @@ import json
 from pathlib import Path
 
 import fitz
+import pytest
 
+from app.models.errors import PipelineError
 from app.models.ocr import OcrSentences, SuspectKind, SuspectWord
 from app.models.pipeline import PipelineState, StepId
 from app.pipeline.artifacts import ArtifactStore
@@ -121,6 +123,52 @@ def test_ocr_step_rejects_invalid_replayed_jsonl(tmp_path: Path) -> None:
         assert getattr(error, "code", None) == "OCR_RESPONSE_INVALID"
     else:
         raise AssertionError("invalid JSONL should be rejected")
+
+
+def test_ocr_step_rejects_unconfirmed_page_decisions(tmp_path: Path) -> None:
+    paths = WorkspacePaths(tmp_path / "workspace")
+    book = paths.book("book-1")
+    book.mkdir(parents=True)
+    source = _source_pdf(tmp_path / "source.pdf")
+    target = book / "source.pdf"
+    target.write_bytes(source.read_bytes())
+    states = StateRepository(paths)
+    states.create(
+        PipelineState.new(
+            book_id="book-1",
+            pdf_path="source.pdf",
+            pdf_sha256=file_sha256(target),
+        )
+    )
+    engine = PipelineEngine(
+        states,
+        ArtifactStore(paths),
+        StepRegistry(
+            (
+                PageProcessingStep(),
+                OcrStep(ReplayOcrProvider({}), FakeSpellChecker()),
+            )
+        ),
+    )
+    _run(
+        engine,
+        StepId.PAGES,
+        {
+            "page_decisions": [
+                {
+                    "source_pdf_page": 1,
+                    "decision": {"mode": "keep", "confirmed": False},
+                }
+            ]
+        },
+        "12345678-1234-4234-8234-123456789abc",
+    )
+
+    with pytest.raises(PipelineError) as caught:
+        _run(engine, StepId.OCR, {}, "22345678-1234-4234-8234-123456789abc")
+
+    assert caught.value.code == "PAGE_DECISIONS_NOT_CONFIRMED"
+    assert caught.value.details == {"source_pdf_pages": [1]}
 
 
 def test_replay_provider_requires_every_page(tmp_path: Path) -> None:

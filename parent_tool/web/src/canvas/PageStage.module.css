@@ -1,0 +1,27 @@
+.stage {
+  position: relative;
+  width: 100%;
+  min-height: 20rem;
+  height: 100%;
+  overflow: hidden;
+  background:
+    linear-gradient(90deg, transparent 49.9%, color-mix(in oklch, var(--color-border) 55%, transparent) 50%, transparent 50.1%),
+    linear-gradient(var(--paper-100), var(--paper-50));
+  cursor: default;
+}
+
+.stage canvas { display: block; }
+.stage:has(canvas) { container-type: inline-size; }
+
+.loading {
+  position: absolute;
+  inset: 50% auto auto 50%;
+  z-index: 1;
+  transform: translate(-50%, -50%);
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+}
+
+@media (max-width: 50rem) {
+  .stage { min-height: 27rem; }
+}

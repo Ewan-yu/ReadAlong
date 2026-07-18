@@ -51,8 +51,8 @@ def _engine(tmp_path: Path, source: Path) -> tuple[PipelineEngine, StateReposito
     )
 
 
-def _run(engine: PipelineEngine) -> object:
-    plan = engine.plan("book-1", StepId.PAGES, {})
+def _run(engine: PipelineEngine, params: dict | None = None) -> object:
+    plan = engine.plan("book-1", StepId.PAGES, params or {})
     assert not isinstance(plan, SkippedRun)
     prepared = engine.begin(plan, "12345678-1234-4234-8234-123456789abc")
     return engine.execute(prepared, lambda _progress, _message: None, CancellationToken())
@@ -98,6 +98,58 @@ def test_page_step_keeps_normal_page(tmp_path: Path) -> None:
     assert entry.decision.mode.value == "keep"
     assert entry.decision.confirmed is True
     assert [output.region.value for output in entry.outputs] == ["full"]
+
+
+def test_page_step_applies_confirmed_manual_decision(tmp_path: Path) -> None:
+    engine, _states, paths = _engine(tmp_path, _source_pdf(tmp_path / "spread.pdf", wide=True))
+
+    success = _run(
+        engine,
+        {
+            "reading_long_edge": 800,
+            "ocr_dpi": 150,
+            "page_decisions": [
+                {
+                    "source_pdf_page": 1,
+                    "decision": {
+                        "mode": "keep",
+                        "rotate": 90,
+                        "crop_pct": {"top": 3, "right": 4, "bottom": 5, "left": 2},
+                        "confirmed": True,
+                    },
+                }
+            ],
+        },
+    )
+
+    revision = paths.book("book-1") / success.output_root
+    page_plan = PagePlan.model_validate_json((revision / "page_plan.json").read_text("utf-8"))
+    entry = page_plan.pages[0]
+    assert entry.detect.suspect_split is True
+    assert entry.decision.mode.value == "keep"
+    assert entry.decision.rotate == 90
+    assert entry.decision.crop_pct.left == 2
+    assert entry.decision.confirmed is True
+    assert [output.region.value for output in entry.outputs] == ["full"]
+
+
+def test_page_step_rejects_manual_decision_for_missing_page(tmp_path: Path) -> None:
+    engine, _states, _paths = _engine(tmp_path, _source_pdf(tmp_path / "single.pdf", wide=False))
+
+    with pytest.raises(PipelineError) as caught:
+        _run(
+            engine,
+            {
+                "page_decisions": [
+                    {
+                        "source_pdf_page": 2,
+                        "decision": {"mode": "keep", "confirmed": True},
+                    }
+                ]
+            },
+        )
+
+    assert caught.value.code == "PAGE_DECISION_INVALID"
 
 
 def test_page_step_rejects_changed_source(tmp_path: Path) -> None:
