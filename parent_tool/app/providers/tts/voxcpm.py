@@ -25,7 +25,12 @@ class VoxCpmTtsProvider:
 
     def __init__(self, model_path: Path | None = None) -> None:
         configured = os.environ.get("VOXCPM_MODEL_PATH")
-        self._model_path = model_path or (Path(configured) if configured else None)
+        bundled = Path(__file__).parents[4] / "pretrained_models" / "VoxCPM2"
+        self._model_path = model_path or (
+            Path(configured).expanduser()
+            if configured
+            else bundled if bundled.is_dir() else None
+        )
         self._model: object | None = None
         self._lock = Lock()
 
@@ -38,12 +43,25 @@ class VoxCpmTtsProvider:
     ) -> SynthesizedAudio:
         cancellation.raise_if_cancelled()
         model = self._load_model()
-        prompt = f"({voice.description}){text}" if voice.mode is VoiceMode.DESIGN else text
+        prompt = f"({voice.description}) {text}" if voice.mode is VoiceMode.DESIGN else text
+        generation_options = {
+            # Keep every sentence in one book on the same guidance setting.  Changing
+            # CFG by sentence length made the designed voice perceptibly drift.
+            "cfg_value": 2.4,
+            "inference_timesteps": 20,
+        }
         try:
             if voice.mode is VoiceMode.CLONE:
-                waveform = model.generate(text=prompt, reference_wav_path=voice.reference_wav_path)
+                waveform = model.generate(
+                    text=prompt,
+                    reference_wav_path=voice.reference_wav_path,
+                    **generation_options,
+                )
             else:
-                waveform = model.generate(text=prompt, cfg_value=2.0, inference_timesteps=10)
+                # Short children's-reading clips are especially sensitive to a coarse
+                # denoising schedule.  A modestly higher step count gives consonants
+                # and word endings more definition without changing the voice API.
+                waveform = model.generate(text=prompt, **generation_options)
             sample_rate = int(model.tts_model.sample_rate)
             import soundfile as sound_file
 

@@ -37,7 +37,7 @@ from app.pipeline.state_repository import StateRepository
 from app.pipeline.steps import AudioStep, AutoProofreadStep, ExportStep, OcrStep, PageProcessingStep
 from app.providers.align import StableTsWordAligner
 from app.providers.ocr import PaddleOcrProvider
-from app.providers.tts import AzureSpeechTtsProvider, FfmpegOpusTranscoder, VoxCpmTtsProvider
+from app.providers.tts import FfmpegOpusTranscoder, VoxCpmTtsProvider
 from app.services.workspace_service import WorkspaceService
 from app.services.page_workspace_service import PageWorkspaceService
 from app.services.proofread_workspace_service import ProofreadWorkspaceService
@@ -82,7 +82,6 @@ def create_app(
                 VoxCpmTtsProvider(),
                 StableTsWordAligner(),
                 FfmpegOpusTranscoder(),
-                azure_tts=AzureSpeechTtsProvider(),
             ),
             ExportStep(),
         )

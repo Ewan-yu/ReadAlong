@@ -368,15 +368,6 @@ export interface components {
         /** AudioParams */
         AudioParams: {
             voice?: components["schemas"]["VoiceConfig"];
-            /** @default voxcpm */
-            primary_provider: components["schemas"]["TtsProviderKind"];
-            /** @default azure */
-            fallback_provider: components["schemas"]["TtsProviderKind"] | null;
-            /**
-             * Azure Sentence Ids
-             * @default []
-             */
-            azure_sentence_ids: string[];
             /**
              * Opus Bitrate Kbps
              * @default 32
@@ -1024,7 +1015,7 @@ export interface components {
          * TtsProviderKind
          * @enum {string}
          */
-        TtsProviderKind: "voxcpm" | "azure";
+        TtsProviderKind: "voxcpm";
         /** ValidationError */
         ValidationError: {
             /** Location */

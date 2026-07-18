@@ -72,7 +72,9 @@ class FakeTranscoder:
     def transcode(self, _wav_path, ogg_path, _bitrate, _tempo, _cancellation):
         ogg_path.parent.mkdir(parents=True, exist_ok=True)
         ogg_path.write_bytes(b"fake ogg")
-        return 0.6
+        # The default tempo is 0.9, so the final asset is longer than the
+        # source-alignment timeline returned by FakeAligner.
+        return 0.7
 
 
 def _pdf(path: Path) -> Path:
@@ -157,5 +159,26 @@ def test_explicit_auto_accept_unlocks_audio_revision(tmp_path: Path) -> None:
 
 
 def test_single_word_tts_input_gets_terminal_punctuation() -> None:
-    assert AudioStep._tts_input("talk") == "talk."
+    assert AudioStep._tts_input("talk") == "talk..."
     assert AudioStep._tts_input("Hello world.") == "Hello world."
+
+
+def test_single_english_word_uses_context_carrier_and_selects_target_timing() -> None:
+    carrier = AudioStep._word_carrier_input("Family!")
+    timings = (
+        AudioWordTiming(word="The", t_start=0.1, t_end=0.25),
+        AudioWordTiming(word="word", t_start=0.25, t_end=0.5),
+        AudioWordTiming(word="is", t_start=0.5, t_end=0.62),
+        AudioWordTiming(word="family.", t_start=0.62, t_end=1.05),
+    )
+
+    assert carrier == "The word is family."
+    assert AudioStep._uses_word_carrier("Family!", "en") is True
+    assert AudioStep._uses_word_carrier("My family", "en") is False
+    assert AudioStep._carrier_target_timing("Family!", carrier, timings) == timings[-1]
+
+
+def test_carrier_target_is_rejected_when_alignment_does_not_match() -> None:
+    timings = (AudioWordTiming(word="family", t_start=0.2, t_end=0.6),)
+
+    assert AudioStep._carrier_target_timing("family", "The word is family.", timings) is None

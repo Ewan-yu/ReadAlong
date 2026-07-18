@@ -4,7 +4,7 @@ import { CSS } from "@dnd-kit/utilities";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useNavigate, useParams } from "@tanstack/react-router";
-import { Check, CheckCheck, CircleAlert, Combine, GripVertical, LoaderCircle, MousePointer2, PenLine, Plus, Save, Scissors, Trash2 } from "lucide-react";
+import { Check, CheckCheck, CircleAlert, Combine, GripVertical, Hand, ListOrdered, LoaderCircle, MousePointer2, PenLine, Plus, Save, Scissors, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { checkProofreadText, pageAssetUrl, publishProofread, type ApiRequestError, type OcrSentence } from "../../api/client";
@@ -14,7 +14,7 @@ import { clampBox, renumber, splitText, unionBoxes } from "./draft";
 import { ProofreadStage } from "./ProofreadStage";
 import styles from "./ProofreadWorkspace.module.css";
 
-type Tool = "select" | "draw" | "split";
+type Tool = "select" | "pan" | "draw" | "split";
 
 function SortableSentence({ sentence, active, onSelect }: { sentence: OcrSentence; active: boolean; onSelect: (additive: boolean) => void }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: sentence.id });
@@ -48,6 +48,7 @@ export function ProofreadWorkspace() {
   const [selectedPage, setSelectedPage] = useState(1);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [tool, setTool] = useState<Tool>("select");
+  const [showOrder, setShowOrder] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [jobProgress, setJobProgress] = useState(0);
   const listRef = useRef<HTMLDivElement>(null);
@@ -158,9 +159,11 @@ export function ProofreadWorkspace() {
 
     <div className={styles.toolbar}>
       <button type="button" data-active={tool === "select" || undefined} onClick={() => setTool("select")}><MousePointer2 />选择文字框</button>
+      <button type="button" data-active={tool === "pan" || undefined} onClick={() => setTool("pan")}><Hand />移动画布</button>
       <button type="button" data-active={tool === "draw" || undefined} onClick={() => setTool("draw")}><PenLine />手动画框</button>
       <button type="button" data-active={tool === "split" || undefined} disabled={selectedIds.length !== 1} onClick={() => setTool("split")}><Scissors />拆分并画第二框</button>
       <span />
+      <button type="button" data-active={showOrder || undefined} onClick={() => setShowOrder((value) => !value)}><ListOrdered />阅读顺序</button>
       <button type="button" disabled={selectedIds.length < 2} onClick={merge}><Combine />合并句子</button>
       <button type="button" disabled={!selectedIds.length} onClick={deleteSelected}><Trash2 />删除</button>
     </div>
@@ -190,7 +193,7 @@ export function ProofreadWorkspace() {
       </aside>
     </div>
 
-    <section className={styles.listPanel}>
+    {showOrder && <section className={styles.listPanel}>
       <div className={styles.listHeading}><div><strong>阅读顺序</strong><span>拖动句子可调整跨页阅读 seq；排序会要求重新确认页面。</span></div><b>{sentences.length} 句</b></div>
       <div ref={listRef} className={styles.sentenceList}>
         <div style={{ height: `${virtualizer.getTotalSize()}px`, position: "relative" }}>
@@ -199,7 +202,7 @@ export function ProofreadWorkspace() {
           </SortableContext></DndContext>
         </div>
       </div>
-    </section>
+    </section>}
 
     <footer className={styles.footer}>
       <div><CheckCheck />已确认 {confirmedPages.length} / {workspace.pages.length}{!allConfirmed && <button type="button" disabled={sentences.some((sentence) => sentence.status === "needs_review" || sentence.suspect_words.some((word) => word.kind === "spelling"))} onClick={() => { setConfirmedPages(workspace.pages.map((item) => item.page_no)); setDirty(true); }}>全部确认</button>}</div>

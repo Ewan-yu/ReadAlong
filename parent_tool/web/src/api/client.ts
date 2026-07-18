@@ -30,9 +30,6 @@ export type ProofreadCommit = {
 
 export type AudioParams = {
   voice: { mode: "design" | "clone"; description: string; reference_wav_path?: string | null };
-  primary_provider: "voxcpm" | "azure";
-  fallback_provider?: "voxcpm" | "azure" | null;
-  azure_sentence_ids?: string[];
   opus_bitrate_kbps?: number;
   tempo?: number;
   language?: string;
@@ -42,7 +39,7 @@ export type AudioParams = {
 export type AudioSentenceReport = {
   sentence_id: string; audio_path?: string | null; duration_seconds?: number | null;
   word_timing?: Array<{ word: string; t_start: number; t_end: number }> | null;
-  provider?: "voxcpm" | "azure" | null; suspect_tts: boolean; error_code?: string | null;
+  provider?: "voxcpm" | null; suspect_tts: boolean; error_code?: string | null;
 };
 export type AudioWorkspace = {
   proofread_revision_id: string; audio_revision_id?: string | null; params: AudioParams;
@@ -128,6 +125,20 @@ export async function runPageProcessing(
     body: { params, force: false },
   });
   if (!data) throw new ApiRequestError(error as Partial<ApiErrorBody>, "页面分析未能启动。");
+  if ("job_id" in data) {
+    return { disposition: data.disposition, jobId: data.job_id };
+  }
+  return { disposition: data.disposition, state: data.state };
+}
+
+export async function runOcr(
+  bookId: string,
+): Promise<{ disposition: string; jobId?: string; state?: PipelineState }> {
+  const { data, error } = await client.POST("/api/books/{book_id}/steps/{step_id}/run", {
+    params: { path: { book_id: bookId, step_id: "ocr" } },
+    body: { params: {}, force: false },
+  });
+  if (!data) throw new ApiRequestError(error as Partial<ApiErrorBody>, "OCR 识别未能启动。");
   if ("job_id" in data) {
     return { disposition: data.disposition, jobId: data.job_id };
   }

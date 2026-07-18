@@ -20,11 +20,13 @@ class CapabilityService:
     @staticmethod
     def _voxcpm() -> CapabilityStatus:
         configured = os.environ.get("VOXCPM_MODEL_PATH")
-        model_exists = bool(configured and Path(configured).expanduser().is_dir())
+        bundled = Path(__file__).parents[3] / "pretrained_models" / "VoxCPM2"
+        model_path = Path(configured).expanduser() if configured else bundled
+        model_exists = model_path.is_dir()
         gpu_available = CapabilityService._has_nvidia_gpu()
         available = model_exists and gpu_available
         if not model_exists:
-            detail = "未找到模型，请设置 VOXCPM_MODEL_PATH"
+            detail = "未找到 VoxCPM 模型；请设置 VOXCPM_MODEL_PATH 或安装项目内置模型"
         elif not gpu_available:
             detail = "模型已找到，但未检测到可用 NVIDIA GPU"
         else:

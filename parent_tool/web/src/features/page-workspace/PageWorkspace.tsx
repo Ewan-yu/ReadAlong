@@ -22,6 +22,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import {
   pageAssetUrl,
+  runOcr,
   runPageProcessing,
   sourcePagePreviewUrl,
   type ApiRequestError,
@@ -58,14 +59,14 @@ function toolHint(tool: PageTool, mode: PageDecision["mode"]): string {
   return "文字框来自当前有效 OCR；页面决策改变后将暂时隐藏，重新 OCR 后恢复。";
 }
 
-function ProgressStrip({ job }: { job: JobSnapshot }) {
+function ProgressStrip({ job, label }: { job: JobSnapshot; label: string }) {
   const percentage = Math.round(job.progress * 100);
   return (
     <div className={styles.progressStrip} role="status" aria-live="polite">
       <LoaderCircle className={styles.spin} />
       <strong>{job.message}</strong>
       <span>{percentage}%</span>
-      <div role="progressbar" aria-label="重建页面进度" aria-valuenow={percentage}>
+      <div role="progressbar" aria-label={`${label}进度`} aria-valuenow={percentage}>
         <i style={{ transform: `scaleX(${job.progress})` }} />
       </div>
     </div>
@@ -79,6 +80,7 @@ export function PageWorkspace() {
   const workspaceQuery = useQuery(pageWorkspaceQuery(bookId));
   const stateQuery = useQuery(bookStateQuery(bookId));
   const [job, setJob] = useState<JobSnapshot>();
+  const [jobLabel, setJobLabel] = useState("重建页面");
   const [confirming, setConfirming] = useState(false);
   const store = usePageWorkspaceStore();
   const workspace = workspaceQuery.data;
@@ -103,6 +105,7 @@ export function PageWorkspace() {
   const mutation = useMutation({
     mutationFn: async () => {
       if (!workspace) return;
+      setJobLabel("重建页面");
       setJob(undefined);
       const params = {
         ...workspace.plan.params,
@@ -120,6 +123,22 @@ export function PageWorkspace() {
         queryClient.invalidateQueries({ queryKey: ["books", bookId, "state"] }),
         queryClient.invalidateQueries({ queryKey: ["books", bookId, "pages", "workspace"] }),
       ]);
+    },
+  });
+
+  const ocrMutation = useMutation({
+    mutationFn: async () => {
+      setJobLabel("OCR 识别");
+      setJob(undefined);
+      const run = await runOcr(bookId);
+      if (run.jobId) await waitForJob(run.jobId, setJob);
+    },
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["books", bookId, "state"] }),
+        queryClient.invalidateQueries({ queryKey: ["books", bookId, "proofread", "workspace"] }),
+      ]);
+      await navigate({ to: "/books/$bookId/proofread", params: { bookId } });
     },
   });
 
@@ -142,7 +161,7 @@ export function PageWorkspace() {
     store.updateDecision(entry.source_pdf_page, { ...next, confirmed: confirm || next.confirmed });
   };
   const editDecision = (next: PageDecision) => updateDecision({ ...next, confirmed: false });
-  const error = mutation.error as ApiRequestError | null;
+  const error = (mutation.error ?? ocrMutation.error) as ApiRequestError | null;
   const crop = decision.crop_pct ?? { top: 0, right: 0, bottom: 0, left: 0 };
   const matchingSentences = workspace.sentences.filter((sentence) =>
     entry.outputs.some((output) => output.page_no === sentence.page_no),
@@ -161,10 +180,10 @@ export function PageWorkspace() {
         </div>
       </header>
 
-      {job && mutation.isPending && <ProgressStrip job={job} />}
+      {job && (mutation.isPending || ocrMutation.isPending) && <ProgressStrip job={job} label={jobLabel} />}
       {error && (
         <div className={styles.errorBanner} role="alert">
-          <CircleAlert /><div><strong>页面没有重建完成</strong><p>{error.message}</p></div>
+          <CircleAlert /><div><strong>{ocrMutation.isError ? "OCR 识别没有完成" : "页面没有重建完成"}</strong><p>{error.message}</p></div>
         </div>
       )}
 
@@ -364,14 +383,14 @@ export function PageWorkspace() {
             <button
               type="button"
               className={styles.saveButton}
-              disabled={!store.dirty || unconfirmedCount > 0 || mutation.isPending}
+              disabled={!store.dirty || unconfirmedCount > 0 || mutation.isPending || ocrMutation.isPending}
               onClick={() => downstreamHasSuccess ? setConfirming(true) : mutation.mutate()}
             ><Save />{mutation.isPending ? "正在重建页面" : "应用页面决策"}</button>
             <button
               type="button"
-              disabled={store.dirty || unconfirmedCount > 0}
-              onClick={() => void navigate({ to: "/books/$bookId/proofread", params: { bookId } })}
-            >进入 OCR 与句子<ChevronRight /></button>
+              disabled={store.dirty || unconfirmedCount > 0 || mutation.isPending || ocrMutation.isPending}
+              onClick={() => ocrMutation.mutate()}
+            >{ocrMutation.isPending ? "正在识别文字" : "开始 OCR 与句子"}<ChevronRight /></button>
           </div>
         )}
       </footer>

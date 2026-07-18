@@ -76,6 +76,55 @@ class FfmpegOpusTranscoder:
             ) from exc
         return float(duration)
 
+    def normalize_reference(
+        self,
+        source_path: Path,
+        target_path: Path,
+        cancellation: CancellationToken,
+        *,
+        max_seconds: int = 15,
+    ) -> None:
+        """Create a small, model-ready voice reference from an imported audio file."""
+        ffmpeg = self._resolve_executable()
+        cancellation.raise_if_cancelled()
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        process = subprocess.Popen(
+            [
+                str(ffmpeg),
+                "-y",
+                "-i",
+                str(source_path),
+                "-t",
+                str(max_seconds),
+                "-ar",
+                "16000",
+                "-ac",
+                "1",
+                "-c:a",
+                "pcm_s16le",
+                str(target_path),
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        while process.poll() is None:
+            if cancellation.requested:
+                process.terminate()
+                process.wait(timeout=5)
+                cancellation.raise_if_cancelled()
+            time.sleep(0.1)
+        _stdout, stderr = process.communicate()
+        if process.returncode != 0 or not target_path.is_file() or target_path.stat().st_size == 0:
+            raise PipelineError(
+                "VOICE_REFERENCE_INVALID",
+                "导入原音无法转换为可用的克隆参考片段。",
+                details={"ffmpeg_error": stderr[-500:]},
+                status_code=422,
+            )
+
     def _resolve_executable(self) -> Path:
         candidates = (
             self._executable,

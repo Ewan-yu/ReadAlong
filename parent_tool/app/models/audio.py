@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from enum import Enum
 
-from pydantic import Field, model_validator
+from pydantic import ConfigDict, Field, model_validator
 
 from app.models.pipeline import FrozenModel
 
@@ -14,7 +14,6 @@ class VoiceMode(str, Enum):
 
 class TtsProviderKind(str, Enum):
     VOXCPM = "voxcpm"
-    AZURE = "azure"
 
 
 class VoiceConfig(FrozenModel):
@@ -32,10 +31,11 @@ class VoiceConfig(FrozenModel):
 
 
 class AudioParams(FrozenModel):
+    # 历史 audio revision 曾写入 Azure 字段；读取时忽略这些已下线字段，
+    # 这样旧工作区仍可打开并可用本地 VoxCPM 重新生成。
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
     voice: VoiceConfig = Field(default_factory=VoiceConfig)
-    primary_provider: TtsProviderKind = TtsProviderKind.VOXCPM
-    fallback_provider: TtsProviderKind | None = TtsProviderKind.AZURE
-    azure_sentence_ids: tuple[str, ...] = ()
     opus_bitrate_kbps: int = Field(default=32, ge=16, le=128)
     tempo: float = Field(default=0.9, ge=0.75, le=1.25)
     language: str = Field(default="en", pattern=r"^[a-z]{2,8}$")
@@ -43,14 +43,7 @@ class AudioParams(FrozenModel):
     base_audio_revision: str | None = Field(default=None, pattern=r"^r-[a-z0-9-]{8,80}$")
 
     @model_validator(mode="after")
-    def validates_provider_selection(self) -> "AudioParams":
-        if len(set(self.azure_sentence_ids)) != len(self.azure_sentence_ids):
-            raise ValueError("azure_sentence_ids must not contain duplicates")
-        if any(not sentence_id.strip() for sentence_id in self.azure_sentence_ids):
-            raise ValueError("azure_sentence_ids must not contain empty IDs")
-        if self.primary_provider is TtsProviderKind.AZURE:
-            if self.fallback_provider is TtsProviderKind.AZURE:
-                raise ValueError("Azure cannot be its own fallback provider")
+    def validates_regeneration(self) -> "AudioParams":
         if len(set(self.sentence_ids)) != len(self.sentence_ids):
             raise ValueError("sentence_ids must not contain duplicates")
         if self.sentence_ids and not self.base_audio_revision:
