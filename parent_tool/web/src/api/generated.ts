@@ -174,6 +174,125 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/books/{book_id}/proofread/workspace": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Workspace */
+        get: operations["get_workspace_api_books__book_id__proofread_workspace_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/books/{book_id}/proofread/publish": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Publish */
+        post: operations["publish_api_books__book_id__proofread_publish_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/books/{book_id}/proofread/check-text": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Check Text */
+        post: operations["check_text_api_books__book_id__proofread_check_text_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/books/{book_id}/audio/workspace": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Workspace */
+        get: operations["get_workspace_api_books__book_id__audio_workspace_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/books/{book_id}/audio/revisions/{revision_id}/assets/{asset_path}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Asset */
+        get: operations["get_asset_api_books__book_id__audio_revisions__revision_id__assets__asset_path__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/books/{book_id}/export/workspace": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Workspace */
+        get: operations["get_workspace_api_books__book_id__export_workspace_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/books/{book_id}/export/revisions/{revision_id}/download": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Download */
+        get: operations["download_api_books__book_id__export_revisions__revision_id__download_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/capabilities": {
         parameters: {
             query?: never;
@@ -246,6 +365,106 @@ export interface components {
             finished_at: string;
             error?: components["schemas"]["PipelineErrorInfo"] | null;
         };
+        /** AudioParams */
+        AudioParams: {
+            voice?: components["schemas"]["VoiceConfig"];
+            /** @default voxcpm */
+            primary_provider: components["schemas"]["TtsProviderKind"];
+            /** @default azure */
+            fallback_provider: components["schemas"]["TtsProviderKind"] | null;
+            /**
+             * Azure Sentence Ids
+             * @default []
+             */
+            azure_sentence_ids: string[];
+            /**
+             * Opus Bitrate Kbps
+             * @default 32
+             */
+            opus_bitrate_kbps: number;
+            /**
+             * Tempo
+             * @default 0.9
+             */
+            tempo: number;
+            /**
+             * Language
+             * @default en
+             */
+            language: string;
+            /**
+             * Sentence Ids
+             * @default []
+             */
+            sentence_ids: string[];
+            /** Base Audio Revision */
+            base_audio_revision?: string | null;
+        };
+        /** AudioSentenceReport */
+        AudioSentenceReport: {
+            /** Sentence Id */
+            sentence_id: string;
+            /** Audio Path */
+            audio_path?: string | null;
+            /** Duration Seconds */
+            duration_seconds?: number | null;
+            /** Word Timing */
+            word_timing?: components["schemas"]["AudioWordTiming"][] | null;
+            provider?: components["schemas"]["TtsProviderKind"] | null;
+            /**
+             * Suspect Tts
+             * @default false
+             */
+            suspect_tts: boolean;
+            /** Error Code */
+            error_code?: string | null;
+        };
+        /** AudioWordTiming */
+        AudioWordTiming: {
+            /** Word */
+            word: string;
+            /** T Start */
+            t_start: number;
+            /** T End */
+            t_end: number;
+        };
+        /** AudioWorkspaceResponse */
+        AudioWorkspaceResponse: {
+            /** Proofread Revision Id */
+            proofread_revision_id: string;
+            /** Audio Revision Id */
+            audio_revision_id?: string | null;
+            params: components["schemas"]["AudioParams"];
+            /** Original Audio Path */
+            original_audio_path?: string | null;
+            /** Sentences */
+            sentences: components["schemas"]["AudioWorkspaceSentence"][];
+        };
+        /** AudioWorkspaceSentence */
+        AudioWorkspaceSentence: {
+            sentence: components["schemas"]["OcrSentence"];
+            report?: components["schemas"]["AudioSentenceReport"] | null;
+        };
+        /**
+         * AutoProofreadParams
+         * @description Immutable commit payload for the human OCR proofread workspace.
+         *
+         *     ``accept_ocr_draft`` remains as a compatibility path for existing M2 automation;
+         *     interactive clients submit the complete edited sentence table instead.
+         */
+        AutoProofreadParams: {
+            /**
+             * Accept Ocr Draft
+             * @default false
+             */
+            accept_ocr_draft: boolean;
+            /** Source Ocr Revision */
+            source_ocr_revision?: string | null;
+            /** Sentences */
+            sentences?: components["schemas"]["OcrSentence"][];
+            /** Confirmed Pages */
+            confirmed_pages?: number[];
+        };
         /** Body_create_book_api_books_post */
         Body_create_book_api_books_post: {
             /**
@@ -291,6 +510,51 @@ export interface components {
             available: boolean;
             /** Detail */
             detail: string;
+        };
+        /** ExportCheck */
+        ExportCheck: {
+            /** Id */
+            id: string;
+            /** Label */
+            label: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "pass" | "warning" | "error";
+            /** Detail */
+            detail: string;
+        };
+        /** ExportPackageInfo */
+        ExportPackageInfo: {
+            /** Filename */
+            filename: string;
+            /** Page Count */
+            page_count: number;
+            /** Sentence Count */
+            sentence_count: number;
+            /** Word Timing Sentence Count */
+            word_timing_sentence_count: number;
+            /** Audio Provider Counts */
+            audio_provider_counts?: {
+                [key: string]: number;
+            };
+            /** Size Bytes */
+            size_bytes?: number | null;
+            /** Sha256 */
+            sha256?: string | null;
+        };
+        /** ExportWorkspaceResponse */
+        ExportWorkspaceResponse: {
+            /** Ready */
+            ready: boolean;
+            /** Suggested Title */
+            suggested_title: string;
+            /** Checks */
+            checks: components["schemas"]["ExportCheck"][];
+            package: components["schemas"]["ExportPackageInfo"];
+            /** Export Revision Id */
+            export_revision_id?: string | null;
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -623,6 +887,46 @@ export interface components {
                 [key: string]: components["schemas"]["StepState"];
             };
         };
+        /** ProofreadPage */
+        ProofreadPage: {
+            /** Page No */
+            page_no: number;
+            /** Image */
+            image: string;
+            /** Thumbnail */
+            thumbnail: string;
+        };
+        /** ProofreadTextCheckRequest */
+        ProofreadTextCheckRequest: {
+            /** Text */
+            text: string;
+        };
+        /** ProofreadTextCheckResponse */
+        ProofreadTextCheckResponse: {
+            /**
+             * Suspect Words
+             * @default []
+             */
+            suspect_words: components["schemas"]["SuspectWord"][];
+        };
+        /** ProofreadWorkspaceResponse */
+        ProofreadWorkspaceResponse: {
+            /** Pages Revision Id */
+            pages_revision_id: string;
+            /** Ocr Revision Id */
+            ocr_revision_id: string;
+            /** Proofread Revision Id */
+            proofread_revision_id?: string | null;
+            /** Pages */
+            pages: components["schemas"]["ProofreadPage"][];
+            /** Sentences */
+            sentences: components["schemas"]["OcrSentence"][];
+            /**
+             * Confirmed Pages
+             * @default []
+             */
+            confirmed_pages: number[];
+        };
         /** RunSkippedResponse */
         RunSkippedResponse: {
             /**
@@ -716,6 +1020,11 @@ export interface components {
             word: string;
             kind: components["schemas"]["SuspectKind"];
         };
+        /**
+         * TtsProviderKind
+         * @enum {string}
+         */
+        TtsProviderKind: "voxcpm" | "azure";
         /** ValidationError */
         ValidationError: {
             /** Location */
@@ -729,6 +1038,23 @@ export interface components {
             /** Context */
             ctx?: Record<string, never>;
         };
+        /** VoiceConfig */
+        VoiceConfig: {
+            /** @default design */
+            mode: components["schemas"]["VoiceMode"];
+            /**
+             * Description
+             * @default warm female kindergarten teacher, slow and clear
+             */
+            description: string;
+            /** Reference Wav Path */
+            reference_wav_path?: string | null;
+        };
+        /**
+         * VoiceMode
+         * @enum {string}
+         */
+        VoiceMode: "design" | "clone";
     };
     responses: never;
     parameters: never;
@@ -1251,6 +1577,417 @@ export interface operations {
                 book_id: string;
                 revision_id: string;
                 asset_path: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+        };
+    };
+    get_workspace_api_books__book_id__proofread_workspace_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                book_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProofreadWorkspaceResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+        };
+    };
+    publish_api_books__book_id__proofread_publish_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                book_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AutoProofreadParams"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunSkippedResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+        };
+    };
+    check_text_api_books__book_id__proofread_check_text_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProofreadTextCheckRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProofreadTextCheckResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+        };
+    };
+    get_workspace_api_books__book_id__audio_workspace_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                book_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AudioWorkspaceResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+        };
+    };
+    get_asset_api_books__book_id__audio_revisions__revision_id__assets__asset_path__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                book_id: string;
+                revision_id: string;
+                asset_path: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+        };
+    };
+    get_workspace_api_books__book_id__export_workspace_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                book_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExportWorkspaceResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+        };
+    };
+    download_api_books__book_id__export_revisions__revision_id__download_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                book_id: string;
+                revision_id: string;
             };
             cookie?: never;
         };

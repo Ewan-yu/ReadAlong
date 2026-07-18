@@ -39,6 +39,8 @@ class AudioParams(FrozenModel):
     opus_bitrate_kbps: int = Field(default=32, ge=16, le=128)
     tempo: float = Field(default=0.9, ge=0.75, le=1.25)
     language: str = Field(default="en", pattern=r"^[a-z]{2,8}$")
+    sentence_ids: tuple[str, ...] = ()
+    base_audio_revision: str | None = Field(default=None, pattern=r"^r-[a-z0-9-]{8,80}$")
 
     @model_validator(mode="after")
     def validates_provider_selection(self) -> "AudioParams":
@@ -49,6 +51,12 @@ class AudioParams(FrozenModel):
         if self.primary_provider is TtsProviderKind.AZURE:
             if self.fallback_provider is TtsProviderKind.AZURE:
                 raise ValueError("Azure cannot be its own fallback provider")
+        if len(set(self.sentence_ids)) != len(self.sentence_ids):
+            raise ValueError("sentence_ids must not contain duplicates")
+        if self.sentence_ids and not self.base_audio_revision:
+            raise ValueError("partial audio regeneration requires base_audio_revision")
+        if self.base_audio_revision and not self.sentence_ids:
+            raise ValueError("base_audio_revision is only valid for partial regeneration")
         return self
 
 

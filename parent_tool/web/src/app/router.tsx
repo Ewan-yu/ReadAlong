@@ -52,19 +52,28 @@ const proofreadRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/books/$bookId/proofread",
   beforeLoad: guardStep(3),
-  component: () => <StepPlaceholder step={3} title="OCR 与句子" nextMilestone="M3.3 将在这里接入 bbox、句子编辑、排序与确认门禁。" />,
+  component: lazyRouteComponent(
+    () => import("../features/proofread-workspace/ProofreadWorkspace"),
+    "ProofreadWorkspace",
+  ),
 });
 const audioRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/books/$bookId/audio",
   beforeLoad: guardStep(4),
-  component: () => <StepPlaceholder step={4} title="语音生成" nextMilestone="M3.4 将在这里接入试听、失败重试与音色设置。" />,
+  component: lazyRouteComponent(
+    () => import("../features/audio-generation/AudioGenerationPage"),
+    "AudioGenerationPage",
+  ),
 });
 const exportRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/books/$bookId/export",
   beforeLoad: guardStep(5),
-  component: () => <StepPlaceholder step={5} title="导出资源包" nextMilestone="M3.5 将在这里接入校验报告与资源包导出。" />,
+  component: lazyRouteComponent(
+    () => import("../features/export-book/ExportBookPage"),
+    "ExportBookPage",
+  ),
 });
 
 const routeTree = rootRoute.addChildren([

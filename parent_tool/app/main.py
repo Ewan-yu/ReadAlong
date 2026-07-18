@@ -19,6 +19,9 @@ from starlette.responses import Response
 from app.api.errors import install_error_handlers
 from app.api.routes.jobs import router as jobs_router
 from app.api.routes.pages import router as pages_router
+from app.api.routes.proofread import router as proofread_router
+from app.api.routes.audio import router as audio_router
+from app.api.routes.exports import router as export_router
 from app.api.routes.pipeline import router as pipeline_router
 from app.api.routes.system import router as system_router
 from app.config import Settings
@@ -37,6 +40,9 @@ from app.providers.ocr import PaddleOcrProvider
 from app.providers.tts import AzureSpeechTtsProvider, FfmpegOpusTranscoder, VoxCpmTtsProvider
 from app.services.workspace_service import WorkspaceService
 from app.services.page_workspace_service import PageWorkspaceService
+from app.services.proofread_workspace_service import ProofreadWorkspaceService
+from app.services.audio_workspace_service import AudioWorkspaceService
+from app.services.export_workspace_service import ExportWorkspaceService
 
 
 ExecutorFactory = Callable[[], ThreadPoolExecutor]
@@ -120,6 +126,9 @@ def create_app(
             application.state.job_manager = manager
             application.state.workspace_service = workspace_service
             application.state.page_workspace_service = PageWorkspaceService(paths, states, artifacts)
+            application.state.proofread_workspace_service = ProofreadWorkspaceService(paths, states, artifacts)
+            application.state.audio_workspace_service = AudioWorkspaceService(paths, states, artifacts)
+            application.state.export_workspace_service = ExportWorkspaceService(paths, states, artifacts)
             yield
         finally:
             if manager is not None:
@@ -140,6 +149,9 @@ def create_app(
     application.include_router(pipeline_router)
     application.include_router(jobs_router)
     application.include_router(pages_router)
+    application.include_router(proofread_router)
+    application.include_router(audio_router)
+    application.include_router(export_router)
     application.include_router(system_router)
 
     web_dist = Path(__file__).parent.parent / "web" / "dist"

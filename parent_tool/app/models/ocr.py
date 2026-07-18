@@ -74,6 +74,8 @@ class OcrSentences(FrozenModel):
     params: OcrParams
     pages: tuple[OcrPage, ...]
     sentences: tuple[OcrSentence, ...]
+    # OCR 初稿不包含人工确认；校对步骤发布的最终句子表会记录已确认的阅读页。
+    confirmed_pages: tuple[int, ...] = ()
 
     @model_validator(mode="after")
     def validates_sequences(self) -> "OcrSentences":
@@ -86,4 +88,8 @@ class OcrSentences(FrozenModel):
             f"s{index:04d}" for index in range(1, len(self.sentences) + 1)
         ]:
             raise ValueError("sentence identifiers must be continuous and ordered")
+        if tuple(sorted(set(self.confirmed_pages))) != self.confirmed_pages:
+            raise ValueError("confirmed pages must be unique and ordered")
+        if any(page_no not in page_numbers for page_no in self.confirmed_pages):
+            raise ValueError("confirmed page must exist in OCR pages")
         return self

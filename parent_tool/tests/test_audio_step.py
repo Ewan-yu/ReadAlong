@@ -16,7 +16,9 @@ from app.pipeline.engine import PipelineEngine, SkippedRun
 from app.pipeline.hashing import file_sha256
 from app.pipeline.paths import WorkspacePaths
 from app.pipeline.state_repository import StateRepository
-from app.pipeline.steps import AudioStep, AutoProofreadStep, PageProcessingStep
+from app.pipeline.steps import AudioStep, AutoProofreadStep, ExportStep, PageProcessingStep
+from app.services.audio_workspace_service import AudioWorkspaceService
+from app.services.export_workspace_service import ExportWorkspaceService
 
 
 class FakeParams(BaseModel):
@@ -109,6 +111,7 @@ def test_explicit_auto_accept_unlocks_audio_revision(tmp_path: Path) -> None:
                 FakeOcrStep(),
                 AutoProofreadStep(),
                 AudioStep(FakeTts(), FakeAligner(), FakeTranscoder()),
+                ExportStep(),
             )
         ),
     )
@@ -131,6 +134,26 @@ def test_explicit_auto_accept_unlocks_audio_revision(tmp_path: Path) -> None:
     assert '"audio_path": "ogg/s0001.ogg"' in report
     assert '"word": "Hello"' in report
     assert not (revision / "wav/s0001.wav").exists()
+
+    regenerated = _run(
+        engine,
+        StepId.AUDIO,
+        {"sentence_ids": ["s0001"], "base_audio_revision": success.revision_id},
+        "62345678-1234-4234-8234-123456789abc",
+    )
+    assert regenerated.revision_id != success.revision_id
+    assert (book / regenerated.output_root / "ogg/s0001.ogg").read_bytes() == b"fake ogg"
+
+    workspace = AudioWorkspaceService(paths, states, ArtifactStore(paths)).load("book-1")
+    assert workspace.audio_revision_id == regenerated.revision_id
+    assert workspace.sentences[0].report is not None
+    assert workspace.sentences[0].report.audio_path == "ogg/s0001.ogg"
+
+    exported = _run(engine, StepId.EXPORT, {}, "72345678-1234-4234-8234-123456789abc")
+    export_workspace = ExportWorkspaceService(paths, states, ArtifactStore(paths)).load("book-1")
+    assert export_workspace.ready
+    assert export_workspace.export_revision_id == exported.revision_id
+    assert export_workspace.package.filename == "book-1.readalongbook"
 
 
 def test_single_word_tts_input_gets_terminal_punctuation() -> None:

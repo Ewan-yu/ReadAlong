@@ -6,6 +6,9 @@ from app.jobs.events import EventBus
 from app.jobs.manager import JobManager
 from app.pipeline.state_repository import StateRepository
 from app.services.page_workspace_service import PageWorkspaceService
+from app.services.proofread_workspace_service import ProofreadWorkspaceService
+from app.services.audio_workspace_service import AudioWorkspaceService
+from app.services.export_workspace_service import ExportWorkspaceService
 from app.services.workspace_service import WorkspaceService
 
 
@@ -27,3 +30,15 @@ def get_workspace_service(request: Request) -> WorkspaceService:
 
 def get_page_workspace_service(request: Request) -> PageWorkspaceService:
     return request.app.state.page_workspace_service
+
+
+def get_proofread_workspace_service(request: Request) -> ProofreadWorkspaceService:
+    return request.app.state.proofread_workspace_service
+
+
+def get_audio_workspace_service(request: Request) -> AudioWorkspaceService:
+    return request.app.state.audio_workspace_service
+
+
+def get_export_workspace_service(request: Request) -> ExportWorkspaceService:
+    return request.app.state.export_workspace_service
