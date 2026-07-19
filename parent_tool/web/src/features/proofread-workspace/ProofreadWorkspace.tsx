@@ -4,7 +4,7 @@ import { CSS } from "@dnd-kit/utilities";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useNavigate, useParams } from "@tanstack/react-router";
-import { Check, CheckCheck, CircleAlert, Combine, GripVertical, Hand, ListOrdered, LoaderCircle, MousePointer2, PenLine, Plus, Save, Scissors, Trash2 } from "lucide-react";
+import { Check, CheckCheck, CircleAlert, Combine, GripVertical, Hand, ListOrdered, LoaderCircle, MousePointer2, PenLine, Plus, Save, Scissors, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { checkProofreadText, pageAssetUrl, publishProofread, type ApiRequestError, type OcrSentence } from "../../api/client";
@@ -76,7 +76,7 @@ export function ProofreadWorkspace() {
     () => [...new Set(confirmationBlockers.map((sentence) => sentence.page_no))].sort((a, b) => a - b),
     [confirmationBlockers],
   );
-  const virtualizer = useVirtualizer({ count: sentences.length, getScrollElement: () => listRef.current, estimateSize: () => 74, overscan: 8 });
+  const virtualizer = useVirtualizer({ count: sentences.length, getScrollElement: () => listRef.current, estimateSize: () => 60, overscan: 10 });
   const allConfirmed = Boolean(workspace && workspace.pages.every((item) => confirmedPages.includes(item.page_no)));
   const canPublish = allConfirmed && confirmationBlockers.length === 0 && dirty;
 
@@ -202,7 +202,7 @@ export function ProofreadWorkspace() {
     </div>
 
     {showOrder && <section className={styles.listPanel}>
-      <div className={styles.listHeading}><div><strong>阅读顺序</strong><span>拖动句子可调整跨页阅读 seq；排序会要求重新确认页面。</span></div><b>{sentences.length} 句</b></div>
+      <div className={styles.listHeading}><div><strong>阅读顺序</strong><span>拖动句子可调整跨页阅读 seq；可拖动右下角调整窗口高度。</span></div><b>{sentences.length} 句</b><button type="button" className={styles.closeOrder} aria-label="关闭阅读顺序" onClick={() => setShowOrder(false)}><X /></button></div>
       <div ref={listRef} className={styles.sentenceList}>
         <div style={{ height: `${virtualizer.getTotalSize()}px`, position: "relative" }}>
           <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={reorder}><SortableContext items={sentences.map((sentence) => sentence.id)} strategy={verticalListSortingStrategy}>
