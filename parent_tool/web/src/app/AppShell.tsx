@@ -114,7 +114,7 @@ export function AppShell() {
         </nav>
 
         <div className={styles.sidebarFooter}>
-          <button type="button" data-active={route.location.pathname === "/settings" || undefined} onClick={() => void navigate({ to: "/settings" })}><Settings /><span>设置</span></button>
+          <button type="button" data-active={route.location.pathname.startsWith("/settings") || undefined} onClick={() => void navigate({ to: "/settings" })}><Settings /><span>设置</span></button>
           <button type="button" disabled><CircleHelp />帮助与文档</button>
           <div className={styles.account}><UserRound /><span>家长账户</span></div>
         </div>

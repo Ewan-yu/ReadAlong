@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import json
 from pathlib import Path
 from threading import Lock
 from uuid import uuid4
@@ -144,7 +145,12 @@ class VoiceProfileService:
             for item in self.list().voices:
                 if item.voice_id != voice_id and item.is_default:
                     self._update(item, is_default=False)
-        return self._update(profile, name=name, is_default=is_default)
+        changes: dict[str, object] = {}
+        if name is not None:
+            changes["name"] = name.strip()
+        if is_default is not None:
+            changes["is_default"] = is_default
+        return self._update(profile, **changes)
 
     def delete(self, voice_id: str) -> None:
         profile = self._load(voice_id)
@@ -290,7 +296,10 @@ class VoiceProfileService:
     def _update(self, profile: VoiceProfile, **changes: object) -> VoiceProfile:
         with self._lock:
             current = self._load(profile.voice_id)
-            updated = current.model_copy(update={**changes, "updated_at": utc_now()})
+            payload = current.model_dump()
+            payload.update(changes)
+            payload["updated_at"] = utc_now()
+            updated = VoiceProfile.model_validate(payload)
             self._write(updated)
             return updated
 
@@ -318,11 +327,19 @@ class VoiceProfileService:
         if self._tts is None or self._transcoder is None:
             raise PipelineError("VOICE_PROFILE_UNAVAILABLE", "声音样本服务尚未准备完成。", status_code=409)
 
-    @staticmethod
-    def _read(directory: Path) -> VoiceProfile | None:
+    def _read(self, directory: Path) -> VoiceProfile | None:
         if not directory.is_dir() or directory.is_symlink():
             return None
         try:
-            return VoiceProfile.model_validate_json((directory / "profile.json").read_text(encoding="utf-8"))
-        except (OSError, ValidationError, ValueError):
+            raw = json.loads((directory / "profile.json").read_text(encoding="utf-8"))
+            # M3.7.1 repair: the first default-switch request wrote an omitted
+            # name as null. The generated WAV is valid, so recover it rather
+            # than making an otherwise usable voice disappear from the library.
+            if not isinstance(raw.get("name"), str) or not raw["name"].strip():
+                raw["name"] = "未命名声音样本"
+                profile = VoiceProfile.model_validate(raw)
+                self._write(profile)
+                return profile
+            return VoiceProfile.model_validate(raw)
+        except (OSError, ValidationError, ValueError, TypeError, json.JSONDecodeError):
             return None

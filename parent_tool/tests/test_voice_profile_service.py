@@ -89,3 +89,14 @@ def test_generated_voice_becomes_ready_with_actual_clone_preview(tmp_path: Path)
     assert updated.is_default is True
     with pytest.raises(PipelineError, match="VOICE_PROFILE_DEFAULT"):
         service.delete(pending.voice_id)
+
+
+def test_default_update_keeps_the_existing_name(tmp_path: Path) -> None:
+    paths = WorkspacePaths(tmp_path / "data")
+    profile = _profile(paths.root)
+    service = VoiceProfileService(paths)
+
+    updated = service.update(profile.voice_id, name=None, is_default=True)
+
+    assert updated.name == "温暖女老师"
+    assert service.get(profile.voice_id).name == "温暖女老师"

@@ -11,6 +11,8 @@ import { bookStateQuery } from "../api/queries";
 import { CreateBookPage } from "../features/create-book/CreateBookPage";
 import { WorkspaceLibraryPage } from "../features/workspace-library/WorkspaceLibraryPage";
 import { StorageSettingsPage } from "../features/storage-settings/StorageSettingsPage";
+import { VoiceProfilesPage } from "../features/voice-profiles/VoiceProfilesPage";
+import { SettingsHomePage } from "../features/settings-home/SettingsHomePage";
 import { StepPlaceholder } from "../features/placeholders/StepPlaceholder";
 import { AppShell } from "./AppShell";
 import { isStepUnlocked, type WorkflowStep } from "./step-gates";
@@ -40,7 +42,19 @@ const newBookRoute = createRoute({
 const settingsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/settings",
+  component: SettingsHomePage,
+});
+
+const storageSettingsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/settings/storage",
   component: StorageSettingsPage,
+});
+
+const voicesSettingsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/settings/voices",
+  component: VoiceProfilesPage,
 });
 
 function guardStep(step: WorkflowStep) {
@@ -95,6 +109,8 @@ const routeTree = rootRoute.addChildren([
   booksRoute,
   newBookRoute,
   settingsRoute,
+  storageSettingsRoute,
+  voicesSettingsRoute,
   pagesRoute,
   proofreadRoute,
   audioRoute,
