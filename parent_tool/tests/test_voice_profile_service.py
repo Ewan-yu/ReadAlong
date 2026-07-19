@@ -6,19 +6,23 @@ import pytest
 
 from app.models.errors import PipelineError
 from app.models.pipeline import utc_now
-from app.models.voice_profile import VoiceProfile, VoiceProfileSource, VoiceProfileStatus
+from app.models.voice_profile import VoiceCloneMode, VoiceProfile, VoiceProfileSource, VoiceProfileStatus
 from app.pipeline.hashing import file_sha256
 from app.pipeline.paths import WorkspacePaths
 from app.services.voice_profile_service import VoiceProfileService
 
 
 class FakeTts:
+    def __init__(self) -> None:
+        self.calls = []
+
     def synthesize(self, _text, _voice, output_wav, _cancellation):
         import numpy
         import soundfile
 
         output_wav.parent.mkdir(parents=True, exist_ok=True)
-        soundfile.write(output_wav, numpy.full(16000 * 4, 0.1), 16000)
+        self.calls.append((_text, _voice))
+        soundfile.write(output_wav, numpy.full(16000 * 8, 0.1), 16000)
 
 
 class FakeTranscoder:
@@ -76,15 +80,28 @@ def test_voice_profile_list_and_snapshot_are_fingerprint_bound(tmp_path: Path) -
 
 def test_generated_voice_becomes_ready_with_actual_clone_preview(tmp_path: Path) -> None:
     paths = WorkspacePaths(tmp_path / "data")
-    service = VoiceProfileService(paths, FakeTts(), FakeTranscoder())
+    tts = FakeTts()
+    service = VoiceProfileService(paths, tts, FakeTranscoder())
 
     pending = service.begin_generated("温暖女老师", "warm female kindergarten teacher")
     service.generate(pending.voice_id)
     ready = service.get(pending.voice_id)
 
     assert ready.status is VoiceProfileStatus.READY
+    assert ready.clone_mode is VoiceCloneMode.HIFI
+    assert ready.reference_text
+    assert ready.reference_duration_seconds == 8.0
     assert ready.reference_sha256 == file_sha256(paths.root / "voices" / pending.voice_id / "reference.wav")
     assert service.preview(pending.voice_id).is_file()
+    assert tts.calls[-1][1].reference_text == ready.reference_text
+    snapshot = service.snapshot_into(
+        ready.voice_id,
+        ready.revision,
+        ready.reference_sha256,
+        tmp_path / "revision" / "reference" / "voice-reference.wav",
+    )
+    assert snapshot.clone_mode is VoiceCloneMode.HIFI
+    assert snapshot.reference_text == ready.reference_text
     updated = service.update(pending.voice_id, name="温柔女老师", is_default=True)
     assert updated.is_default is True
     with pytest.raises(PipelineError, match="VOICE_PROFILE_DEFAULT"):

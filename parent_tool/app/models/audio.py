@@ -6,6 +6,7 @@ from typing import Literal
 from pydantic import ConfigDict, Field, model_validator
 
 from app.models.pipeline import FrozenModel
+from app.models.voice_profile import VoiceCloneMode
 
 
 class VoiceMode(str, Enum):
@@ -23,11 +24,14 @@ class VoiceConfig(FrozenModel):
         default="warm female kindergarten teacher, slow and clear", min_length=3, max_length=500
     )
     reference_wav_path: str | None = None
+    reference_text: str | None = Field(default=None, min_length=1, max_length=1000)
 
     @model_validator(mode="after")
     def validates_reference(self) -> "VoiceConfig":
         if self.mode is VoiceMode.CLONE and not self.reference_wav_path:
             raise ValueError("clone voice mode requires reference_wav_path")
+        if self.reference_text is not None and self.mode is not VoiceMode.CLONE:
+            raise ValueError("reference_text is only valid for clone voice mode")
         return self
 
 
@@ -94,6 +98,8 @@ class VoiceSnapshot(FrozenModel):
     name: str = Field(min_length=1, max_length=200)
     reference_path: str = Field(pattern=r"^reference/voice-reference\.wav$")
     reference_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    clone_mode: VoiceCloneMode = VoiceCloneMode.BASIC
+    reference_text: str | None = Field(default=None, min_length=1, max_length=1000)
     voice_profile_id: str | None = Field(default=None, pattern=r"^v-[a-z0-9-]{3,80}$")
     voice_profile_revision: int | None = Field(default=None, ge=1)
 

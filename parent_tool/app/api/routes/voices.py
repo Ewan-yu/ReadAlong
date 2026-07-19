@@ -55,10 +55,10 @@ def create_generated_voice(
 async def create_uploaded_voice(
     background_tasks: BackgroundTasks,
     service: Annotated[VoiceProfileService, Depends(get_voice_profile_service)],
-    audio: Annotated[UploadFile, File(description="3–15 秒、清晰的 WAV 或 MP3 人声")],
+    audio: Annotated[UploadFile, File(description="5–30 秒、清晰的 WAV 或 MP3 人声")],
     name: Annotated[str, Form(min_length=1, max_length=200)],
     clip_start_seconds: Annotated[float, Form(ge=0, le=3600)] = 0,
-    clip_duration_seconds: Annotated[float, Form(ge=3, le=15)] = 12,
+    clip_duration_seconds: Annotated[float, Form(ge=5, le=30)] = 12,
 ) -> VoiceProfile:
     filename = audio.filename or ""
     if Path(filename).suffix.lower() not in {".wav", ".mp3"}:

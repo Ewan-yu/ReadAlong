@@ -21,6 +21,8 @@ export type VoiceProfile = {
   name: string;
   source_type: "generated" | "uploaded";
   description?: string | null;
+  clone_mode: "basic" | "hifi";
+  reference_text?: string | null;
   reference_sha256?: string | null;
   reference_duration_seconds?: number | null;
   preview_text: string;
@@ -159,9 +161,9 @@ export async function createGeneratedVoice(name: string, description: string): P
   return (await response.json()) as VoiceProfile;
 }
 
-export async function uploadVoiceProfile(name: string, audio: File): Promise<VoiceProfile> {
+export async function uploadVoiceProfile(name: string, audio: File, clipDurationSeconds = 12): Promise<VoiceProfile> {
   const body = new FormData();
-  body.append("name", name); body.append("audio", audio);
+  body.append("name", name); body.append("audio", audio); body.append("clip_duration_seconds", String(clipDurationSeconds));
   const response = await fetch("/api/voices/upload", { method: "POST", body });
   if (!response.ok) await parseFetchError(response, "无法上传声音样本。");
   return (await response.json()) as VoiceProfile;

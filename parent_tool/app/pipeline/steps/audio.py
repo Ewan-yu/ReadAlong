@@ -14,6 +14,7 @@ from app.models.audio import (
     VoiceMode,
     VoiceSnapshot,
 )
+from app.models.voice_profile import VoiceCloneMode
 from app.models.errors import PipelineError
 from app.models.ocr import OcrSentences
 from app.models.pipeline import StepId, StepResult
@@ -190,7 +191,9 @@ class AudioStep:
                         # preview rather than the requested sentence.  It is
                         # especially confusing on the first line of a book, so
                         # retry once before allowing the audio into a revision.
-                        if self._is_reference_prompt_leakage(sentence.text, source_timings):
+                        if self._is_reference_prompt_leakage(
+                            sentence.text, source_timings, voice.reference_text
+                        ):
                             synthesized, provider = self._synthesize(
                                 tts_text,
                                 voice,
@@ -200,7 +203,9 @@ class AudioStep:
                             source_timings = self._aligner.align(
                                 wav_path, params.language, context.cancellation
                             )
-                            if self._is_reference_prompt_leakage(sentence.text, source_timings):
+                            if self._is_reference_prompt_leakage(
+                                sentence.text, source_timings, voice.reference_text
+                            ):
                                 raise PipelineError(
                                     "TTS_REFERENCE_TEXT_LEAKAGE",
                                     "语音结果混入了声音样本试听句，请重试该句。",
@@ -307,7 +312,17 @@ class AudioStep:
             reference.write_bytes(source.read_bytes())
             snapshot = self._previous_voice_snapshot(context, params)
             return (
-                voice.model_copy(update={"mode": VoiceMode.CLONE, "reference_wav_path": str(reference)}),
+                voice.model_copy(
+                    update={
+                        "mode": VoiceMode.CLONE,
+                        "reference_wav_path": str(reference),
+                        "reference_text": (
+                            snapshot.reference_text
+                            if snapshot and snapshot.clone_mode is VoiceCloneMode.HIFI
+                            else None
+                        ),
+                    }
+                ),
                 snapshot or self._voice_snapshot_from_reference(voice, reference),
             )
         if params.voice_profile_id is not None:
@@ -320,7 +335,17 @@ class AudioStep:
                 reference,
             )
             return (
-                voice.model_copy(update={"mode": VoiceMode.CLONE, "reference_wav_path": str(reference)}),
+                voice.model_copy(
+                    update={
+                        "mode": VoiceMode.CLONE,
+                        "reference_wav_path": str(reference),
+                        "reference_text": (
+                            snapshot.reference_text
+                            if snapshot.clone_mode is VoiceCloneMode.HIFI
+                            else None
+                        ),
+                    }
+                ),
                 snapshot,
             )
         if voice.reference_wav_path is None:
@@ -401,6 +426,8 @@ class AudioStep:
             name=("导入原音克隆" if voice.description == "" else voice.description),
             reference_path="reference/voice-reference.wav",
             reference_sha256=file_sha256(reference),
+            clone_mode=(VoiceCloneMode.HIFI if voice.reference_text else VoiceCloneMode.BASIC),
+            reference_text=voice.reference_text,
         )
 
     @staticmethod
@@ -409,6 +436,8 @@ class AudioStep:
             name=("导入原音克隆" if voice.description == "" else voice.description),
             reference_path="reference/voice-reference.wav",
             reference_sha256=file_sha256(reference),
+            clone_mode=(VoiceCloneMode.HIFI if voice.reference_text else VoiceCloneMode.BASIC),
+            reference_text=voice.reference_text,
         )
 
     @staticmethod
@@ -508,7 +537,9 @@ class AudioStep:
 
     @staticmethod
     def _is_reference_prompt_leakage(
-        expected_text: str, timings: tuple[AudioWordTiming, ...]
+        expected_text: str,
+        timings: tuple[AudioWordTiming, ...],
+        reference_text: str | None = None,
     ) -> bool:
         """Recognize the two internal profile prompts without penalizing normal ASR drift.
 
@@ -521,10 +552,10 @@ class AudioStep:
 
         expected = normalized_words(expected_text)
         actual = tuple(word for item in timings for word in normalized_words(item.word))
-        return actual != expected and actual in {
-            _VOICE_PROFILE_PREVIEW_WORDS,
-            _VOICE_PROFILE_ANCHOR_WORDS,
-        }
+        reference_prompts = {_VOICE_PROFILE_PREVIEW_WORDS, _VOICE_PROFILE_ANCHOR_WORDS}
+        if reference_text is not None:
+            reference_prompts.add(normalized_words(reference_text))
+        return actual != expected and actual in reference_prompts
 
     @staticmethod
     def _word_carrier_input(text: str) -> str:

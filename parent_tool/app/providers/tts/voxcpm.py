@@ -52,11 +52,16 @@ class VoxCpmTtsProvider:
         }
         try:
             if voice.mode is VoiceMode.CLONE:
-                waveform = model.generate(
-                    text=prompt,
-                    reference_wav_path=voice.reference_wav_path,
-                    **generation_options,
-                )
+                clone_options = {"reference_wav_path": voice.reference_wav_path, **generation_options}
+                if voice.reference_text is not None:
+                    # VoxCPM's Hi-Fi clone mode needs the exact transcript of
+                    # the same reference clip.  Only system-created profiles
+                    # provide it; uploads deliberately stay on basic cloning.
+                    clone_options.update(
+                        prompt_wav_path=voice.reference_wav_path,
+                        prompt_text=voice.reference_text,
+                    )
+                waveform = model.generate(text=prompt, **clone_options)
             else:
                 # Short children's-reading clips are especially sensitive to a coarse
                 # denoising schedule.  A modestly higher step count gives consonants

@@ -13,6 +13,7 @@ from app.models.audio import VoiceConfig, VoiceMode, VoiceSnapshot
 from app.models.errors import PipelineError
 from app.models.pipeline import utc_now
 from app.models.voice_profile import (
+    VoiceCloneMode,
     VoiceProfile,
     VoiceProfileListResponse,
     VoiceProfileSource,
@@ -25,7 +26,10 @@ from app.providers.tts import FfmpegOpusTranscoder, TtsProvider
 
 
 _PREVIEW_TEXT = "Hello. Let's enjoy this story together."
-_ANCHOR_TEXT = "Hello. I am your reading teacher. Let's enjoy this story together."
+_ANCHOR_TEXT = (
+    "Hello, I am your reading teacher. I am happy to read gentle stories "
+    "and explore new words with you. Let's enjoy this story together."
+)
 
 
 class VoiceProfileService:
@@ -58,7 +62,13 @@ class VoiceProfileService:
         return self._load(voice_id)
 
     def begin_generated(self, name: str, description: str) -> VoiceProfile:
-        profile = self._create_profile(name, VoiceProfileSource.GENERATED, description=description)
+        profile = self._create_profile(
+            name,
+            VoiceProfileSource.GENERATED,
+            description=description,
+            clone_mode=VoiceCloneMode.HIFI,
+            reference_text=_ANCHOR_TEXT,
+        )
         return profile
 
     def begin_uploaded(self, name: str, source: Path) -> VoiceProfile:
@@ -89,7 +99,7 @@ class VoiceProfileService:
                 raw_reference,
                 CancellationToken(),
             )
-            self._finalize_reference(profile, raw_reference)
+            self._finalize_reference(profile, raw_reference, max_seconds=30)
         except PipelineError as exc:
             self._set_failed(voice_id, exc.message)
         except Exception:
@@ -116,7 +126,7 @@ class VoiceProfileService:
                 start_seconds=start_seconds,
                 max_seconds=int(duration_seconds),
             )
-            self._finalize_reference(profile, normalized)
+            self._finalize_reference(profile, normalized, max_seconds=int(duration_seconds))
         except PipelineError as exc:
             self._set_failed(voice_id, exc.message)
         except Exception:
@@ -187,6 +197,8 @@ class VoiceProfileService:
             reference_sha256=actual,
             voice_profile_id=profile.voice_id,
             voice_profile_revision=profile.revision,
+            clone_mode=profile.clone_mode,
+            reference_text=profile.reference_text,
         )
 
     def preview(self, voice_id: str) -> Path:
@@ -203,7 +215,13 @@ class VoiceProfileService:
         return reference
 
     def _create_profile(
-        self, name: str, source_type: VoiceProfileSource, *, description: str | None = None
+        self,
+        name: str,
+        source_type: VoiceProfileSource,
+        *,
+        description: str | None = None,
+        clone_mode: VoiceCloneMode = VoiceCloneMode.BASIC,
+        reference_text: str | None = None,
     ) -> VoiceProfile:
         voice_id = f"v-{uuid4().hex}"
         now = utc_now()
@@ -213,6 +231,8 @@ class VoiceProfileService:
             name=name.strip(),
             source_type=source_type,
             description=description,
+            clone_mode=clone_mode,
+            reference_text=reference_text,
             preview_text=_PREVIEW_TEXT,
             status=VoiceProfileStatus.PROCESSING,
             progress_message="等待开始处理…",
@@ -226,9 +246,13 @@ class VoiceProfileService:
         self._write(profile)
         return profile
 
-    def _finalize_reference(self, profile: VoiceProfile, temporary_reference: Path) -> None:
+    def _finalize_reference(
+        self, profile: VoiceProfile, temporary_reference: Path, *, max_seconds: int
+    ) -> None:
         reference = self._directory(profile.voice_id) / "reference.wav"
-        self._transcoder.normalize_reference(temporary_reference, reference, CancellationToken(), max_seconds=15)
+        self._transcoder.normalize_reference(
+            temporary_reference, reference, CancellationToken(), max_seconds=max_seconds
+        )
         duration, warnings = self._validate_reference(reference, profile.source_type)
         ready = self._update(
             self._load(profile.voice_id),
@@ -246,7 +270,15 @@ class VoiceProfileService:
         try:
             self._tts.synthesize(
                 profile.preview_text,
-                VoiceConfig(mode=VoiceMode.CLONE, reference_wav_path=str(directory / "reference.wav")),
+                VoiceConfig(
+                    mode=VoiceMode.CLONE,
+                    reference_wav_path=str(directory / "reference.wav"),
+                    reference_text=(
+                        profile.reference_text
+                        if profile.clone_mode is VoiceCloneMode.HIFI
+                        else None
+                    ),
+                ),
                 preview_wav,
                 CancellationToken(),
             )
@@ -273,8 +305,10 @@ class VoiceProfileService:
         peak = float(numpy.max(numpy.abs(samples))) if len(samples) else 0.0
         rms = float(numpy.sqrt(numpy.mean(numpy.square(samples)))) if len(samples) else 0.0
         clipped_ratio = float(numpy.mean(numpy.abs(samples) >= 0.99)) if len(samples) else 1.0
-        if duration < 3 or peak < 0.015 or rms < 0.003:
-            raise PipelineError("VOICE_REFERENCE_TOO_SHORT_OR_QUIET", "声音样本过短或过安静，请使用 3–15 秒清晰人声。", status_code=422)
+        if duration < 5 or peak < 0.015 or rms < 0.003:
+            raise PipelineError("VOICE_REFERENCE_TOO_SHORT_OR_QUIET", "声音样本过短或过安静，请使用 5–30 秒清晰人声。", status_code=422)
+        if duration > 30.05:
+            raise PipelineError("VOICE_REFERENCE_TOO_LONG", "声音样本超过 30 秒，请截取后重试。", status_code=422)
         if clipped_ratio > 0.01:
             raise PipelineError("VOICE_REFERENCE_CLIPPED", "声音样本存在明显削波，请更换录音后重试。", status_code=422)
         warnings: tuple[str, ...] = ()

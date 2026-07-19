@@ -19,6 +19,11 @@ class VoiceProfileStatus(str, Enum):
     FAILED = "failed"
 
 
+class VoiceCloneMode(str, Enum):
+    BASIC = "basic"
+    HIFI = "hifi"
+
+
 class VoiceProfile(FrozenModel):
     schema_version: int = 1
     voice_id: str = Field(pattern=r"^v-[a-z0-9-]{3,80}$")
@@ -26,6 +31,8 @@ class VoiceProfile(FrozenModel):
     name: str = Field(min_length=1, max_length=200)
     source_type: VoiceProfileSource
     description: str | None = Field(default=None, max_length=500)
+    clone_mode: VoiceCloneMode = VoiceCloneMode.BASIC
+    reference_text: str | None = Field(default=None, min_length=1, max_length=1000)
     reference_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     reference_duration_seconds: float | None = Field(default=None, gt=0)
     preview_text: str = Field(min_length=1, max_length=500)
@@ -56,4 +63,4 @@ class UpdateVoiceProfileRequest(FrozenModel):
 class UploadVoiceProfileForm(FrozenModel):
     name: str = Field(min_length=1, max_length=200)
     clip_start_seconds: float = Field(default=0, ge=0, le=3600)
-    clip_duration_seconds: float = Field(default=12, ge=3, le=15)
+    clip_duration_seconds: float = Field(default=12, ge=5, le=30)

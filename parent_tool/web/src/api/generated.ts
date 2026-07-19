@@ -687,7 +687,7 @@ export interface components {
         Body_create_uploaded_voice_api_voices_upload_post: {
             /**
              * Audio
-             * @description 3–15 秒、清晰的 WAV 或 MP3 人声
+             * @description 5–30 秒、清晰的 WAV 或 MP3 人声
              */
             audio: string;
             /** Name */
@@ -1330,6 +1330,11 @@ export interface components {
             /** Context */
             ctx?: Record<string, never>;
         };
+        /**
+         * VoiceCloneMode
+         * @enum {string}
+         */
+        VoiceCloneMode: "basic" | "hifi";
         /** VoiceConfig */
         VoiceConfig: {
             /** @default design */
@@ -1341,6 +1346,8 @@ export interface components {
             description: string;
             /** Reference Wav Path */
             reference_wav_path?: string | null;
+            /** Reference Text */
+            reference_text?: string | null;
         };
         /**
          * VoiceMode
@@ -1363,6 +1370,10 @@ export interface components {
             source_type: components["schemas"]["VoiceProfileSource"];
             /** Description */
             description?: string | null;
+            /** @default basic */
+            clone_mode: components["schemas"]["VoiceCloneMode"];
+            /** Reference Text */
+            reference_text?: string | null;
             /** Reference Sha256 */
             reference_sha256?: string | null;
             /** Reference Duration Seconds */
@@ -1432,6 +1443,10 @@ export interface components {
             reference_path: string;
             /** Reference Sha256 */
             reference_sha256: string;
+            /** @default basic */
+            clone_mode: components["schemas"]["VoiceCloneMode"];
+            /** Reference Text */
+            reference_text?: string | null;
             /** Voice Profile Id */
             voice_profile_id?: string | null;
             /** Voice Profile Revision */
