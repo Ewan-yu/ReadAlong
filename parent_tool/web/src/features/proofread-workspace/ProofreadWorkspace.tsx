@@ -5,7 +5,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useNavigate, useParams } from "@tanstack/react-router";
 import { Check, CheckCheck, CircleAlert, Combine, GripVertical, Hand, ListOrdered, LoaderCircle, MousePointer2, PenLine, Plus, Save, Scissors, Trash2, X } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 
 import { checkProofreadText, pageAssetUrl, publishProofread, type ApiRequestError, type OcrSentence } from "../../api/client";
 import { waitForJob } from "../../api/jobs";
@@ -49,6 +49,7 @@ export function ProofreadWorkspace() {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [tool, setTool] = useState<Tool>("select");
   const [showOrder, setShowOrder] = useState(false);
+  const [orderPanelHeight, setOrderPanelHeight] = useState<number>();
   const [dirty, setDirty] = useState(false);
   const [jobProgress, setJobProgress] = useState(0);
   const listRef = useRef<HTMLDivElement>(null);
@@ -84,6 +85,21 @@ export function ProofreadWorkspace() {
     setSentences(renumber(next));
     setConfirmedPages((current) => current.filter((pageNo) => !(affectedPages?.includes(pageNo) ?? true)));
     setDirty(true);
+  };
+  const resizeOrderPanel = (event: ReactPointerEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    const startY = event.clientY;
+    const startHeight = event.currentTarget.parentElement?.getBoundingClientRect().height ?? 420;
+    const move = (next: PointerEvent) => {
+      const maximum = Math.max(300, window.innerHeight - 190);
+      setOrderPanelHeight(Math.max(240, Math.min(maximum, startHeight + startY - next.clientY)));
+    };
+    const end = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", end);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", end, { once: true });
   };
   const select = (id: string, additive = false) => setSelectedIds((current) => additive ? (current.includes(id) ? current.filter((value) => value !== id) : [...current, id]) : [id]);
   const updateSentence = (id: string, patch: Partial<OcrSentence>) => {
@@ -201,8 +217,9 @@ export function ProofreadWorkspace() {
       </aside>
     </div>
 
-    {showOrder && <section className={styles.listPanel}>
-      <div className={styles.listHeading}><div><strong>阅读顺序</strong><span>拖动句子可调整跨页阅读 seq；可拖动右下角调整窗口高度。</span></div><b>{sentences.length} 句</b><button type="button" className={styles.closeOrder} aria-label="关闭阅读顺序" onClick={() => setShowOrder(false)}><X /></button></div>
+    {showOrder && <><button type="button" className={styles.listBackdrop} aria-label="关闭阅读顺序" onClick={() => setShowOrder(false)} /><section className={styles.listPanel} style={orderPanelHeight ? ({ "--order-panel-height": `${orderPanelHeight}px` } as CSSProperties) : undefined}>
+      <div className={styles.resizeHandle} role="separator" aria-label="拖动调整阅读顺序窗口高度" aria-orientation="horizontal" onPointerDown={resizeOrderPanel}><span /></div>
+      <div className={styles.listHeading}><div><strong>阅读顺序</strong><span>拖动句子可调整跨页阅读 seq；拖动顶部边框可调整窗口高度。</span></div><b>{sentences.length} 句</b><button type="button" className={styles.closeOrder} aria-label="关闭阅读顺序" onClick={() => setShowOrder(false)}><X /></button></div>
       <div ref={listRef} className={styles.sentenceList}>
         <div style={{ height: `${virtualizer.getTotalSize()}px`, position: "relative" }}>
           <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={reorder}><SortableContext items={sentences.map((sentence) => sentence.id)} strategy={verticalListSortingStrategy}>
@@ -210,7 +227,7 @@ export function ProofreadWorkspace() {
           </SortableContext></DndContext>
         </div>
       </div>
-    </section>}
+    </section></>}
 
     <footer className={styles.footer}>
       <div className={styles.confirmSummary}><CheckCheck /><span>已确认 {confirmedPages.length} / {workspace.pages.length}</span>{!allConfirmed && <div className={styles.confirmAll}><button type="button" disabled={confirmationBlockers.length > 0} title={confirmationBlockers.length ? "请先处理待确认句与拼写提示" : "确认所有尚未确认的页面"} onClick={() => { setConfirmedPages(workspace.pages.map((item) => item.page_no)); setDirty(true); }}>全部确认</button>{confirmationBlockers.length > 0 ? <span data-blocked>还需处理 {confirmationBlockers.length} 句（第 {blockingPageNos.slice(0, 3).join("、")} 页{blockingPageNos.length > 3 ? "等" : ""}）</span> : <span data-ready>所有页面已无待确认项，可一键确认</span>}{confirmationBlockers.length > 0 && <button type="button" className={styles.jumpToBlocker} onClick={() => setSelectedPage(blockingPageNos[0])}>查看第 {blockingPageNos[0]} 页</button>}</div>}</div>
