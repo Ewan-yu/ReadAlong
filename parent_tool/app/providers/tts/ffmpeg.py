@@ -82,6 +82,7 @@ class FfmpegOpusTranscoder:
         target_path: Path,
         cancellation: CancellationToken,
         *,
+        start_seconds: float = 0,
         max_seconds: int = 15,
     ) -> None:
         """Create a small, model-ready voice reference from an imported audio file."""
@@ -92,6 +93,8 @@ class FfmpegOpusTranscoder:
             [
                 str(ffmpeg),
                 "-y",
+                "-ss",
+                str(start_seconds),
                 "-i",
                 str(source_path),
                 "-t",

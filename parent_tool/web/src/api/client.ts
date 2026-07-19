@@ -15,6 +15,24 @@ export type WorkspaceSummary = components["schemas"]["WorkspaceSummary"];
 export type WorkspaceList = components["schemas"]["WorkspaceListResponse"];
 export type StorageInfo = components["schemas"]["StorageInfo"];
 export type StorageMigrationStatus = components["schemas"]["StorageMigrationStatus"];
+export type VoiceProfile = {
+  voice_id: string;
+  revision: number;
+  name: string;
+  source_type: "generated" | "uploaded";
+  description?: string | null;
+  reference_sha256?: string | null;
+  reference_duration_seconds?: number | null;
+  preview_text: string;
+  status: "processing" | "ready" | "failed";
+  progress_message?: string | null;
+  failure_message?: string | null;
+  warnings: string[];
+  is_system: boolean;
+  is_default: boolean;
+  created_at: string;
+  updated_at: string;
+};
 
 export type ProofreadPage = { page_no: number; image: string; thumbnail: string };
 export type ProofreadWorkspace = {
@@ -34,6 +52,9 @@ export type ProofreadCommit = {
 
 export type AudioParams = {
   voice: { mode: "design" | "clone"; description: string; reference_wav_path?: string | null };
+  voice_profile_id?: string | null;
+  voice_profile_revision?: number | null;
+  voice_fingerprint?: string | null;
   opus_bitrate_kbps?: number;
   tempo?: number;
   language?: string;
@@ -122,6 +143,45 @@ export async function getStorageMigration(migrationId: string): Promise<StorageM
   const response = await fetch(`/api/storage/migrations/${encodeURIComponent(migrationId)}`);
   if (!response.ok) await parseFetchError(response, "无法读取迁移进度。");
   return (await response.json()) as StorageMigrationStatus;
+}
+
+export async function getVoiceProfiles(): Promise<VoiceProfile[]> {
+  const response = await fetch("/api/voices");
+  if (!response.ok) await parseFetchError(response, "无法读取声音样本。");
+  return ((await response.json()) as { voices: VoiceProfile[] }).voices;
+}
+
+export async function createGeneratedVoice(name: string, description: string): Promise<VoiceProfile> {
+  const response = await fetch("/api/voices/generated", {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name, description }),
+  });
+  if (!response.ok) await parseFetchError(response, "无法创建系统生成声音。");
+  return (await response.json()) as VoiceProfile;
+}
+
+export async function uploadVoiceProfile(name: string, audio: File): Promise<VoiceProfile> {
+  const body = new FormData();
+  body.append("name", name); body.append("audio", audio);
+  const response = await fetch("/api/voices/upload", { method: "POST", body });
+  if (!response.ok) await parseFetchError(response, "无法上传声音样本。");
+  return (await response.json()) as VoiceProfile;
+}
+
+export async function updateVoiceProfile(voiceId: string, patch: { name?: string; is_default?: boolean }): Promise<VoiceProfile> {
+  const response = await fetch(`/api/voices/${encodeURIComponent(voiceId)}`, {
+    method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(patch),
+  });
+  if (!response.ok) await parseFetchError(response, "无法更新声音样本。");
+  return (await response.json()) as VoiceProfile;
+}
+
+export async function deleteVoiceProfile(voiceId: string): Promise<void> {
+  const response = await fetch(`/api/voices/${encodeURIComponent(voiceId)}`, { method: "DELETE" });
+  if (!response.ok) await parseFetchError(response, "无法删除声音样本。");
+}
+
+export function voicePreviewUrl(voiceId: string): string {
+  return `/api/voices/${encodeURIComponent(voiceId)}/preview`;
 }
 
 export async function deleteWorkspace(bookId: string): Promise<void> {

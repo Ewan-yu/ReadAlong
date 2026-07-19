@@ -97,16 +97,18 @@ def create_app(
             artifacts = ArtifactStore(paths)
             jobs = JobRepository(paths)
             events = EventBus()
-            voice_profile_service = VoiceProfileService(paths)
+            tts_provider = VoxCpmTtsProvider()
+            transcoder = FfmpegOpusTranscoder()
+            voice_profile_service = VoiceProfileService(paths, tts_provider, transcoder)
             registry = step_registry or StepRegistry(
                 (
                     PageProcessingStep(),
                     OcrStep(PaddleOcrProvider()),
                     AutoProofreadStep(),
                     AudioStep(
-                        VoxCpmTtsProvider(),
+                        tts_provider,
                         StableTsWordAligner(),
-                        FfmpegOpusTranscoder(),
+                        transcoder,
                         voice_profile_service,
                     ),
                     ExportStep(),

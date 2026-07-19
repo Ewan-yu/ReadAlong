@@ -26,10 +26,12 @@ class VoiceProfile(FrozenModel):
     name: str = Field(min_length=1, max_length=200)
     source_type: VoiceProfileSource
     description: str | None = Field(default=None, max_length=500)
-    reference_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    reference_duration_seconds: float = Field(gt=0)
+    reference_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    reference_duration_seconds: float | None = Field(default=None, gt=0)
     preview_text: str = Field(min_length=1, max_length=500)
     status: VoiceProfileStatus
+    progress_message: str | None = Field(default=None, max_length=200)
+    failure_message: str | None = Field(default=None, max_length=500)
     warnings: tuple[str, ...] = ()
     is_system: bool = False
     is_default: bool = False
@@ -39,3 +41,19 @@ class VoiceProfile(FrozenModel):
 
 class VoiceProfileListResponse(FrozenModel):
     voices: tuple[VoiceProfile, ...]
+
+
+class CreateGeneratedVoiceRequest(FrozenModel):
+    name: str = Field(min_length=1, max_length=200)
+    description: str = Field(min_length=3, max_length=500)
+
+
+class UpdateVoiceProfileRequest(FrozenModel):
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    is_default: bool | None = None
+
+
+class UploadVoiceProfileForm(FrozenModel):
+    name: str = Field(min_length=1, max_length=200)
+    clip_start_seconds: float = Field(default=0, ge=0, le=3600)
+    clip_duration_seconds: float = Field(default=12, ge=3, le=15)

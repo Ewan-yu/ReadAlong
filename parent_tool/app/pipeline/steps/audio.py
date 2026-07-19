@@ -250,9 +250,10 @@ class AudioStep:
                 )
             reference.parent.mkdir(parents=True, exist_ok=True)
             reference.write_bytes(source.read_bytes())
+            snapshot = self._previous_voice_snapshot(context, params)
             return (
                 voice.model_copy(update={"mode": VoiceMode.CLONE, "reference_wav_path": str(reference)}),
-                self._voice_snapshot_from_reference(voice, reference),
+                snapshot or self._voice_snapshot_from_reference(voice, reference),
             )
         if params.voice_profile_id is not None:
             if self._voice_profiles is None:
@@ -389,6 +390,31 @@ class AudioStep:
                     status_code=409,
                 )
         return {item.sentence_id: item for item in report.sentences}
+
+    @staticmethod
+    def _previous_voice_snapshot(
+        context: StepRunContext, params: AudioParams
+    ) -> VoiceSnapshot | None:
+        """Carry the original profile identity forward with a partial revision.
+
+        The copied WAV is sufficient for synthesis, but retaining this metadata is
+        what lets the UI and later exports prove that a repaired sentence used the
+        same immutable voice as the complete book.
+        """
+        if not params.base_audio_revision:
+            return None
+        report_path = (
+            context.workspace_dir
+            / "04_audio"
+            / "revisions"
+            / params.base_audio_revision
+            / "tts_report.json"
+        )
+        try:
+            report = AudioGenerationReport.model_validate_json(report_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        return report.voice_snapshot
 
     def _synthesize(
         self,
