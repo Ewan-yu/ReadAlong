@@ -24,6 +24,7 @@ from app.api.routes.audio import router as audio_router
 from app.api.routes.exports import router as export_router
 from app.api.routes.pipeline import router as pipeline_router
 from app.api.routes.system import router as system_router
+from app.api.routes.voices import router as voices_router
 from app.config import Settings, UserSettingsStore
 from app.jobs.events import EventBus
 from app.jobs.manager import JobManager
@@ -45,6 +46,7 @@ from app.services.page_workspace_service import PageWorkspaceService
 from app.services.proofread_workspace_service import ProofreadWorkspaceService
 from app.services.audio_workspace_service import AudioWorkspaceService
 from app.services.export_workspace_service import ExportWorkspaceService
+from app.services.voice_profile_service import VoiceProfileService
 
 
 ExecutorFactory = Callable[[], ThreadPoolExecutor]
@@ -75,19 +77,6 @@ def create_app(
     executor_factory: ExecutorFactory | None = None,
 ) -> FastAPI:
     resolved_settings = settings or Settings.from_environment()
-    registry = step_registry or StepRegistry(
-        (
-            PageProcessingStep(),
-            OcrStep(PaddleOcrProvider()),
-            AutoProofreadStep(),
-            AudioStep(
-                VoxCpmTtsProvider(),
-                StableTsWordAligner(),
-                FfmpegOpusTranscoder(),
-            ),
-            ExportStep(),
-        )
-    )
     make_executor = executor_factory or (
         lambda: ThreadPoolExecutor(max_workers=1, thread_name_prefix="readalong-pipeline")
     )
@@ -108,6 +97,21 @@ def create_app(
             artifacts = ArtifactStore(paths)
             jobs = JobRepository(paths)
             events = EventBus()
+            voice_profile_service = VoiceProfileService(paths)
+            registry = step_registry or StepRegistry(
+                (
+                    PageProcessingStep(),
+                    OcrStep(PaddleOcrProvider()),
+                    AutoProofreadStep(),
+                    AudioStep(
+                        VoxCpmTtsProvider(),
+                        StableTsWordAligner(),
+                        FfmpegOpusTranscoder(),
+                        voice_profile_service,
+                    ),
+                    ExportStep(),
+                )
+            )
             engine = PipelineEngine(states, artifacts, registry)
             manager = JobManager(engine, jobs, events, executor=make_executor())
             workspace_service = WorkspaceService(paths, states)
@@ -133,6 +137,7 @@ def create_app(
             application.state.workspace_migration_service = WorkspaceMigrationService(
                 paths, manager, resolved_settings, settings_store
             )
+            application.state.voice_profile_service = voice_profile_service
             application.state.page_workspace_service = PageWorkspaceService(paths, states, artifacts)
             application.state.proofread_workspace_service = ProofreadWorkspaceService(paths, states, artifacts)
             application.state.audio_workspace_service = AudioWorkspaceService(paths, states, artifacts)
@@ -162,6 +167,7 @@ def create_app(
     application.include_router(audio_router)
     application.include_router(export_router)
     application.include_router(system_router)
+    application.include_router(voices_router)
 
     web_dist = Path(__file__).parent.parent / "web" / "dist"
     if web_dist.exists():

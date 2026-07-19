@@ -362,6 +362,8 @@ def test_openapi_contains_typed_pipeline_paths(tmp_path: Path) -> None:
     assert "/api/storage/recalculate" in paths
     assert "/api/storage/migrations" in paths
     assert "/api/storage/migrations/{migration_id}" in paths
+    assert "/api/voices" in paths
+    assert "/api/voices/{voice_id}/preview" in paths
     assert "/api/books/{book_id}/steps/{step_id}/run" in paths
     assert "/api/jobs/{job_id}" in paths
     assert "/api/jobs/{job_id}/events" in paths

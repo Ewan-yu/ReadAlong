@@ -35,6 +35,7 @@ class AudioWorkspaceService:
         reports = {}
         audio_revision_id: str | None = None
         params = AudioParams()
+        voice_snapshot = None
         audio = state.steps[StepId.AUDIO]
         if audio.status is StepStatus.DONE and audio.success is not None:
             audio_success = self._success(book_id, StepId.AUDIO, audio.success, "音频结果")
@@ -48,12 +49,14 @@ class AudioWorkspaceService:
                 raise PipelineError("AUDIO_SOURCE_STALE", "音频与当前校对结果不匹配，请重新生成全书。", status_code=409)
             reports = {item.sentence_id: item for item in report.sentences}
             params = report.params
+            voice_snapshot = report.voice_snapshot
             audio_revision_id = audio_success.revision_id
 
         return AudioWorkspaceResponse(
             proofread_revision_id=proofread_success.revision_id,
             audio_revision_id=audio_revision_id,
             params=params,
+            voice_snapshot=voice_snapshot,
             original_audio_path=state.source.original_audio_path,
             sentences=tuple(AudioWorkspaceSentence(sentence=item, report=reports.get(item.id)) for item in source.sentences),
         )

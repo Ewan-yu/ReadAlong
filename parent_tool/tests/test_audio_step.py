@@ -132,9 +132,13 @@ def test_explicit_auto_accept_unlocks_audio_revision(tmp_path: Path) -> None:
 
     revision = book / success.output_root
     assert (revision / "ogg/s0001.ogg").read_bytes() == b"fake ogg"
+    assert (revision / "reference/voice-reference.wav").is_file()
+    original_voice_reference = (revision / "reference/voice-reference.wav").read_bytes()
     report = (revision / "word_timings.json").read_text(encoding="utf-8")
     assert '"audio_path": "ogg/s0001.ogg"' in report
     assert '"word": "Hello"' in report
+    assert '"voice_snapshot"' in report
+    assert file_sha256(revision / "reference/voice-reference.wav") in report
     assert not (revision / "wav/s0001.wav").exists()
 
     regenerated = _run(
@@ -145,6 +149,7 @@ def test_explicit_auto_accept_unlocks_audio_revision(tmp_path: Path) -> None:
     )
     assert regenerated.revision_id != success.revision_id
     assert (book / regenerated.output_root / "ogg/s0001.ogg").read_bytes() == b"fake ogg"
+    assert (book / regenerated.output_root / "reference/voice-reference.wav").read_bytes() == original_voice_reference
 
     workspace = AudioWorkspaceService(paths, states, ArtifactStore(paths)).load("book-1")
     assert workspace.audio_revision_id == regenerated.revision_id

@@ -12,6 +12,7 @@ from app.models.audio import (
     TtsProviderKind,
     VoiceConfig,
     VoiceMode,
+    VoiceSnapshot,
 )
 from app.models.errors import PipelineError
 from app.models.ocr import OcrSentences
@@ -24,6 +25,7 @@ from app.pipeline.audio_validation import (
     validate_word_timings,
 )
 from app.pipeline.definitions import CancellationToken, StepRunContext
+from app.pipeline.hashing import file_sha256
 from app.pipeline.paths import ensure_within
 from app.providers.align import WordAligner
 from app.providers.tts.ffmpeg import FfmpegOpusTranscoder
@@ -41,6 +43,16 @@ class AudioTranscoder(Protocol):
     ) -> float: ...
 
 
+class VoiceProfileResolver(Protocol):
+    def snapshot_into(
+        self,
+        voice_id: str,
+        revision: int,
+        fingerprint: str,
+        destination: Path,
+    ) -> VoiceSnapshot: ...
+
+
 class AudioStep:
     step_id = StepId.AUDIO
     implementation_version = "audio-v5"
@@ -51,10 +63,12 @@ class AudioStep:
         tts: TtsProvider,
         aligner: WordAligner,
         transcoder: AudioTranscoder,
+        voice_profiles: VoiceProfileResolver | None = None,
     ) -> None:
         self._tts = tts
         self._aligner = aligner
         self._transcoder = transcoder
+        self._voice_profiles = voice_profiles
 
     def run(self, context: StepRunContext, params: AudioParams) -> StepResult:
         source_root = context.dependency_outputs[StepId.PROOFREAD]
@@ -81,10 +95,10 @@ class AudioStep:
                 status_code=422,
             )
         previous = self._previous_reports(context, params, source_root)
-        voice = self._resolved_voice(context, params.voice, context.cancellation)
+        voice, profile_snapshot = self._resolved_voice(context, params, context.cancellation)
         voice = self._stabilize_design_voice(context, voice, params, context.cancellation)
-        if params.voice.mode is VoiceMode.DESIGN:
-            outputs.append("reference/designed-voice-anchor.wav")
+        if voice.reference_wav_path is not None:
+            outputs.append("reference/voice-reference.wav")
         total = max(len(source.sentences), 1)
         for index, sentence in enumerate(source.sentences, start=1):
             context.cancellation.raise_if_cancelled()
@@ -194,6 +208,7 @@ class AudioStep:
             source_proofread_revision=source_root.name,
             params=params,
             sentences=tuple(reports),
+            voice_snapshot=profile_snapshot or self._voice_snapshot(voice),
         )
         for name in ("word_timings.json", "tts_report.json"):
             (context.staging_dir / name).write_text(report.model_dump_json(indent=2), encoding="utf-8")
@@ -208,14 +223,52 @@ class AudioStep:
             },
         )
 
-    @staticmethod
     def _resolved_voice(
+        self,
         context: StepRunContext,
-        voice: VoiceConfig,
+        params: AudioParams,
         cancellation: CancellationToken,
-    ) -> VoiceConfig:
+    ) -> tuple[VoiceConfig, VoiceSnapshot | None]:
+        voice = params.voice
+        reference = context.staging_dir / "reference" / "voice-reference.wav"
+        if params.sentence_ids and params.base_audio_revision:
+            previous = (
+                context.workspace_dir
+                / "04_audio"
+                / "revisions"
+                / params.base_audio_revision
+                / "reference"
+                / "voice-reference.wav"
+            )
+            legacy_anchor = previous.with_name("designed-voice-anchor.wav")
+            source = previous if previous.is_file() else legacy_anchor
+            if not source.is_file():
+                raise PipelineError(
+                    "AUDIO_VOICE_SNAPSHOT_MISSING",
+                    "旧音频缺少固定声音参考，请重新生成全书以统一声线。",
+                    status_code=409,
+                )
+            reference.parent.mkdir(parents=True, exist_ok=True)
+            reference.write_bytes(source.read_bytes())
+            return (
+                voice.model_copy(update={"mode": VoiceMode.CLONE, "reference_wav_path": str(reference)}),
+                self._voice_snapshot_from_reference(voice, reference),
+            )
+        if params.voice_profile_id is not None:
+            if self._voice_profiles is None:
+                raise PipelineError("VOICE_PROFILE_UNAVAILABLE", "声音样本服务尚未准备完成。", status_code=409)
+            snapshot = self._voice_profiles.snapshot_into(
+                params.voice_profile_id,
+                params.voice_profile_revision or 0,
+                params.voice_fingerprint or "",
+                reference,
+            )
+            return (
+                voice.model_copy(update={"mode": VoiceMode.CLONE, "reference_wav_path": str(reference)}),
+                snapshot,
+            )
         if voice.reference_wav_path is None:
-            return voice
+            return voice, None
         candidate = ensure_within(context.workspace_dir, context.workspace_dir / voice.reference_wav_path)
         if not candidate.is_file():
             raise PipelineError(
@@ -223,9 +276,8 @@ class AudioStep:
                 "克隆音色所需的参考音频不存在，请重新选择或改用描述音色。",
                 status_code=422,
             )
-        reference = context.staging_dir / "reference" / "voice-reference.wav"
         FfmpegOpusTranscoder().normalize_reference(candidate, reference, cancellation)
-        return voice.model_copy(update={"reference_wav_path": str(reference)})
+        return voice.model_copy(update={"reference_wav_path": str(reference)}), None
 
     def _stabilize_design_voice(
         self,
@@ -243,20 +295,34 @@ class AudioStep:
 
         if voice.mode is not VoiceMode.DESIGN:
             return voice
-        reference = context.staging_dir / "reference" / "designed-voice-anchor.wav"
+        reference = context.staging_dir / "reference" / "voice-reference.wav"
         previous_reference = (
             context.workspace_dir
             / "04_audio"
             / "revisions"
             / params.base_audio_revision
             / "reference"
-            / "designed-voice-anchor.wav"
+            / "voice-reference.wav"
             if params.base_audio_revision
+            else None
+        )
+        legacy_reference = (
+            previous_reference.with_name("designed-voice-anchor.wav")
+            if previous_reference is not None
             else None
         )
         if previous_reference is not None and previous_reference.is_file():
             reference.parent.mkdir(parents=True, exist_ok=True)
             reference.write_bytes(previous_reference.read_bytes())
+        elif legacy_reference is not None and legacy_reference.is_file():
+            reference.parent.mkdir(parents=True, exist_ok=True)
+            reference.write_bytes(legacy_reference.read_bytes())
+        elif params.sentence_ids:
+            raise PipelineError(
+                "AUDIO_VOICE_SNAPSHOT_MISSING",
+                "旧音频缺少固定声音参考，请重新生成全书以统一声线。",
+                status_code=409,
+            )
         else:
             self._tts.synthesize(
                 "Hello. I am your reading teacher. Let's enjoy this story together.",
@@ -266,6 +332,27 @@ class AudioStep:
             )
         return voice.model_copy(
             update={"mode": VoiceMode.CLONE, "reference_wav_path": str(reference)}
+        )
+
+    @staticmethod
+    def _voice_snapshot(voice: VoiceConfig) -> VoiceSnapshot | None:
+        if voice.reference_wav_path is None:
+            return None
+        reference = Path(voice.reference_wav_path)
+        if not reference.is_file():
+            return None
+        return VoiceSnapshot(
+            name=("导入原音克隆" if voice.description == "" else voice.description),
+            reference_path="reference/voice-reference.wav",
+            reference_sha256=file_sha256(reference),
+        )
+
+    @staticmethod
+    def _voice_snapshot_from_reference(voice: VoiceConfig, reference: Path) -> VoiceSnapshot:
+        return VoiceSnapshot(
+            name=("导入原音克隆" if voice.description == "" else voice.description),
+            reference_path="reference/voice-reference.wav",
+            reference_sha256=file_sha256(reference),
         )
 
     @staticmethod

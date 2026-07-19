@@ -12,6 +12,7 @@ from app.services.export_workspace_service import ExportWorkspaceService
 from app.services.workspace_service import WorkspaceService
 from app.services.workspace_catalog_service import WorkspaceCatalogService
 from app.services.workspace_migration_service import WorkspaceMigrationService
+from app.services.voice_profile_service import VoiceProfileService
 
 
 def get_job_manager(request: Request) -> JobManager:
@@ -36,6 +37,10 @@ def get_workspace_catalog_service(request: Request) -> WorkspaceCatalogService:
 
 def get_workspace_migration_service(request: Request) -> WorkspaceMigrationService:
     return request.app.state.workspace_migration_service
+
+
+def get_voice_profile_service(request: Request) -> VoiceProfileService:
+    return request.app.state.voice_profile_service
 
 
 def get_page_workspace_service(request: Request) -> PageWorkspaceService:
