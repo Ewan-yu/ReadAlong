@@ -32,6 +32,12 @@ from app.providers.tts.ffmpeg import FfmpegOpusTranscoder
 from app.providers.tts import TtsProvider
 
 
+_VOICE_PROFILE_PREVIEW_WORDS = normalized_words("Hello. Let's enjoy this story together.")
+_VOICE_PROFILE_ANCHOR_WORDS = normalized_words(
+    "Hello. I am your reading teacher. Let's enjoy this story together."
+)
+
+
 class AudioTranscoder(Protocol):
     def transcode(
         self,
@@ -173,6 +179,37 @@ class AudioStep:
                             wav_path,
                             context.cancellation,
                         )
+                source_timings = prepared_timing
+                alignment_error: PipelineError | None = None
+                if source_timings is None:
+                    try:
+                        source_timings = self._aligner.align(
+                            wav_path, params.language, context.cancellation
+                        )
+                        # A rare VoxCPM bad case can return the fixed profile
+                        # preview rather than the requested sentence.  It is
+                        # especially confusing on the first line of a book, so
+                        # retry once before allowing the audio into a revision.
+                        if self._is_reference_prompt_leakage(sentence.text, source_timings):
+                            synthesized, provider = self._synthesize(
+                                tts_text,
+                                voice,
+                                wav_path,
+                                context.cancellation,
+                            )
+                            source_timings = self._aligner.align(
+                                wav_path, params.language, context.cancellation
+                            )
+                            if self._is_reference_prompt_leakage(sentence.text, source_timings):
+                                raise PipelineError(
+                                    "TTS_REFERENCE_TEXT_LEAKAGE",
+                                    "语音结果混入了声音样本试听句，请重试该句。",
+                                    status_code=502,
+                                )
+                    except PipelineError as exc:
+                        if exc.code == "TTS_REFERENCE_TEXT_LEAKAGE":
+                            raise
+                        alignment_error = exc
                 self._ensure_minimum_wav_duration(
                     Path(synthesized.wav_path), sentence.text, params.tempo
                 )
@@ -184,9 +221,12 @@ class AudioStep:
                     context.cancellation,
                 )
                 try:
-                    source_timings = prepared_timing or self._aligner.align(
-                        wav_path, params.language, context.cancellation
-                    )
+                    if source_timings is None:
+                        raise alignment_error or PipelineError(
+                            "WORD_ALIGNMENT_EMPTY",
+                            "未能从此句音频得到词级时间，将以整句字幕降级。",
+                            status_code=422,
+                        )
                     timing, reason = validate_word_timings(
                         sentence.text,
                         scale_word_timings(
@@ -465,6 +505,26 @@ class AudioStep:
         if params.sentence_ids or not cls._uses_word_carrier(text, language):
             return None
         return normalized_words(text)[0]
+
+    @staticmethod
+    def _is_reference_prompt_leakage(
+        expected_text: str, timings: tuple[AudioWordTiming, ...]
+    ) -> bool:
+        """Recognize the two internal profile prompts without penalizing normal ASR drift.
+
+        We intentionally do not reject every alignment mismatch: short names and
+        isolated words are frequently transcribed imperfectly by the tiny local
+        Whisper model.  These two exact transcripts, however, can only come from
+        the service's own preview/reference generation and therefore justify one
+        safe retry.
+        """
+
+        expected = normalized_words(expected_text)
+        actual = tuple(word for item in timings for word in normalized_words(item.word))
+        return actual != expected and actual in {
+            _VOICE_PROFILE_PREVIEW_WORDS,
+            _VOICE_PROFILE_ANCHOR_WORDS,
+        }
 
     @staticmethod
     def _word_carrier_input(text: str) -> str:

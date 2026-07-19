@@ -77,6 +77,23 @@ class FakeAligner:
         )
 
 
+class PreviewThenExpectedAligner:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def align(self, _wav_path, _language, _cancellation):
+        self.calls += 1
+        words = (
+            ("Hello", "let's", "enjoy", "this", "story", "together")
+            if self.calls == 1
+            else ("Hello", "world")
+        )
+        return tuple(
+            AudioWordTiming(word=word, t_start=index * 0.2, t_end=(index + 1) * 0.2)
+            for index, word in enumerate(words)
+        )
+
+
 class DuplicateWordOcrStep:
     step_id = StepId.OCR
     implementation_version = "fake-duplicate-word-ocr-v1"
@@ -202,6 +219,55 @@ def test_explicit_auto_accept_unlocks_audio_revision(tmp_path: Path) -> None:
 def test_single_word_tts_input_gets_terminal_punctuation() -> None:
     assert AudioStep._tts_input("talk") == "talk..."
     assert AudioStep._tts_input("Hello world.") == "Hello world."
+
+
+def test_reference_preview_transcript_is_retried_but_normal_alignment_drift_is_not() -> None:
+    preview = tuple(
+        AudioWordTiming(word=word, t_start=index * 0.2, t_end=(index + 1) * 0.2)
+        for index, word in enumerate(("Hello", "let's", "enjoy", "this", "story", "together"))
+    )
+    merged_name = (AudioWordTiming(word="Annegaos", t_start=0, t_end=0.8),)
+
+    assert AudioStep._is_reference_prompt_leakage("Ana Goes", preview)
+    assert not AudioStep._is_reference_prompt_leakage("Hello, let's enjoy this story together.", preview)
+    assert not AudioStep._is_reference_prompt_leakage("Ana Goes", merged_name)
+
+
+def test_audio_step_retries_a_reference_preview_leak_before_publishing(tmp_path: Path) -> None:
+    paths = WorkspacePaths(tmp_path / "workspace")
+    book = paths.book("book-1")
+    book.mkdir(parents=True)
+    source = _pdf(tmp_path / "source.pdf")
+    target = book / "source.pdf"
+    target.write_bytes(source.read_bytes())
+    states = StateRepository(paths)
+    states.create(PipelineState.new(book_id="book-1", pdf_path="source.pdf", pdf_sha256=file_sha256(target)))
+    tts = CountingFakeTts()
+    engine = PipelineEngine(
+        states,
+        ArtifactStore(paths),
+        StepRegistry(
+            (
+                PageProcessingStep(),
+                FakeOcrStep(),
+                AutoProofreadStep(),
+                AudioStep(tts, PreviewThenExpectedAligner(), FakeTranscoder()),
+                ExportStep(),
+            )
+        ),
+    )
+
+    _run(engine, StepId.PAGES, {}, "12345678-1234-4234-8234-123456789abc")
+    _run(engine, StepId.OCR, {}, "22345678-1234-4234-8234-123456789abc")
+    _run(engine, StepId.PROOFREAD, {"accept_ocr_draft": True}, "32345678-1234-4234-8234-123456789abc")
+    result = _run(engine, StepId.AUDIO, {}, "42345678-1234-4234-8234-123456789abc")
+
+    report = AudioGenerationReport.model_validate_json(
+        (book / result.output_root / "tts_report.json").read_text(encoding="utf-8")
+    )
+    assert len(tts.calls) == 3  # anchor, initial sentence, safe retry
+    assert report.sentences[0].audio_path == "ogg/s0001.ogg"
+    assert report.sentences[0].error_code is None
 
 
 def test_full_book_reuses_duplicate_isolated_word_audio(tmp_path: Path) -> None:

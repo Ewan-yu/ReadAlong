@@ -15,7 +15,7 @@ function seconds(value: number | null | undefined) {
 function reportStatus(item: AudioWorkspaceSentence) {
   const report = item.report;
   if (!report) return { label: "等待生成", tone: "waiting" };
-  if (!report.audio_path) return { label: "生成失败", tone: "failed" };
+  if (!report.audio_path) return { label: report.error_code === "TTS_REFERENCE_TEXT_LEAKAGE" ? "文本异常，请重试" : "生成失败", tone: "failed" };
   if (!report.word_timing) return { label: "无逐词高亮", tone: "warning" };
   if (report.error_code?.startsWith("TIMING_ESTIMATED_")) return { label: "估算逐词高亮", tone: "estimated" };
   if (report.suspect_tts) return { label: "建议试听", tone: "warning" };
