@@ -38,6 +38,18 @@ def test_workspace_import_copies_pdf_and_creates_state(tmp_path: Path) -> None:
     assert repository.load("book-1").source.pdf_sha256 == file_sha256(copied)
 
 
+def test_workspace_import_writes_display_metadata(tmp_path: Path) -> None:
+    source = _pdf(tmp_path / "My Family.pdf")
+    paths = WorkspacePaths(tmp_path / "workspace")
+    service = WorkspaceService(paths, StateRepository(paths))
+
+    service.create_from_pdf(source, "book-1", source_filename="My Family.pdf")
+
+    metadata = (paths.book("book-1") / "workspace.json").read_text(encoding="utf-8")
+    assert '"display_name":"My Family"' in metadata
+    assert '"source_filename":"My Family.pdf"' in metadata
+
+
 def test_workspace_import_rejects_bad_extension_without_target(tmp_path: Path) -> None:
     source = tmp_path / "source.txt"
     source.write_text("not a pdf", encoding="utf-8")

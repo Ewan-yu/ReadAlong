@@ -9,6 +9,8 @@ import {
 
 import { bookStateQuery } from "../api/queries";
 import { CreateBookPage } from "../features/create-book/CreateBookPage";
+import { WorkspaceLibraryPage } from "../features/workspace-library/WorkspaceLibraryPage";
+import { StorageSettingsPage } from "../features/storage-settings/StorageSettingsPage";
 import { StepPlaceholder } from "../features/placeholders/StepPlaceholder";
 import { AppShell } from "./AppShell";
 import { isStepUnlocked, type WorkflowStep } from "./step-gates";
@@ -20,13 +22,25 @@ const rootRoute = createRootRouteWithContext<RouterContext>()({ component: AppSh
 const indexRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/",
-  beforeLoad: () => { throw redirect({ to: "/books/new" }); },
+  beforeLoad: () => { throw redirect({ to: "/books" }); },
+});
+
+const booksRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/books",
+  component: WorkspaceLibraryPage,
 });
 
 const newBookRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/books/new",
   component: CreateBookPage,
+});
+
+const settingsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/settings",
+  component: StorageSettingsPage,
 });
 
 function guardStep(step: WorkflowStep) {
@@ -78,7 +92,9 @@ const exportRoute = createRoute({
 
 const routeTree = rootRoute.addChildren([
   indexRoute,
+  booksRoute,
   newBookRoute,
+  settingsRoute,
   pagesRoute,
   proofreadRoute,
   audioRoute,

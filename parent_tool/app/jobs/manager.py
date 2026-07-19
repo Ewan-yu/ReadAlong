@@ -3,6 +3,8 @@ from __future__ import annotations
 import time
 import logging
 from concurrent.futures import Future, ThreadPoolExecutor
+from contextlib import contextmanager
+from collections.abc import Iterator
 from threading import RLock
 from typing import Any, Callable
 from uuid import uuid4
@@ -38,6 +40,7 @@ class JobManager:
         self.clock = clock
         self._lock = RLock()
         self._active_job_id: str | None = None
+        self._maintenance_operation: str | None = None
         self._tokens: dict[str, CancellationToken] = {}
         self._futures: dict[str, Future[None]] = {}
         self._last_persisted_progress: dict[str, float] = {}
@@ -56,6 +59,12 @@ class JobManager:
         force: bool = False,
     ) -> JobSnapshot | SkippedRun:
         with self._lock:
+            if self._maintenance_operation is not None:
+                raise PipelineError(
+                    "WORKSPACE_BUSY",
+                    f"正在{self._maintenance_operation}，暂时不能启动处理任务。",
+                    status_code=409,
+                )
             if self._active_job_id is not None:
                 raise PipelineError(
                     "JOB_ALREADY_RUNNING",
@@ -134,6 +143,30 @@ class JobManager:
             except PipelineError:
                 pass
         self.executor.shutdown(wait=True, cancel_futures=True)
+
+    @contextmanager
+    def maintenance(self, operation: str = "管理工作区") -> Iterator[None]:
+        """Reserve the single local workspace while a destructive operation commits."""
+        with self._lock:
+            if self._active_job_id is not None:
+                raise PipelineError(
+                    "WORKSPACE_BUSY",
+                    "已有处理任务正在运行，请等待完成或取消后再管理项目。",
+                    details={"job_id": self._active_job_id},
+                    status_code=409,
+                )
+            if self._maintenance_operation is not None:
+                raise PipelineError(
+                    "WORKSPACE_BUSY",
+                    f"正在{self._maintenance_operation}，请完成后再试。",
+                    status_code=409,
+                )
+            self._maintenance_operation = operation
+        try:
+            yield
+        finally:
+            with self._lock:
+                self._maintenance_operation = None
 
     def _run(self, prepared: PreparedRun, token: CancellationToken) -> None:
         job_id = prepared.job_id

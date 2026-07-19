@@ -4,11 +4,12 @@ import tempfile
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, Response, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Response, UploadFile, status
 
 from app.api.dependencies import (
     get_job_manager,
     get_state_repository,
+    get_workspace_catalog_service,
     get_workspace_service,
 )
 from app.jobs.manager import JobManager
@@ -20,9 +21,11 @@ from app.models.pipeline import (
     RunStepRequest,
     StepId,
 )
+from app.models.workspace_catalog import WorkspaceListResponse, WorkspaceSummary
 from app.pipeline.engine import SkippedRun
 from app.pipeline.state_repository import StateRepository
 from app.services.workspace_service import WorkspaceService
+from app.services.workspace_catalog_service import WorkspaceCatalogService
 
 
 router = APIRouter(prefix="/api/books", tags=["pipeline"])
@@ -34,6 +37,40 @@ ERROR_RESPONSES = {
 }
 MAX_SOURCE_PDF_BYTES = 500 * 1024 * 1024
 MAX_ORIGINAL_AUDIO_BYTES = 500 * 1024 * 1024
+
+
+@router.get("", response_model=WorkspaceListResponse, responses=ERROR_RESPONSES)
+def list_books(
+    catalog: Annotated[WorkspaceCatalogService, Depends(get_workspace_catalog_service)],
+) -> WorkspaceListResponse:
+    return catalog.list()
+
+
+@router.get(
+    "/{book_id}/summary",
+    response_model=WorkspaceSummary,
+    responses=ERROR_RESPONSES,
+)
+def get_book_summary(
+    book_id: str,
+    catalog: Annotated[WorkspaceCatalogService, Depends(get_workspace_catalog_service)],
+) -> WorkspaceSummary:
+    return catalog.summary(book_id)
+
+
+@router.delete(
+    "/{book_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    responses=ERROR_RESPONSES,
+)
+def delete_book(
+    book_id: str,
+    background_tasks: BackgroundTasks,
+    catalog: Annotated[WorkspaceCatalogService, Depends(get_workspace_catalog_service)],
+) -> Response:
+    trash = catalog.move_to_trash(book_id)
+    background_tasks.add_task(catalog.purge_trash, trash)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 async def _save_upload(
@@ -119,6 +156,7 @@ async def create_book(
             temporary_path,
             workspace.next_book_id(filename),
             original_audio=audio_temporary_path,
+            source_filename=filename,
         )
     finally:
         await pdf.close()

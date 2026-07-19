@@ -24,7 +24,7 @@ from app.api.routes.audio import router as audio_router
 from app.api.routes.exports import router as export_router
 from app.api.routes.pipeline import router as pipeline_router
 from app.api.routes.system import router as system_router
-from app.config import Settings
+from app.config import Settings, UserSettingsStore
 from app.jobs.events import EventBus
 from app.jobs.manager import JobManager
 from app.jobs.repository import JobRepository
@@ -39,6 +39,8 @@ from app.providers.align import StableTsWordAligner
 from app.providers.ocr import PaddleOcrProvider
 from app.providers.tts import FfmpegOpusTranscoder, VoxCpmTtsProvider
 from app.services.workspace_service import WorkspaceService
+from app.services.workspace_catalog_service import WorkspaceCatalogService
+from app.services.workspace_migration_service import WorkspaceMigrationService
 from app.services.page_workspace_service import PageWorkspaceService
 from app.services.proofread_workspace_service import ProofreadWorkspaceService
 from app.services.audio_workspace_service import AudioWorkspaceService
@@ -94,6 +96,7 @@ def create_app(
     async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         paths = WorkspacePaths(resolved_settings.workspace_root)
         paths.engine.mkdir(parents=True, exist_ok=True)
+        settings_store = UserSettingsStore(resolved_settings.settings_path)
         instance_lock = portalocker.Lock(str(paths.instance_lock), mode="a+", timeout=0)
         try:
             instance_lock.acquire()
@@ -108,6 +111,8 @@ def create_app(
             engine = PipelineEngine(states, artifacts, registry)
             manager = JobManager(engine, jobs, events, executor=make_executor())
             workspace_service = WorkspaceService(paths, states)
+            workspace_catalog_service = WorkspaceCatalogService(paths, states, manager, resolved_settings)
+            workspace_catalog_service.cleanup_trash()
             manager.recover()
             for book_id in states.list_books():
                 try:
@@ -124,10 +129,15 @@ def create_app(
             application.state.pipeline_engine = engine
             application.state.job_manager = manager
             application.state.workspace_service = workspace_service
+            application.state.workspace_catalog_service = workspace_catalog_service
+            application.state.workspace_migration_service = WorkspaceMigrationService(
+                paths, manager, resolved_settings, settings_store
+            )
             application.state.page_workspace_service = PageWorkspaceService(paths, states, artifacts)
             application.state.proofread_workspace_service = ProofreadWorkspaceService(paths, states, artifacts)
             application.state.audio_workspace_service = AudioWorkspaceService(paths, states, artifacts)
             application.state.export_workspace_service = ExportWorkspaceService(paths, states, artifacts)
+            WorkspaceMigrationService.cleanup_pending_source(resolved_settings, settings_store)
             yield
         finally:
             if manager is not None:

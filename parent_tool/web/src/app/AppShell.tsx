@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Outlet, useNavigate, useRouterState } from "@tanstack/react-router";
 import {
   AudioLines,
+  LibraryBig,
   BookOpen,
   Check,
   CircleHelp,
@@ -71,6 +72,16 @@ export function AppShell() {
         </div>
 
         <nav className={styles.workflow} aria-label="五步加工流程">
+          <button
+            type="button"
+            className={styles.libraryLink}
+            data-active={route.location.pathname === "/books" || undefined}
+            onClick={() => void navigate({ to: "/books" })}
+          >
+            <LibraryBig />
+            <span><strong>制作历史</strong><small>继续与管理项目</small></span>
+          </button>
+          <div className={styles.workflowLabel}>当前绘本流程</div>
           {steps.map((item) => {
             const step = item.step as WorkflowStep;
             const active = route.location.pathname.includes(item.match);
@@ -103,7 +114,7 @@ export function AppShell() {
         </nav>
 
         <div className={styles.sidebarFooter}>
-          <button type="button" disabled><Settings />设置</button>
+          <button type="button" data-active={route.location.pathname === "/settings" || undefined} onClick={() => void navigate({ to: "/settings" })}><Settings /><span>设置</span></button>
           <button type="button" disabled><CircleHelp />帮助与文档</button>
           <div className={styles.account}><UserRound /><span>家长账户</span></div>
         </div>

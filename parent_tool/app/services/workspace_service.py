@@ -11,6 +11,7 @@ import fitz
 
 from app.models.errors import PipelineError
 from app.models.pipeline import PipelineState
+from app.models.workspace_catalog import WorkspaceMetadata
 from app.pipeline.hashing import file_sha256
 from app.pipeline.paths import WorkspacePaths
 from app.pipeline.state_repository import StateRepository
@@ -27,6 +28,7 @@ class WorkspaceService:
         book_id: str,
         *,
         original_audio: Path | None = None,
+        source_filename: str | None = None,
     ) -> PipelineState:
         source = source.expanduser().resolve()
         original_audio = original_audio.expanduser().resolve() if original_audio else None
@@ -86,6 +88,16 @@ class WorkspaceService:
                 original_audio_path="original_audio.mp3" if original_audio else None,
                 original_audio_sha256=file_sha256(copied_audio) if original_audio else None,
             )
+            self._write_metadata(
+                target / "workspace.json",
+                WorkspaceMetadata(
+                    book_id=book_id,
+                    display_name=(Path(source_filename).stem.strip() if source_filename else "")
+                    or book_id,
+                    source_filename=Path(source_filename).name if source_filename else None,
+                    created_at=state.created_at,
+                ),
+            )
             return self.states.create(state)
         except PipelineError:
             raise
@@ -129,3 +141,15 @@ class WorkspaceService:
                 )
         finally:
             document.close()
+
+    @staticmethod
+    def _write_metadata(path: Path, metadata: WorkspaceMetadata) -> None:
+        temporary = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
+        try:
+            with temporary.open("w", encoding="utf-8", newline="\n") as stream:
+                stream.write(metadata.model_dump_json(exclude_none=False))
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, path)
+        finally:
+            temporary.unlink(missing_ok=True)

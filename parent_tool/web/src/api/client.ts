@@ -11,6 +11,10 @@ export type PagePlanEntry = components["schemas"]["PagePlanEntry"];
 export type PageDecision = components["schemas"]["PageDecision"];
 export type PageProcessParams = components["schemas"]["PageProcessParams"];
 export type OcrSentence = components["schemas"]["OcrSentence"];
+export type WorkspaceSummary = components["schemas"]["WorkspaceSummary"];
+export type WorkspaceList = components["schemas"]["WorkspaceListResponse"];
+export type StorageInfo = components["schemas"]["StorageInfo"];
+export type StorageMigrationStatus = components["schemas"]["StorageMigrationStatus"];
 
 export type ProofreadPage = { page_no: number; image: string; thumbnail: string };
 export type ProofreadWorkspace = {
@@ -84,6 +88,45 @@ export async function createBook(pdf: File, originalAudio?: File): Promise<Pipel
   const response = await fetch("/api/books", { method: "POST", body });
   if (!response.ok) await parseFetchError(response, "无法创建绘本工作区，请稍后重试。");
   return (await response.json()) as PipelineState;
+}
+
+export async function getWorkspaces(): Promise<WorkspaceList> {
+  const response = await fetch("/api/books");
+  if (!response.ok) await parseFetchError(response, "无法读取制作历史。");
+  return (await response.json()) as WorkspaceList;
+}
+
+export async function getStorageInfo(): Promise<StorageInfo> {
+  const response = await fetch("/api/storage");
+  if (!response.ok) await parseFetchError(response, "无法读取存储空间。");
+  return (await response.json()) as StorageInfo;
+}
+
+export async function recalculateStorage(): Promise<StorageInfo> {
+  const response = await fetch("/api/storage/recalculate", { method: "POST" });
+  if (!response.ok) await parseFetchError(response, "无法重新统计存储空间。");
+  return (await response.json()) as StorageInfo;
+}
+
+export async function startStorageMigration(targetRoot: string): Promise<StorageMigrationStatus> {
+  const response = await fetch("/api/storage/migrations", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ target_root: targetRoot }),
+  });
+  if (!response.ok) await parseFetchError(response, "无法启动数据迁移。");
+  return (await response.json()) as StorageMigrationStatus;
+}
+
+export async function getStorageMigration(migrationId: string): Promise<StorageMigrationStatus> {
+  const response = await fetch(`/api/storage/migrations/${encodeURIComponent(migrationId)}`);
+  if (!response.ok) await parseFetchError(response, "无法读取迁移进度。");
+  return (await response.json()) as StorageMigrationStatus;
+}
+
+export async function deleteWorkspace(bookId: string): Promise<void> {
+  const response = await fetch(`/api/books/${encodeURIComponent(bookId)}`, { method: "DELETE" });
+  if (!response.ok) await parseFetchError(response, "项目没有删除成功。");
 }
 
 export async function getBookState(bookId: string): Promise<PipelineState> {

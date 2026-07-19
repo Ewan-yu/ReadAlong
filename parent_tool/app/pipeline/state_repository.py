@@ -81,10 +81,11 @@ class StateRepository:
             return validated.model_copy(deep=True)
 
     def list_books(self) -> tuple[str, ...]:
-        if not self.paths.root.exists():
+        workspace_root = self.paths.workspace_root
+        if not workspace_root.exists():
             return ()
         book_ids: list[str] = []
-        for candidate in self.paths.root.iterdir():
+        for candidate in workspace_root.iterdir():
             if not candidate.is_dir() or not (candidate / "state.json").is_file():
                 continue
             try:

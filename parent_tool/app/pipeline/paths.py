@@ -40,6 +40,18 @@ class WorkspacePaths:
         return self.root / ".engine"
 
     @property
+    def workspace_root(self) -> Path:
+        """Directory containing book workspaces in either supported layout.
+
+        The original M2 layout stored books directly under ``root``.  A data
+        root created by the storage migrator uses ``root/workspaces`` instead.
+        Detecting the latter keeps existing projects readable without a bulk
+        rewrite.
+        """
+        nested = self.root / "workspaces"
+        return nested if nested.is_dir() else self.root
+
+    @property
     def jobs(self) -> Path:
         return self.engine / "jobs"
 
@@ -54,7 +66,7 @@ class WorkspacePaths:
     def book(self, book_id: str) -> Path:
         if not _BOOK_ID.fullmatch(book_id):
             raise _invalid_path(book_id)
-        return ensure_within(self.root, self.root / book_id)
+        return ensure_within(self.workspace_root, self.workspace_root / book_id)
 
     def state(self, book_id: str) -> Path:
         return self.book(book_id) / "state.json"

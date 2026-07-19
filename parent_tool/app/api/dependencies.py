@@ -10,6 +10,8 @@ from app.services.proofread_workspace_service import ProofreadWorkspaceService
 from app.services.audio_workspace_service import AudioWorkspaceService
 from app.services.export_workspace_service import ExportWorkspaceService
 from app.services.workspace_service import WorkspaceService
+from app.services.workspace_catalog_service import WorkspaceCatalogService
+from app.services.workspace_migration_service import WorkspaceMigrationService
 
 
 def get_job_manager(request: Request) -> JobManager:
@@ -26,6 +28,14 @@ def get_event_bus(request: Request) -> EventBus:
 
 def get_workspace_service(request: Request) -> WorkspaceService:
     return request.app.state.workspace_service
+
+
+def get_workspace_catalog_service(request: Request) -> WorkspaceCatalogService:
+    return request.app.state.workspace_catalog_service
+
+
+def get_workspace_migration_service(request: Request) -> WorkspaceMigrationService:
+    return request.app.state.workspace_migration_service
 
 
 def get_page_workspace_service(request: Request) -> PageWorkspaceService:

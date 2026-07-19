@@ -1,6 +1,27 @@
 import { queryOptions } from "@tanstack/react-query";
 
-import { getAudioWorkspace, getBookState, getCapabilities, getExportWorkspace, getPageWorkspace, getProofreadWorkspace } from "./client";
+import { getAudioWorkspace, getBookState, getCapabilities, getExportWorkspace, getPageWorkspace, getProofreadWorkspace, getStorageInfo, getStorageMigration, getWorkspaces } from "./client";
+
+export const workspacesQuery = queryOptions({
+  queryKey: ["books"],
+  queryFn: getWorkspaces,
+  staleTime: 1000,
+});
+
+export const storageQuery = queryOptions({
+  queryKey: ["storage"],
+  queryFn: getStorageInfo,
+  staleTime: 5000,
+});
+
+export const storageMigrationQuery = (migrationId: string) => queryOptions({
+  queryKey: ["storage", "migrations", migrationId],
+  queryFn: () => getStorageMigration(migrationId),
+  refetchInterval: (query) => {
+    const phase = query.state.data?.phase;
+    return phase === "switched" || phase === "failed" ? false : 800;
+  },
+});
 
 export const bookStateQuery = (bookId: string) =>
   queryOptions({

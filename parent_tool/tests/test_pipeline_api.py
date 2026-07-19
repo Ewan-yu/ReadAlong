@@ -96,6 +96,63 @@ def test_create_book_uploads_pdf_into_new_workspace(tmp_path: Path) -> None:
     assert state["book_id"].startswith("my-granny-")
     assert state["source"]["pdf_path"] == "source.pdf"
     assert (tmp_path / state["book_id"] / "source.pdf").is_file()
+    metadata = (tmp_path / state["book_id"] / "workspace.json").read_text(encoding="utf-8")
+    assert '"display_name":"My Granny"' in metadata
+
+
+def test_workspace_catalog_lists_storage_and_deletes_project(tmp_path: Path) -> None:
+    with _client(tmp_path) as client:
+        listing = client.get("/api/books")
+        storage = client.get("/api/storage")
+        deleted = client.delete("/api/books/book-1")
+        missing = client.get("/api/books/book-1/state")
+
+    assert listing.status_code == 200
+    assert listing.json()["workspaces"][0]["book_id"] == "book-1"
+    assert listing.json()["workspaces"][0]["continue_path"] == "/books/book-1/pages"
+    assert storage.status_code == 200
+    assert storage.json()["workspace_count"] == 1
+    assert Path(storage.json()["workspace_root"]) == tmp_path
+    assert deleted.status_code == 204
+    assert missing.status_code == 404
+
+
+def test_workspace_delete_is_rejected_while_job_is_active(tmp_path: Path) -> None:
+    class BlockingStep(ApiFakeStep):
+        def __init__(self) -> None:
+            self.started = Event()
+            self.release = Event()
+
+        def run(self, context, params):
+            self.started.set()
+            assert self.release.wait(2)
+            (context.staging_dir / "result.txt").write_text(params.value, encoding="utf-8")
+            return StepResult(outputs=("result.txt",))
+
+    step = BlockingStep()
+    paths = WorkspacePaths(tmp_path)
+    StateRepository(paths).create(
+        PipelineState.new(book_id="book-1", pdf_path="source.pdf", pdf_sha256="a" * 64)
+    )
+    app = create_app(
+        settings=Settings(workspace_root=tmp_path),
+        step_registry=StepRegistry((step,)),
+    )
+    with TestClient(app) as client:
+        started = client.post(
+            "/api/books/book-1/steps/pages/run",
+            json={"params": {"value": "hello"}},
+        )
+        assert step.started.wait(1)
+        try:
+            response = client.delete("/api/books/book-1")
+        finally:
+            step.release.set()
+        _wait_for_terminal(client, started.json()["job_id"])
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "WORKSPACE_BUSY"
+    assert paths.book("book-1").is_dir()
 
 
 def test_create_book_preserves_optional_original_audio(tmp_path: Path) -> None:
@@ -298,6 +355,13 @@ def test_openapi_contains_typed_pipeline_paths(tmp_path: Path) -> None:
 
     paths = schema["paths"]
     assert "/api/books/{book_id}/state" in paths
+    assert "/api/books" in paths
+    assert "/api/books/{book_id}" in paths
+    assert "/api/books/{book_id}/summary" in paths
+    assert "/api/storage" in paths
+    assert "/api/storage/recalculate" in paths
+    assert "/api/storage/migrations" in paths
+    assert "/api/storage/migrations/{migration_id}" in paths
     assert "/api/books/{book_id}/steps/{step_id}/run" in paths
     assert "/api/jobs/{job_id}" in paths
     assert "/api/jobs/{job_id}/events" in paths

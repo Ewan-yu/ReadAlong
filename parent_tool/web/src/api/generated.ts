@@ -28,11 +28,46 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /** List Books */
+        get: operations["list_books_api_books_get"];
         put?: never;
         /** Create Book */
         post: operations["create_book_api_books_post"];
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/books/{book_id}/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Book Summary */
+        get: operations["get_book_summary_api_books__book_id__summary_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/books/{book_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete Book */
+        delete: operations["delete_book_api_books__book_id__delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -302,6 +337,74 @@ export interface paths {
         };
         /** Get Capabilities */
         get: operations["get_capabilities_api_capabilities_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/storage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Storage */
+        get: operations["get_storage_api_storage_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/storage/recalculate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Recalculate Storage */
+        post: operations["recalculate_storage_api_storage_recalculate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/storage/migrations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Start Storage Migration */
+        post: operations["start_storage_migration_api_storage_migrations_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/storage/migrations/{migration_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Storage Migration */
+        get: operations["get_storage_migration_api_storage_migrations__migration_id__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1000,6 +1103,59 @@ export interface components {
              */
             completed_at: string;
         };
+        /** StorageInfo */
+        StorageInfo: {
+            /** Workspace Root */
+            workspace_root: string;
+            /** Managed By */
+            managed_by: string;
+            /** Workspace Count */
+            workspace_count: number;
+            /** Used Bytes */
+            used_bytes: number;
+            /** Disk Total Bytes */
+            disk_total_bytes: number;
+            /** Disk Free Bytes */
+            disk_free_bytes: number;
+        };
+        /**
+         * StorageMigrationPhase
+         * @enum {string}
+         */
+        StorageMigrationPhase: "queued" | "preflight" | "copying" | "verifying" | "switched" | "failed";
+        /** StorageMigrationRequest */
+        StorageMigrationRequest: {
+            /** Target Root */
+            target_root: string;
+        };
+        /** StorageMigrationStatus */
+        StorageMigrationStatus: {
+            /** Migration Id */
+            migration_id: string;
+            /** Target Root */
+            target_root: string;
+            phase: components["schemas"]["StorageMigrationPhase"];
+            /** Progress */
+            progress: number;
+            /** Message */
+            message: string;
+            /**
+             * Copied Bytes
+             * @default 0
+             */
+            copied_bytes: number;
+            /**
+             * Total Bytes
+             * @default 0
+             */
+            total_bytes: number;
+            /**
+             * Restart Required
+             * @default false
+             */
+            restart_required: boolean;
+            error?: components["schemas"]["PipelineErrorInfo"] | null;
+        };
         /**
          * SuspectKind
          * @enum {string}
@@ -1046,6 +1202,58 @@ export interface components {
          * @enum {string}
          */
         VoiceMode: "design" | "clone";
+        /**
+         * WorkspaceLifecycleStatus
+         * @enum {string}
+         */
+        WorkspaceLifecycleStatus: "in_progress" | "running" | "failed" | "stale" | "completed" | "corrupt";
+        /** WorkspaceListResponse */
+        WorkspaceListResponse: {
+            /** Workspaces */
+            workspaces: components["schemas"]["WorkspaceSummary"][];
+            /** Total Size Bytes */
+            total_size_bytes: number;
+        };
+        /** WorkspaceSummary */
+        WorkspaceSummary: {
+            /** Book Id */
+            book_id: string;
+            /** Display Name */
+            display_name: string;
+            /** Source Filename */
+            source_filename?: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /** Last Opened At */
+            last_opened_at?: string | null;
+            lifecycle_status: components["schemas"]["WorkspaceLifecycleStatus"];
+            current_step: components["schemas"]["StepId"];
+            step_status?: components["schemas"]["StepStatus"] | null;
+            /** Completed Steps */
+            completed_steps: number;
+            /** Continue Path */
+            continue_path: string;
+            /** Page Count */
+            page_count?: number | null;
+            /** Sentence Count */
+            sentence_count?: number | null;
+            /**
+             * Exported
+             * @default false
+             */
+            exported: boolean;
+            /** Size Bytes */
+            size_bytes: number;
+            error?: components["schemas"]["PipelineErrorInfo"] | null;
+        };
     };
     responses: never;
     parameters: never;
@@ -1077,6 +1285,62 @@ export interface operations {
             };
         };
     };
+    list_books_api_books_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceListResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+        };
+    };
     create_book_api_books_post: {
         parameters: {
             query?: never;
@@ -1098,6 +1362,120 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["PipelineState"];
                 };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+        };
+    };
+    get_book_summary_api_books__book_id__summary_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                book_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceSummary"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+        };
+    };
+    delete_book_api_books__book_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                book_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Not Found */
             404: {
@@ -2045,6 +2423,110 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CapabilitiesResponse"];
+                };
+            };
+        };
+    };
+    get_storage_api_storage_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StorageInfo"];
+                };
+            };
+        };
+    };
+    recalculate_storage_api_storage_recalculate_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StorageInfo"];
+                };
+            };
+        };
+    };
+    start_storage_migration_api_storage_migrations_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StorageMigrationRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StorageMigrationStatus"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_storage_migration_api_storage_migrations__migration_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                migration_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StorageMigrationStatus"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
