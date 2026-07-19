@@ -68,9 +68,17 @@ export function ProofreadWorkspace() {
   const pageSentences = useMemo(() => sentences.filter((sentence) => sentence.page_no === selectedPage), [selectedPage, sentences]);
   const selected = sentences.find((sentence) => sentence.id === selectedIds[0]);
   const pagesWithReview = useMemo(() => new Set(sentences.filter((sentence) => sentence.status === "needs_review").map((sentence) => sentence.page_no)), [sentences]);
+  const confirmationBlockers = useMemo(
+    () => sentences.filter((sentence) => sentence.status === "needs_review" || sentence.suspect_words.some((word) => word.kind === "spelling")),
+    [sentences],
+  );
+  const blockingPageNos = useMemo(
+    () => [...new Set(confirmationBlockers.map((sentence) => sentence.page_no))].sort((a, b) => a - b),
+    [confirmationBlockers],
+  );
   const virtualizer = useVirtualizer({ count: sentences.length, getScrollElement: () => listRef.current, estimateSize: () => 74, overscan: 8 });
   const allConfirmed = Boolean(workspace && workspace.pages.every((item) => confirmedPages.includes(item.page_no)));
-  const canPublish = allConfirmed && !sentences.some((sentence) => sentence.status === "needs_review") && dirty;
+  const canPublish = allConfirmed && confirmationBlockers.length === 0 && dirty;
 
   const replaceSentences = (next: OcrSentence[], affectedPages?: number[]) => {
     setSentences(renumber(next));
@@ -205,7 +213,7 @@ export function ProofreadWorkspace() {
     </section>}
 
     <footer className={styles.footer}>
-      <div><CheckCheck />已确认 {confirmedPages.length} / {workspace.pages.length}{!allConfirmed && <button type="button" disabled={sentences.some((sentence) => sentence.status === "needs_review" || sentence.suspect_words.some((word) => word.kind === "spelling"))} onClick={() => { setConfirmedPages(workspace.pages.map((item) => item.page_no)); setDirty(true); }}>全部确认</button>}</div>
+      <div className={styles.confirmSummary}><CheckCheck /><span>已确认 {confirmedPages.length} / {workspace.pages.length}</span>{!allConfirmed && <div className={styles.confirmAll}><button type="button" disabled={confirmationBlockers.length > 0} title={confirmationBlockers.length ? "请先处理待确认句与拼写提示" : "确认所有尚未确认的页面"} onClick={() => { setConfirmedPages(workspace.pages.map((item) => item.page_no)); setDirty(true); }}>全部确认</button>{confirmationBlockers.length > 0 ? <span data-blocked>还需处理 {confirmationBlockers.length} 句（第 {blockingPageNos.slice(0, 3).join("、")} 页{blockingPageNos.length > 3 ? "等" : ""}）</span> : <span data-ready>所有页面已无待确认项，可一键确认</span>}{confirmationBlockers.length > 0 && <button type="button" className={styles.jumpToBlocker} onClick={() => setSelectedPage(blockingPageNos[0])}>查看第 {blockingPageNos[0]} 页</button>}</div>}</div>
       <div><button type="button" className={styles.publish} disabled={!canPublish || publish.isPending} onClick={() => publish.mutate()}><Save />{publish.isPending ? "正在发布" : "发布校对结果"}</button><button type="button" disabled={dirty || !allConfirmed || !workspace.proofread_revision_id} onClick={() => void navigate({ to: "/books/$bookId/audio", params: { bookId } })}>进入语音生成</button></div>
     </footer>
   </section>;
