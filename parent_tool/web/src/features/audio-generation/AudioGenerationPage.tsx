@@ -37,9 +37,29 @@ export function AudioGenerationPage() {
   const resumedJobs = useRef(new Set<string>());
   const audio = useRef<HTMLAudioElement | undefined>(undefined);
   const workspace = query.data;
-  const readyVoices = voicesQueryResult.data?.filter((voice) => voice.status === "ready") ?? [];
+  const readyVoices = useMemo(
+    () => voicesQueryResult.data?.filter((voice) => voice.status === "ready") ?? [],
+    [voicesQueryResult.data],
+  );
 
   useEffect(() => { if (workspace) setParams(workspace.params); }, [workspace?.audio_revision_id, workspace?.proofread_revision_id]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!readyVoices.length) return;
+    setParams((current) => {
+      if (!current || current.voice_profile_id) return current;
+      const voice = readyVoices.find((item) => item.is_default) ?? readyVoices[0];
+      if (!voice.reference_sha256) return current;
+      return {
+        ...current,
+        // The profile resolver converts this compatibility placeholder to clone
+        // mode only after it has copied the verified reference WAV into staging.
+        voice: { mode: "design", description: "voice profile", reference_wav_path: null },
+        voice_profile_id: voice.voice_id,
+        voice_profile_revision: voice.revision,
+        voice_fingerprint: voice.reference_sha256,
+      };
+    });
+  }, [readyVoices]);
   useEffect(() => () => audio.current?.pause(), []);
   const activeJobId = stateQuery.data?.steps.audio.active_attempt?.job_id;
   const lastAttempt = stateQuery.data?.steps.audio.last_attempt;
@@ -111,7 +131,9 @@ export function AudioGenerationPage() {
     const voice = readyVoices.find((item) => item.voice_id === voiceId);
     if (!voice?.reference_sha256) return;
     update({
-      voice: { mode: "clone", description: "voice profile", reference_wav_path: null },
+      // VoiceConfig's clone mode requires a workspace path. Voice Profiles do
+      // not expose one to the browser; AudioStep resolves it server-side.
+      voice: { mode: "design", description: "voice profile", reference_wav_path: null },
       voice_profile_id: voice.voice_id,
       voice_profile_revision: voice.revision,
       voice_fingerprint: voice.reference_sha256,
