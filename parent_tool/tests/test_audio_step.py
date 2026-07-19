@@ -6,7 +6,7 @@ import fitz
 import pytest
 from pydantic import BaseModel, ConfigDict
 
-from app.models.audio import AudioWordTiming, SynthesizedAudio
+from app.models.audio import AudioGenerationReport, AudioWordTiming, SynthesizedAudio
 from app.models.errors import PipelineError
 from app.models.ocr import BoundingBox, OcrSentence, OcrSentences, SentenceStatus
 from app.models.pipeline import PipelineState, StepId, StepResult
@@ -60,12 +60,48 @@ class FakeTts:
         return SynthesizedAudio(wav_path=str(output_wav), sample_rate=48000)
 
 
+class CountingFakeTts(FakeTts):
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    def synthesize(self, text, voice, output_wav, cancellation):
+        self.calls.append(text)
+        return super().synthesize(text, voice, output_wav, cancellation)
+
+
 class FakeAligner:
     def align(self, _wav_path, _language, _cancellation):
         return (
             AudioWordTiming(word="Hello", t_start=0, t_end=0.2),
             AudioWordTiming(word="world", t_start=0.3, t_end=0.6),
         )
+
+
+class DuplicateWordOcrStep:
+    step_id = StepId.OCR
+    implementation_version = "fake-duplicate-word-ocr-v1"
+    params_model = FakeParams
+
+    def run(self, context, _params):
+        document = OcrSentences(
+            source_pages_revision="r-pages",
+            params={},
+            pages=(),
+            sentences=tuple(
+                OcrSentence(
+                    id=f"s{index:04d}",
+                    page_no=1,
+                    seq=index,
+                    text=text,
+                    bbox=BoundingBox(x=0.1, y=0.1 * index, width=0.3, height=0.08),
+                    shared_bbox=False,
+                    status=SentenceStatus.SENTENCE,
+                )
+                for index, text in enumerate(("shirt", "Shirt!", "Dress up."), start=1)
+            ),
+        )
+        (context.staging_dir / "sentences.json").write_text(document.model_dump_json(), encoding="utf-8")
+        return StepResult(outputs=("sentences.json",))
 
 
 class FakeTranscoder:
@@ -166,6 +202,33 @@ def test_explicit_auto_accept_unlocks_audio_revision(tmp_path: Path) -> None:
 def test_single_word_tts_input_gets_terminal_punctuation() -> None:
     assert AudioStep._tts_input("talk") == "talk..."
     assert AudioStep._tts_input("Hello world.") == "Hello world."
+
+
+def test_full_book_reuses_duplicate_isolated_word_audio(tmp_path: Path) -> None:
+    paths = WorkspacePaths(tmp_path / "workspace")
+    book = paths.book("book-1")
+    book.mkdir(parents=True)
+    source = _pdf(tmp_path / "source.pdf")
+    target = book / "source.pdf"
+    target.write_bytes(source.read_bytes())
+    states = StateRepository(paths)
+    states.create(PipelineState.new(book_id="book-1", pdf_path="source.pdf", pdf_sha256=file_sha256(target)))
+    tts = CountingFakeTts()
+    engine = PipelineEngine(
+        states,
+        ArtifactStore(paths),
+        StepRegistry((PageProcessingStep(), DuplicateWordOcrStep(), AutoProofreadStep(), AudioStep(tts, FakeAligner(), FakeTranscoder()), ExportStep())),
+    )
+
+    _run(engine, StepId.PAGES, {}, "12345678-1234-4234-8234-123456789abc")
+    _run(engine, StepId.OCR, {}, "22345678-1234-4234-8234-123456789abc")
+    _run(engine, StepId.PROOFREAD, {"accept_ocr_draft": True}, "32345678-1234-4234-8234-123456789abc")
+    result = _run(engine, StepId.AUDIO, {}, "42345678-1234-4234-8234-123456789abc")
+
+    report = AudioGenerationReport.model_validate_json((book / result.output_root / "tts_report.json").read_text(encoding="utf-8"))
+    assert len(tts.calls) == 4  # anchor + carrier/fallback for shirt + one ordinary sentence
+    assert report.sentences[0].duration_seconds == report.sentences[1].duration_seconds
+    assert report.sentences[0].word_timing == report.sentences[1].word_timing
 
 
 def test_single_english_word_uses_context_carrier_and_selects_target_timing() -> None:

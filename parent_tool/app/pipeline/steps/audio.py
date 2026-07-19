@@ -84,6 +84,7 @@ class AudioStep:
             ) from exc
         reports: list[AudioSentenceReport] = []
         outputs: list[str] = []
+        canonical_words: dict[str, AudioSentenceReport] = {}
         sentence_ids = {sentence.id for sentence in source.sentences}
         targets = set(params.sentence_ids) if params.sentence_ids else sentence_ids
         unknown_targets = targets - sentence_ids
@@ -128,6 +129,19 @@ class AudioStep:
             audio_path = f"ogg/{sentence.id}.ogg"
             ogg_path = context.staging_dir / audio_path
             try:
+                canonical_key = self._canonical_word_key(sentence.text, params.language, params)
+                canonical = canonical_words.get(canonical_key) if canonical_key else None
+                if canonical is not None and canonical.audio_path:
+                    source_path = ensure_within(
+                        context.staging_dir,
+                        context.staging_dir / Path(*PurePosixPath(canonical.audio_path).parts),
+                    )
+                    ogg_path.parent.mkdir(parents=True, exist_ok=True)
+                    ogg_path.write_bytes(source_path.read_bytes())
+                    reports.append(canonical.model_copy(update={"sentence_id": sentence.id, "audio_path": audio_path}))
+                    outputs.append(audio_path)
+                    context.progress(index / total, f"已复用单词音频 {index}/{total}。")
+                    continue
                 tts_text = self._tts_input(sentence.text)
                 use_carrier = self._uses_word_carrier(sentence.text, params.language)
                 carrier_text = self._word_carrier_input(sentence.text) if use_carrier else None
@@ -187,17 +201,18 @@ class AudioStep:
                     timing = estimated_word_timings(sentence.text, duration)
                     if timing:
                         reason = f"TIMING_ESTIMATED_{reason or 'UNAVAILABLE'}"
-                reports.append(
-                    AudioSentenceReport(
-                        sentence_id=sentence.id,
-                        audio_path=audio_path,
-                        duration_seconds=duration,
-                        word_timing=timing,
-                        provider=provider,
-                        suspect_tts=is_suspect_duration(sentence.text, duration),
-                        error_code=reason,
-                    )
+                report = AudioSentenceReport(
+                    sentence_id=sentence.id,
+                    audio_path=audio_path,
+                    duration_seconds=duration,
+                    word_timing=timing,
+                    provider=provider,
+                    suspect_tts=is_suspect_duration(sentence.text, duration),
+                    error_code=reason,
                 )
+                reports.append(report)
+                if canonical_key:
+                    canonical_words[canonical_key] = report
                 outputs.append(audio_path)
             except PipelineError as exc:
                 reports.append(AudioSentenceReport(sentence_id=sentence.id, error_code=exc.code))
@@ -437,6 +452,19 @@ class AudioStep:
     @staticmethod
     def _uses_word_carrier(text: str, language: str) -> bool:
         return language.casefold().startswith("en") and len(normalized_words(text)) == 1
+
+    @classmethod
+    def _canonical_word_key(cls, text: str, language: str, params: AudioParams) -> str | None:
+        """Reuse only duplicate isolated English words within one full-book run.
+
+        This is deliberately not used for partial regeneration: pressing
+        "regenerate" must still be able to make a fresh repair candidate. It also
+        leaves phrases and ordinary sentences untouched, where equal text can
+        legitimately need different surrounding prosody.
+        """
+        if params.sentence_ids or not cls._uses_word_carrier(text, language):
+            return None
+        return normalized_words(text)[0]
 
     @staticmethod
     def _word_carrier_input(text: str) -> str:
