@@ -8,6 +8,7 @@ import 'package:go_router/go_router.dart';
 import '../../core/theme/tokens.dart';
 import '../../data/appdb/app_database_providers.dart';
 import '../follow/follow_reading_controller.dart';
+import '../../services/audio/encouragement_audio.dart';
 import '../../services/scoring/score_models.dart';
 import 'point_reading_controller.dart';
 import 'point_reading_models.dart';
@@ -115,6 +116,7 @@ class _ReaderViewState extends ConsumerState<_ReaderView> {
   var _horizontalSwipeDistance = 0.0;
   var _alignmentFailureShown = false;
   var _playbackFeedbackScheduled = false;
+  int? _scoreDialogRecordId;
   var _mode = _ReaderMode.point;
   Timer? _progressSaveTimer;
 
@@ -280,6 +282,10 @@ class _ReaderViewState extends ConsumerState<_ReaderView> {
     final pointReading = ref.watch(pointReadingProvider);
     final followReadingProvider =
         followReadingControllerProvider(widget.book.libraryId);
+    ref.listen<AsyncValue<FollowReadingState>>(
+      followReadingProvider,
+      _handleFollowReadingFeedback,
+    );
     final followReading = ref.watch(followReadingProvider);
     final activeSentence = _mode == _ReaderMode.point
         ? pointReading.valueOrNull?.activeSentence
@@ -457,8 +463,8 @@ class _ReaderViewState extends ConsumerState<_ReaderView> {
                                   .replaySubtitleSentence(),
                             ),
                             onFollow: () {
-                              final sentence = pointReading
-                                  .valueOrNull?.subtitleSentence;
+                              final sentence =
+                                  pointReading.valueOrNull?.subtitleSentence;
                               if (sentence == null) return;
                               ref
                                   .read(followReadingProvider.notifier)
@@ -472,8 +478,8 @@ class _ReaderViewState extends ConsumerState<_ReaderView> {
                           )
                     : _FollowReadingPanel(
                         state: followReading,
-                        compact: constraints.maxWidth <
-                            AppSizes.readerWideLayout,
+                        compact:
+                            constraints.maxWidth < AppSizes.readerWideLayout,
                         onDemo: () => unawaited(ref
                             .read(followReadingProvider.notifier)
                             .playDemonstration()),
@@ -521,7 +527,8 @@ class _ReaderViewState extends ConsumerState<_ReaderView> {
     if (_mode == _ReaderMode.point) {
       unawaited(
         ref
-            .read(pointReadingControllerProvider(widget.book.libraryId).notifier)
+            .read(
+                pointReadingControllerProvider(widget.book.libraryId).notifier)
             .playAt(pageNumber, normalized),
       );
       return;
@@ -596,6 +603,84 @@ class _ReaderViewState extends ConsumerState<_ReaderView> {
           .clearFailure();
       _playbackFeedbackScheduled = false;
     });
+  }
+
+  void _handleFollowReadingFeedback(
+    AsyncValue<FollowReadingState>? previous,
+    AsyncValue<FollowReadingState> next,
+  ) {
+    final current = next.valueOrNull;
+    final recordId = current?.record?.id;
+    if (current?.phase != FollowReadingPhase.scored ||
+        current?.result == null ||
+        recordId == null ||
+        _scoreDialogRecordId == recordId) {
+      return;
+    }
+    _scoreDialogRecordId = recordId;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      unawaited(_showScoreDialog(current!));
+    });
+  }
+
+  Future<void> _showScoreDialog(FollowReadingState state) async {
+    final score = state.result;
+    final sentence = state.sentence;
+    if (score == null || sentence == null || !mounted) return;
+    unawaited(
+      ref.read(encouragementAudioPlayerProvider).playForStars(score.stars),
+    );
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => PopScope(
+        canPop: false,
+        child: _FollowScoreDialog(
+          sentence: sentence,
+          score: score,
+          onDemo: () {
+            Navigator.of(dialogContext).pop();
+            ref
+                .read(followReadingControllerProvider(widget.book.libraryId)
+                    .notifier)
+                .acknowledgeResult();
+            unawaited(
+              ref
+                  .read(followReadingControllerProvider(widget.book.libraryId)
+                      .notifier)
+                  .playDemonstration(),
+            );
+          },
+          onRepeat: () {
+            Navigator.of(dialogContext).pop();
+            ref
+                .read(followReadingControllerProvider(widget.book.libraryId)
+                    .notifier)
+                .acknowledgeResult();
+            unawaited(
+              ref
+                  .read(followReadingControllerProvider(widget.book.libraryId)
+                      .notifier)
+                  .startRecording(),
+            );
+          },
+          onNext: () {
+            Navigator.of(dialogContext).pop();
+            ref
+                .read(followReadingControllerProvider(widget.book.libraryId)
+                    .notifier)
+                .acknowledgeResult();
+            unawaited(_nextFollowSentence(
+              ref
+                  .read(pointReadingControllerProvider(widget.book.libraryId))
+                  .valueOrNull,
+              sentence,
+            ));
+          },
+        ),
+      ),
+    );
   }
 
   void _showMessageAfterFrame(String message) {
@@ -887,7 +972,9 @@ class _ModeChoice extends StatelessWidget {
                 Text(
                   label,
                   style: TextStyle(
-                    color: selected ? AppColors.primaryDark : AppColors.textSecondary,
+                    color: selected
+                        ? AppColors.primaryDark
+                        : AppColors.textSecondary,
                     fontWeight: FontWeight.w700,
                   ),
                 ),
@@ -955,8 +1042,7 @@ class _FollowReadingPanel extends StatelessWidget {
         ),
       );
     }
-    if (value.phase == FollowReadingPhase.scoring ||
-        value.phase == FollowReadingPhase.demonstrating) {
+    if (value.phase == FollowReadingPhase.scoring) {
       return _FollowPanelFrame(
         child: Padding(
           padding: const EdgeInsets.all(AppSpacing.cardPadding),
@@ -965,7 +1051,7 @@ class _FollowReadingPanel extends StatelessWidget {
             children: [
               const CircularProgressIndicator(),
               const SizedBox(height: AppSpacing.unit),
-              Text(value.phase == FollowReadingPhase.scoring ? '正在认真听你读…' : '正在播放示范…'),
+              const Text('正在认真听你读…'),
             ],
           ),
         ),
@@ -980,18 +1066,23 @@ class _FollowReadingPanel extends StatelessWidget {
             children: [
               _FollowSentenceText(sentence: sentence),
               const SizedBox(height: AppSpacing.unit),
-              Text('${_formatPlaybackTime(value.elapsed)} / 00:30', style: const TextStyle(color: AppColors.textSecondary)),
+              Text('${_formatPlaybackTime(value.elapsed)} / 00:30',
+                  style: const TextStyle(color: AppColors.textSecondary)),
               const SizedBox(height: AppSpacing.unit),
               _RecordingMeter(level: value.level),
               const SizedBox(height: AppSpacing.unit),
               Text(
                 value.level < 0.05 ? '声音有点小，再靠近一点' : '听得很清楚，继续读吧',
-                style: TextStyle(color: value.level < 0.05 ? AppColors.accent : AppColors.primaryDark),
+                style: TextStyle(
+                    color: value.level < 0.05
+                        ? AppColors.accent
+                        : AppColors.primaryDark),
               ),
               const SizedBox(height: AppSpacing.cardPadding),
               FilledButton.icon(
                 key: const ValueKey('follow-stop-recording'),
-                style: FilledButton.styleFrom(backgroundColor: AppColors.danger),
+                style:
+                    FilledButton.styleFrom(backgroundColor: AppColors.danger),
                 onPressed: onStop,
                 icon: const Icon(Icons.stop_rounded),
                 label: const Text('停止录音'),
@@ -1002,13 +1093,21 @@ class _FollowReadingPanel extends StatelessWidget {
       );
     }
     if (value.phase == FollowReadingPhase.scored && value.result != null) {
-      return _FollowResultPanel(
-        sentence: sentence,
-        score: value.result!,
-        onDemo: onDemo,
-        onMyRecording: onMyRecording,
-        onRepeat: onRepeat,
-        onNext: onNext,
+      // The result itself is presented in a focused confirmation dialog.
+      // Keep this panel quiet and stable behind it so the reading canvas does
+      // not jump while the child is receiving feedback.
+      return _FollowPanelFrame(
+        child: Padding(
+          padding: const EdgeInsets.all(AppSpacing.cardPadding),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _FollowSentenceText(sentence: sentence),
+              const SizedBox(height: AppSpacing.cardPadding),
+              const Text('评价完成啦'),
+            ],
+          ),
+        ),
       );
     }
     if (value.phase == FollowReadingPhase.failed) {
@@ -1020,15 +1119,23 @@ class _FollowReadingPanel extends StatelessWidget {
             children: [
               _FollowSentenceText(sentence: sentence),
               const SizedBox(height: AppSpacing.unit),
-              Text(value.failure ?? '分数马上来～', textAlign: TextAlign.center, style: const TextStyle(color: AppColors.textSecondary)),
+              Text(value.failure ?? '分数马上来～',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(color: AppColors.textSecondary)),
               const SizedBox(height: AppSpacing.cardPadding),
               Wrap(
                 spacing: AppSpacing.unit,
                 runSpacing: AppSpacing.unit,
                 alignment: WrapAlignment.center,
                 children: [
-                  OutlinedButton.icon(onPressed: onMyRecording, icon: const Icon(Icons.play_arrow_rounded), label: const Text('听我的录音')),
-                  FilledButton.icon(onPressed: onRetry, icon: const Icon(Icons.refresh_rounded), label: const Text('重试评分')),
+                  OutlinedButton.icon(
+                      onPressed: onMyRecording,
+                      icon: const Icon(Icons.play_arrow_rounded),
+                      label: const Text('听我的录音')),
+                  FilledButton.icon(
+                      onPressed: onRetry,
+                      icon: const Icon(Icons.refresh_rounded),
+                      label: const Text('重试评分')),
                 ],
               ),
             ],
@@ -1042,18 +1149,47 @@ class _FollowReadingPanel extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            _FollowSentenceText(sentence: sentence),
+            _FollowSentenceText(
+              sentence: sentence,
+              activeWordIndex: value.phase == FollowReadingPhase.demonstrating
+                  ? value.activeWordIndex
+                  : null,
+            ),
             const SizedBox(height: AppSpacing.cardPadding),
+            _FollowDemoProgress(
+              value: value.phase == FollowReadingPhase.demonstrating
+                  ? playbackProgress(
+                      value.playbackPosition,
+                      value.playbackDuration,
+                    )
+                  : 0,
+              visible: value.phase == FollowReadingPhase.demonstrating,
+            ),
+            const SizedBox(height: AppSpacing.unit),
             Wrap(
               spacing: AppSpacing.cardPadding,
               runSpacing: AppSpacing.unit,
               alignment: WrapAlignment.center,
               children: [
-                OutlinedButton.icon(onPressed: onDemo, icon: const Icon(Icons.volume_up_outlined), label: const Text('听示范')),
+                OutlinedButton.icon(
+                  key: const ValueKey('follow-play-demonstration'),
+                  onPressed: value.phase == FollowReadingPhase.demonstrating
+                      ? null
+                      : onDemo,
+                  icon: Icon(value.phase == FollowReadingPhase.demonstrating
+                      ? Icons.graphic_eq_rounded
+                      : Icons.volume_up_outlined),
+                  label: Text(value.phase == FollowReadingPhase.demonstrating
+                      ? '示范播放中'
+                      : '听示范'),
+                ),
                 FilledButton.icon(
                   key: const ValueKey('follow-start-recording'),
-                  style: FilledButton.styleFrom(backgroundColor: AppColors.accent),
-                  onPressed: onRecord,
+                  style:
+                      FilledButton.styleFrom(backgroundColor: AppColors.accent),
+                  onPressed: value.phase == FollowReadingPhase.demonstrating
+                      ? null
+                      : onRecord,
                   icon: const Icon(Icons.mic_none_rounded),
                   label: const Text('开始录音'),
                 ),
@@ -1074,18 +1210,54 @@ class _FollowPanelFrame extends StatelessWidget {
         decoration: const BoxDecoration(
           color: AppColors.bgAlt,
           border: Border(top: BorderSide(color: AppColors.border)),
-          borderRadius: BorderRadius.vertical(top: Radius.circular(AppRadius.subtitleBar)),
-          boxShadow: [BoxShadow(color: AppColors.scrim, blurRadius: 16, offset: Offset(0, -3))],
+          borderRadius: BorderRadius.vertical(
+              top: Radius.circular(AppRadius.subtitleBar)),
+          boxShadow: [
+            BoxShadow(
+                color: AppColors.scrim, blurRadius: 16, offset: Offset(0, -3))
+          ],
         ),
         child: Center(child: child),
       );
 }
 
 class _FollowSentenceText extends StatelessWidget {
-  const _FollowSentenceText({required this.sentence});
+  const _FollowSentenceText({
+    required this.sentence,
+    this.activeWordIndex,
+  });
   final ReaderSentence sentence;
+  final int? activeWordIndex;
   @override
-  Widget build(BuildContext context) => Text(sentence.text, textAlign: TextAlign.center, style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w600, color: AppColors.textPrimary));
+  Widget build(BuildContext context) => _SubtitleText(
+        sentence: sentence,
+        segments: buildSubtitleSegments(sentence.text, sentence.wordTimings),
+        activeWordIndex: activeWordIndex,
+        fontSize: 24,
+      );
+}
+
+class _FollowDemoProgress extends StatelessWidget {
+  const _FollowDemoProgress({required this.value, required this.visible});
+
+  final double value;
+  final bool visible;
+
+  @override
+  Widget build(BuildContext context) => SizedBox(
+        height: 5,
+        child: AnimatedOpacity(
+          opacity: visible ? 1 : 0,
+          duration: const Duration(milliseconds: 120),
+          child: LinearProgressIndicator(
+            value: value,
+            minHeight: 5,
+            color: AppColors.primary,
+            backgroundColor: AppColors.border,
+            borderRadius: BorderRadius.circular(3),
+          ),
+        ),
+      );
 }
 
 class _RecordingMeter extends StatelessWidget {
@@ -1103,44 +1275,91 @@ class _RecordingMeter extends StatelessWidget {
       );
 }
 
-class _FollowResultPanel extends StatelessWidget {
-  const _FollowResultPanel({required this.sentence, required this.score, required this.onDemo, required this.onMyRecording, required this.onRepeat, required this.onNext});
+class _FollowScoreDialog extends StatelessWidget {
+  const _FollowScoreDialog({
+    required this.sentence,
+    required this.score,
+    required this.onDemo,
+    required this.onRepeat,
+    required this.onNext,
+  });
   final ReaderSentence sentence;
   final ScoreResult score;
   final VoidCallback onDemo;
-  final VoidCallback onMyRecording;
   final VoidCallback onRepeat;
   final VoidCallback onNext;
 
   @override
   Widget build(BuildContext context) {
-    final message = score.stars < 2.5 ? '加油！再试一次😊' : score.stars <= 3.5 ? '不错👍' : '很棒！🌟';
-    return _FollowPanelFrame(
-      child: Padding(
-        padding: const EdgeInsets.all(AppSpacing.cardPadding),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            _Stars(stars: score.stars),
-            const SizedBox(height: AppSpacing.unit),
-            Text(message, style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w800, color: AppColors.primaryDark)),
-            const SizedBox(height: AppSpacing.unit),
-            _ScoredSentence(sentence: sentence, scores: score.words),
-            const SizedBox(height: AppSpacing.cardPadding),
-            Wrap(
-              spacing: AppSpacing.unit,
-              runSpacing: AppSpacing.unit,
-              alignment: WrapAlignment.center,
+    final message = switch (score.stars) {
+      < 2.5 => '加油！再试一次😊',
+      < 4.0 => '不错，继续加油！👍',
+      _ => '太棒了！🌟',
+    };
+    return Dialog(
+      insetPadding: const EdgeInsets.all(AppSpacing.pageMargin),
+      backgroundColor: AppColors.bgAlt,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(AppRadius.card),
+      ),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 460),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(
+            AppSpacing.pageMargin,
+            AppSpacing.cardPadding,
+            AppSpacing.pageMargin,
+            AppSpacing.cardPadding,
+          ),
+          child: Semantics(
+            liveRegion: true,
+            label: '跟读评价：$message',
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
               children: [
-                OutlinedButton.icon(onPressed: onDemo, icon: const Icon(Icons.volume_up_outlined), label: const Text('听示范')),
-                OutlinedButton.icon(onPressed: onMyRecording, icon: const Icon(Icons.play_arrow_rounded), label: const Text('听我的录音')),
-                OutlinedButton.icon(onPressed: onRepeat, icon: const Icon(Icons.replay_rounded), label: const Text('再读一次')),
-                FilledButton.icon(onPressed: onNext, icon: const Icon(Icons.arrow_forward_rounded), label: const Text('下一句')),
+                const Icon(Icons.celebration_rounded,
+                    color: AppColors.accent, size: 34),
+                const SizedBox(height: AppSpacing.unit),
+                _Stars(stars: score.stars),
+                const SizedBox(height: AppSpacing.unit),
+                Text(
+                  message,
+                  style: const TextStyle(
+                    fontSize: 24,
+                    fontWeight: FontWeight.w800,
+                    color: AppColors.primaryDark,
+                  ),
+                ),
+                const SizedBox(height: AppSpacing.cardPadding),
+                _ScoredSentence(sentence: sentence, scores: score.words),
+                const SizedBox(height: AppSpacing.cardPadding),
+                Wrap(
+                  spacing: AppSpacing.unit,
+                  runSpacing: AppSpacing.unit,
+                  alignment: WrapAlignment.center,
+                  children: [
+                    OutlinedButton.icon(
+                      onPressed: onDemo,
+                      icon: const Icon(Icons.volume_up_outlined),
+                      label: const Text('听示范'),
+                    ),
+                    OutlinedButton.icon(
+                      onPressed: onRepeat,
+                      icon: const Icon(Icons.replay_rounded),
+                      label: const Text('再读一次'),
+                    ),
+                    FilledButton.icon(
+                      onPressed: onNext,
+                      icon: const Icon(Icons.arrow_forward_rounded),
+                      label: const Text('下一句'),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: AppSpacing.unit),
+                _ScoreDetails(score: score),
               ],
             ),
-            const SizedBox(height: AppSpacing.unit),
-            _ScoreDetails(score: score),
-          ],
+          ),
         ),
       ),
     );
@@ -1153,7 +1372,14 @@ class _Stars extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Row(
         mainAxisSize: MainAxisSize.min,
-        children: List.generate(5, (index) => Icon(index + 1 <= stars ? Icons.star_rounded : Icons.star_outline_rounded, color: AppColors.highlightBorder, size: 38)),
+        children: List.generate(
+            5,
+            (index) => Icon(
+                index + 1 <= stars
+                    ? Icons.star_rounded
+                    : Icons.star_outline_rounded,
+                color: AppColors.highlightBorder,
+                size: 38)),
       );
 }
 
@@ -1163,8 +1389,14 @@ class _ScoredSentence extends StatelessWidget {
   final List<WordScore> scores;
   @override
   Widget build(BuildContext context) {
-    final failed = scores.where((score) => score.isError).map((score) => score.word.toLowerCase()).toSet();
-    final words = RegExp(r'\S+').allMatches(sentence.text).map((match) => match.group(0)!).toList();
+    final failed = scores
+        .where((score) => score.isError)
+        .map((score) => score.word.toLowerCase())
+        .toSet();
+    final words = RegExp(r'\S+')
+        .allMatches(sentence.text)
+        .map((match) => match.group(0)!)
+        .toList();
     return Wrap(
       alignment: WrapAlignment.center,
       children: [
@@ -1176,8 +1408,14 @@ class _ScoredSentence extends StatelessWidget {
               style: TextStyle(
                 fontSize: 22,
                 fontWeight: FontWeight.w600,
-                color: failed.contains(word.replaceAll(RegExp(r'[^A-Za-z]'), '').toLowerCase()) ? AppColors.danger : AppColors.textPrimary,
-                decoration: failed.contains(word.replaceAll(RegExp(r'[^A-Za-z]'), '').toLowerCase()) ? TextDecoration.underline : null,
+                color: failed.contains(
+                        word.replaceAll(RegExp(r'[^A-Za-z]'), '').toLowerCase())
+                    ? AppColors.danger
+                    : AppColors.textPrimary,
+                decoration: failed.contains(
+                        word.replaceAll(RegExp(r'[^A-Za-z]'), '').toLowerCase())
+                    ? TextDecoration.underline
+                    : null,
                 decorationColor: AppColors.danger,
                 decorationThickness: 2,
               ),
@@ -1193,7 +1431,8 @@ class _ScoreDetails extends StatelessWidget {
   final ScoreResult score;
   @override
   Widget build(BuildContext context) => ExpansionTile(
-        title: const Text('家长查看详情', style: TextStyle(fontSize: 14, color: AppColors.textSecondary)),
+        title: const Text('家长查看详情',
+            style: TextStyle(fontSize: 14, color: AppColors.textSecondary)),
         children: [
           Padding(
             padding: const EdgeInsets.only(bottom: AppSpacing.unit),
@@ -1211,7 +1450,8 @@ class _ScoreDetails extends StatelessWidget {
           ),
         ],
       );
-  Widget _detail(String label, double? value) => Text('$label ${value?.round() ?? '—'}');
+  Widget _detail(String label, double? value) =>
+      Text('$label ${value?.round() ?? '—'}');
 }
 
 class _SubtitleText extends StatelessWidget {

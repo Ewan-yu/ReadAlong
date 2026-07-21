@@ -12,6 +12,7 @@ import '../../services/scoring/scoring_provider.dart';
 import '../../services/scoring/xfyun_ise_provider.dart';
 import '../reader/point_reading_models.dart';
 import '../reader/sentence_audio_player.dart';
+import '../reader/subtitle_timing.dart' as subtitle_timing;
 
 enum FollowReadingPhase {
   idle,
@@ -30,6 +31,9 @@ final class FollowReadingState {
     this.result,
     this.elapsed = Duration.zero,
     this.level = 0,
+    this.playbackPosition = Duration.zero,
+    this.playbackDuration = Duration.zero,
+    this.activeWordIndex,
     this.failure,
   });
 
@@ -39,6 +43,9 @@ final class FollowReadingState {
   final ScoreResult? result;
   final Duration elapsed;
   final double level;
+  final Duration playbackPosition;
+  final Duration playbackDuration;
+  final int? activeWordIndex;
   final String? failure;
 
   bool get isRecording => phase == FollowReadingPhase.recording;
@@ -51,6 +58,9 @@ final class FollowReadingState {
     Object? result = _unset,
     Duration? elapsed,
     double? level,
+    Duration? playbackPosition,
+    Duration? playbackDuration,
+    Object? activeWordIndex = _unset,
     Object? failure = _unset,
   }) =>
       FollowReadingState(
@@ -58,10 +68,17 @@ final class FollowReadingState {
         sentence: identical(sentence, _unset)
             ? this.sentence
             : sentence as ReaderSentence?,
-        record: identical(record, _unset) ? this.record : record as ReadingRecord?,
-        result: identical(result, _unset) ? this.result : result as ScoreResult?,
+        record:
+            identical(record, _unset) ? this.record : record as ReadingRecord?,
+        result:
+            identical(result, _unset) ? this.result : result as ScoreResult?,
         elapsed: elapsed ?? this.elapsed,
         level: level ?? this.level,
+        playbackPosition: playbackPosition ?? this.playbackPosition,
+        playbackDuration: playbackDuration ?? this.playbackDuration,
+        activeWordIndex: identical(activeWordIndex, _unset)
+            ? this.activeWordIndex
+            : activeWordIndex as int?,
         failure: identical(failure, _unset) ? this.failure : failure as String?,
       );
 }
@@ -124,16 +141,30 @@ final class FollowReadingController
     final generation = ++_generation;
     _setState(current.copyWith(
       phase: FollowReadingPhase.demonstrating,
+      playbackPosition: Duration.zero,
+      playbackDuration: sentence.audio.end - sentence.audio.start,
+      activeWordIndex: subtitle_timing.activeWordIndex(sentence, Duration.zero),
       failure: null,
     ));
     try {
       await _player.stop();
       if (!_isCurrent(generation)) return;
-      await _player.play(sentence.audio);
+      await _player.play(
+        sentence.audio,
+        onPosition: (elapsed) => _handleDemonstrationPosition(
+          generation,
+          sentence,
+          elapsed,
+        ),
+      );
       if (!_isCurrent(generation)) return;
       final latest = state.valueOrNull;
       if (latest != null) {
-        _setState(latest.copyWith(phase: FollowReadingPhase.idle));
+        _setState(latest.copyWith(
+          phase: FollowReadingPhase.idle,
+          playbackPosition: latest.playbackDuration,
+          activeWordIndex: null,
+        ));
       }
     } on Object {
       if (!_isCurrent(generation)) return;
@@ -141,6 +172,7 @@ final class FollowReadingController
       if (latest != null) {
         _setState(latest.copyWith(
           phase: FollowReadingPhase.failed,
+          activeWordIndex: null,
           failure: '示范音暂时无法播放，请重新导入绘本后再试',
         ));
       }
@@ -170,6 +202,9 @@ final class FollowReadingController
         result: null,
         elapsed: Duration.zero,
         level: 0,
+        playbackPosition: Duration.zero,
+        playbackDuration: Duration.zero,
+        activeWordIndex: null,
         failure: null,
       ));
       _levels = session.levels.listen((level) {
@@ -235,7 +270,9 @@ final class FollowReadingController
   Future<void> retryScoring() async {
     final current = state.valueOrNull;
     final record = current?.record;
-    if (current == null || record == null || current.phase != FollowReadingPhase.failed) {
+    if (current == null ||
+        record == null ||
+        current.phase != FollowReadingPhase.failed) {
       return;
     }
     final generation = ++_generation;
@@ -244,6 +281,18 @@ final class FollowReadingController
       failure: null,
     ));
     await _score(record, generation);
+  }
+
+  /// The score is persisted before it is presented.  Dismissing the child
+  /// result dialog only returns the reading controls to their ready state.
+  void acknowledgeResult() {
+    final current = state.valueOrNull;
+    if (current == null || current.phase != FollowReadingPhase.scored) return;
+    _setState(current.copyWith(
+      phase: FollowReadingPhase.idle,
+      result: null,
+      failure: null,
+    ));
   }
 
   Future<void> playMyRecording() async {
@@ -350,6 +399,29 @@ final class FollowReadingController
       phase: FollowReadingPhase.failed,
       failure: message,
       level: 0,
+      activeWordIndex: null,
+    ));
+  }
+
+  void _handleDemonstrationPosition(
+    int generation,
+    ReaderSentence sentence,
+    Duration elapsed,
+  ) {
+    if (!_isCurrent(generation)) return;
+    final current = state.valueOrNull;
+    if (current == null ||
+        current.phase != FollowReadingPhase.demonstrating ||
+        current.sentence?.id != sentence.id) {
+      return;
+    }
+    final position = subtitle_timing.clampPlaybackPosition(
+      elapsed,
+      current.playbackDuration,
+    );
+    _setState(current.copyWith(
+      playbackPosition: position,
+      activeWordIndex: subtitle_timing.activeWordIndex(sentence, position),
     ));
   }
 

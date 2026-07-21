@@ -37,6 +37,8 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  assets:
+    - assets/audio/encouragement/
 
 # The Flutter 3.24 / AGP 8.1 template needs the mutually-compatible 5.1
 # platform set. Newer record plugins require AGP 8.5+ and currently resolve
