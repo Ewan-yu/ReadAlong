@@ -868,23 +868,60 @@ void main() {
     expect(find.byType(Slider), findsNothing);
   });
 
-  testWidgets('跟读面板固定尺寸并隔离重绘以保护低性能模拟器', (tester) async {
+  testWidgets('点读与跟读面板等高并隔离重绘以保护低性能模拟器', (tester) async {
     final book = await prepareBook(tester, pageCount: 1);
-    await pumpReader(tester, book: Future.value(book));
+    final pointBook = PointReadingBook(
+      libraryId: book.libraryId,
+      sentences: [
+        sentence(
+          id: 'stable-panel',
+          sequence: 1,
+          text: 'A stable reading panel.',
+          bbox: const NormalizedRect(
+            x: 0.1,
+            y: 0.2,
+            width: 0.3,
+            height: 0.1,
+          ),
+        ),
+      ],
+    );
+    await pumpReader(
+      tester,
+      book: Future.value(book),
+      pointReadingBook: Future.value(pointBook),
+    );
     await tester.pumpAndSettle();
+
+    await tapNormalized(
+      tester,
+      pageNumber: 1,
+      normalized: const Offset(0.2, 0.25),
+    );
+
+    final pointPanel = find.byKey(const ValueKey('point-stable-panel'));
+    expect(pointPanel, findsOneWidget);
+    final pointPanelHeight = tester.getSize(pointPanel).height;
+    expect(
+      pointPanelHeight,
+      inInclusiveRange(
+        AppSizes.readerControlPanelMinHeight,
+        AppSizes.readerControlPanelMaxHeight,
+      ),
+    );
 
     await tester.tap(find.text('跟读'));
     await tester.pump();
 
-    final panel = find.byKey(const ValueKey('follow-stable-panel'));
-    expect(panel, findsOneWidget);
-    expect(tester.getSize(panel).height, inInclusiveRange(196, 268));
+    final followPanel = find.byKey(const ValueKey('follow-stable-panel'));
+    expect(followPanel, findsOneWidget);
+    expect(tester.getSize(followPanel).height, pointPanelHeight);
     expect(
-      find.descendant(of: panel, matching: find.byType(RepaintBoundary)),
+      find.descendant(of: followPanel, matching: find.byType(RepaintBoundary)),
       findsWidgets,
     );
     expect(
-      find.descendant(of: panel, matching: find.byType(AnimatedSize)),
+      find.descendant(of: followPanel, matching: find.byType(AnimatedSize)),
       findsNothing,
     );
     expect(tester.takeException(), isNull);

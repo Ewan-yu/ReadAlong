@@ -452,46 +452,48 @@ class _ReaderViewState extends ConsumerState<_ReaderView> {
             );
           }
           final compact = constraints.maxWidth < AppSizes.readerWideLayout;
-          final followPanelHeight =
+          final controlPanelHeight =
               (constraints.maxHeight * (compact ? 0.36 : 0.31))
-                  .clamp(196.0, 268.0)
+                  .clamp(
+                    AppSizes.readerControlPanelMinHeight,
+                    AppSizes.readerControlPanelMaxHeight,
+                  )
                   .toDouble();
           return Column(
             children: [
               Expanded(child: readerArea),
-              if (_mode == _ReaderMode.point)
-                AnimatedSize(
-                  duration: const Duration(milliseconds: 180),
-                  curve: Curves.easeOut,
-                  child: pointReading.valueOrNull?.subtitleSentence == null
-                      ? const SizedBox.shrink()
-                      : _ReaderSubtitleBand(
-                          state: pointReading.requireValue,
-                          onReplay: () => unawaited(
-                            ref
-                                .read(pointReadingProvider.notifier)
-                                .replaySubtitleSentence(),
-                          ),
-                          onFollow: () {
-                            final sentence =
-                                pointReading.valueOrNull?.subtitleSentence;
-                            if (sentence == null) return;
-                            final controller = ref.read(
-                              followReadingProvider.notifier,
-                            );
-                            controller.selectSentence(sentence);
-                            setState(() => _mode = _ReaderMode.follow);
-                            unawaited(controller.playDemonstration());
-                          },
-                          compact: compact,
-                          maxHeight:
-                              (constraints.maxHeight * 0.42).clamp(0.0, 280.0),
-                        ),
+              if (_mode == _ReaderMode.point &&
+                  pointReading.valueOrNull?.subtitleSentence != null)
+                SizedBox(
+                  key: const ValueKey('point-stable-panel'),
+                  height: controlPanelHeight,
+                  child: RepaintBoundary(
+                    child: _ReaderSubtitleBand(
+                      state: pointReading.requireValue,
+                      onReplay: () => unawaited(
+                        ref
+                            .read(pointReadingProvider.notifier)
+                            .replaySubtitleSentence(),
+                      ),
+                      onFollow: () {
+                        final sentence =
+                            pointReading.valueOrNull?.subtitleSentence;
+                        if (sentence == null) return;
+                        final controller = ref.read(
+                          followReadingProvider.notifier,
+                        );
+                        controller.selectSentence(sentence);
+                        setState(() => _mode = _ReaderMode.follow);
+                        unawaited(controller.playDemonstration());
+                      },
+                      compact: compact,
+                    ),
+                  ),
                 )
-              else
+              else if (_mode == _ReaderMode.follow)
                 SizedBox(
                   key: const ValueKey('follow-stable-panel'),
-                  height: followPanelHeight,
+                  height: controlPanelHeight,
                   child: RepaintBoundary(
                     child: Consumer(
                       builder: (context, panelRef, _) {
@@ -818,14 +820,12 @@ class _ReaderSubtitleBand extends StatelessWidget {
     required this.onReplay,
     required this.onFollow,
     required this.compact,
-    required this.maxHeight,
   });
 
   final PointReadingState state;
   final VoidCallback onReplay;
   final VoidCallback onFollow;
   final bool compact;
-  final double maxHeight;
 
   @override
   Widget build(BuildContext context) {
@@ -839,10 +839,94 @@ class _ReaderSubtitleBand extends StatelessWidget {
       state.playbackPosition,
       state.playbackDuration,
     );
-    return ConstrainedBox(
+    return _ReaderControlPanelFrame(
       key: const ValueKey('reader-subtitle-band'),
-      constraints: BoxConstraints(maxHeight: maxHeight),
-      child: DecoratedBox(
+      child: Padding(
+        padding: EdgeInsets.symmetric(
+          horizontal: compact ? AppSpacing.cardPadding : AppSpacing.pageMargin,
+          vertical: compact ? AppSpacing.unit : AppSpacing.cardPadding,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Semantics(
+              label: sentence.text,
+              container: true,
+              child: ExcludeSemantics(
+                child: _SubtitleText(
+                  sentence: sentence,
+                  segments: segments,
+                  activeWordIndex: state.activeWordIndex,
+                  fontSize: fontSize,
+                ),
+              ),
+            ),
+            const SizedBox(height: AppSpacing.unit),
+            Row(
+              children: [
+                SizedBox(
+                  width: 48,
+                  child: Text(
+                    _formatPlaybackTime(state.playbackPosition),
+                    key: const ValueKey('reader-subtitle-elapsed'),
+                    style: const TextStyle(color: AppColors.textSecondary),
+                  ),
+                ),
+                Expanded(
+                  child: LinearProgressIndicator(
+                    key: const ValueKey('reader-subtitle-progress'),
+                    value: progress,
+                    minHeight: 5,
+                    color: AppColors.primary,
+                    backgroundColor: AppColors.border,
+                    borderRadius: BorderRadius.circular(3),
+                  ),
+                ),
+                SizedBox(
+                  width: 48,
+                  child: Text(
+                    _formatPlaybackTime(state.playbackDuration),
+                    key: const ValueKey('reader-subtitle-duration'),
+                    textAlign: TextAlign.end,
+                    style: const TextStyle(color: AppColors.textSecondary),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: AppSpacing.unit),
+            Wrap(
+              spacing: AppSpacing.unit,
+              runSpacing: AppSpacing.unit,
+              alignment: WrapAlignment.center,
+              children: [
+                OutlinedButton.icon(
+                  key: const ValueKey('reader-replay-sentence'),
+                  onPressed: onReplay,
+                  icon: const Icon(Icons.replay),
+                  label: Text(state.isPlaying ? '重新播放' : '重播本句'),
+                ),
+                FilledButton.icon(
+                  key: const ValueKey('reader-follow-sentence'),
+                  onPressed: onFollow,
+                  icon: const Icon(Icons.mic_none_rounded),
+                  label: const Text('跟读这句'),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ReaderControlPanelFrame extends StatelessWidget {
+  const _ReaderControlPanelFrame({super.key, required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) => DecoratedBox(
         decoration: const BoxDecoration(
           color: AppColors.bgAlt,
           border: Border(top: BorderSide(color: AppColors.border)),
@@ -857,89 +941,17 @@ class _ReaderSubtitleBand extends StatelessWidget {
             ),
           ],
         ),
-        child: Padding(
-          padding: EdgeInsets.symmetric(
-            horizontal:
-                compact ? AppSpacing.cardPadding : AppSpacing.pageMargin,
-            vertical: compact ? AppSpacing.unit : AppSpacing.cardPadding,
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Flexible(
-                child: SingleChildScrollView(
-                  child: Semantics(
-                    label: sentence.text,
-                    container: true,
-                    child: ExcludeSemantics(
-                      child: _SubtitleText(
-                        sentence: sentence,
-                        segments: segments,
-                        activeWordIndex: state.activeWordIndex,
-                        fontSize: fontSize,
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(height: AppSpacing.unit),
-              Row(
-                children: [
-                  SizedBox(
-                    width: 48,
-                    child: Text(
-                      _formatPlaybackTime(state.playbackPosition),
-                      key: const ValueKey('reader-subtitle-elapsed'),
-                      style: const TextStyle(color: AppColors.textSecondary),
-                    ),
-                  ),
-                  Expanded(
-                    child: LinearProgressIndicator(
-                      key: const ValueKey('reader-subtitle-progress'),
-                      value: progress,
-                      minHeight: 5,
-                      color: AppColors.primary,
-                      backgroundColor: AppColors.border,
-                      borderRadius: BorderRadius.circular(3),
-                    ),
-                  ),
-                  SizedBox(
-                    width: 48,
-                    child: Text(
-                      _formatPlaybackTime(state.playbackDuration),
-                      key: const ValueKey('reader-subtitle-duration'),
-                      textAlign: TextAlign.end,
-                      style: const TextStyle(color: AppColors.textSecondary),
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: AppSpacing.unit),
-              Wrap(
-                spacing: AppSpacing.unit,
-                runSpacing: AppSpacing.unit,
-                alignment: WrapAlignment.center,
-                children: [
-                  OutlinedButton.icon(
-                    key: const ValueKey('reader-replay-sentence'),
-                    onPressed: onReplay,
-                    icon: const Icon(Icons.replay),
-                    label: Text(state.isPlaying ? '重新播放' : '重播本句'),
-                  ),
-                  FilledButton.icon(
-                    key: const ValueKey('reader-follow-sentence'),
-                    onPressed: onFollow,
-                    icon: const Icon(Icons.mic_none_rounded),
-                    label: const Text('跟读这句'),
-                  ),
-                ],
-              ),
-            ],
+        child: LayoutBuilder(
+          builder: (context, constraints) => SingleChildScrollView(
+            primary: false,
+            physics: const ClampingScrollPhysics(),
+            child: ConstrainedBox(
+              constraints: BoxConstraints(minHeight: constraints.maxHeight),
+              child: Center(child: child),
+            ),
           ),
         ),
-      ),
-    );
-  }
+      );
 }
 
 enum _ReaderMode { point, follow }
@@ -1055,13 +1067,13 @@ class _FollowReadingPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => state.when(
-        loading: () => const _FollowPanelFrame(
+        loading: () => const _ReaderControlPanelFrame(
           child: Padding(
             padding: EdgeInsets.all(AppSpacing.cardPadding),
             child: CircularProgressIndicator(),
           ),
         ),
-        error: (_, __) => const _FollowPanelFrame(
+        error: (_, __) => const _ReaderControlPanelFrame(
           child: Padding(
             padding: EdgeInsets.all(AppSpacing.cardPadding),
             child: Text('跟读功能暂时无法准备好，请稍后再试'),
@@ -1073,7 +1085,7 @@ class _FollowReadingPanel extends StatelessWidget {
   Widget _buildContent(BuildContext context, FollowReadingState value) {
     final sentence = value.sentence;
     if (sentence == null) {
-      return const _FollowPanelFrame(
+      return const _ReaderControlPanelFrame(
         child: Padding(
           padding: EdgeInsets.all(AppSpacing.cardPadding),
           child: Row(
@@ -1088,7 +1100,7 @@ class _FollowReadingPanel extends StatelessWidget {
       );
     }
     if (value.phase == FollowReadingPhase.scoring) {
-      return _FollowPanelFrame(
+      return _ReaderControlPanelFrame(
         child: Padding(
           padding: const EdgeInsets.all(AppSpacing.cardPadding),
           child: Column(
@@ -1107,7 +1119,7 @@ class _FollowReadingPanel extends StatelessWidget {
       );
     }
     if (value.phase == FollowReadingPhase.recording) {
-      return _FollowPanelFrame(
+      return _ReaderControlPanelFrame(
         child: Padding(
           padding: const EdgeInsets.all(AppSpacing.cardPadding),
           child: Column(
@@ -1145,7 +1157,7 @@ class _FollowReadingPanel extends StatelessWidget {
       // The result itself is presented in a focused confirmation dialog.
       // Keep this panel quiet and stable behind it so the reading canvas does
       // not jump while the child is receiving feedback.
-      return _FollowPanelFrame(
+      return _ReaderControlPanelFrame(
         child: Padding(
           padding: const EdgeInsets.all(AppSpacing.cardPadding),
           child: Column(
@@ -1160,7 +1172,7 @@ class _FollowReadingPanel extends StatelessWidget {
       );
     }
     if (value.phase == FollowReadingPhase.failed) {
-      return _FollowPanelFrame(
+      return _ReaderControlPanelFrame(
         child: Padding(
           padding: const EdgeInsets.all(AppSpacing.cardPadding),
           child: Column(
@@ -1192,7 +1204,7 @@ class _FollowReadingPanel extends StatelessWidget {
         ),
       );
     }
-    return _FollowPanelFrame(
+    return _ReaderControlPanelFrame(
       child: Padding(
         padding: const EdgeInsets.all(AppSpacing.cardPadding),
         child: Column(
@@ -1249,34 +1261,6 @@ class _FollowReadingPanel extends StatelessWidget {
       ),
     );
   }
-}
-
-class _FollowPanelFrame extends StatelessWidget {
-  const _FollowPanelFrame({required this.child});
-  final Widget child;
-  @override
-  Widget build(BuildContext context) => DecoratedBox(
-        decoration: const BoxDecoration(
-          color: AppColors.bgAlt,
-          border: Border(top: BorderSide(color: AppColors.border)),
-          borderRadius: BorderRadius.vertical(
-              top: Radius.circular(AppRadius.subtitleBar)),
-          boxShadow: [
-            BoxShadow(
-                color: AppColors.scrim, blurRadius: 16, offset: Offset(0, -3))
-          ],
-        ),
-        child: LayoutBuilder(
-          builder: (context, constraints) => SingleChildScrollView(
-            primary: false,
-            physics: const ClampingScrollPhysics(),
-            child: ConstrainedBox(
-              constraints: BoxConstraints(minHeight: constraints.maxHeight),
-              child: Center(child: child),
-            ),
-          ),
-        ),
-      );
 }
 
 class _FollowSentenceText extends StatelessWidget {
