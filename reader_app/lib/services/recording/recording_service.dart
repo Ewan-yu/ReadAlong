@@ -64,6 +64,7 @@ final class RecordAudioRecordingService implements AudioRecordingService {
   StreamSubscription<Amplitude>? _amplitudeSubscription;
   StreamController<RecordingLevel>? _levelController;
   String? _activePath;
+  Future<String>? _stopOperation;
   var _disposed = false;
 
   @override
@@ -124,7 +125,18 @@ final class RecordAudioRecordingService implements AudioRecordingService {
   }
 
   @override
-  Future<String> stop() async {
+  Future<String> stop() {
+    final activeOperation = _stopOperation;
+    if (activeOperation != null) return activeOperation;
+    late final Future<String> operation;
+    operation = _stopInternal().whenComplete(() {
+      if (identical(_stopOperation, operation)) _stopOperation = null;
+    });
+    _stopOperation = operation;
+    return operation;
+  }
+
+  Future<String> _stopInternal() async {
     if (_disposed) throw const RecordingException('录音服务已关闭');
     try {
       final path = await _recorder.stop();
@@ -232,7 +244,10 @@ WavPcmData parseWavPcm16(Uint8List bytes) {
     }
     offset = dataOffset + length + (length.isOdd ? 1 : 0);
   }
-  if (sampleRate != 16000 || channels != 1 || bitsPerSample != 16 || pcm == null) {
+  if (sampleRate != 16000 ||
+      channels != 1 ||
+      bitsPerSample != 16 ||
+      pcm == null) {
     throw const RecordingException('录音格式不正确，请重新录一次');
   }
   return WavPcmData(

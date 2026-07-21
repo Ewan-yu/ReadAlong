@@ -100,6 +100,7 @@ final class FollowReadingController
   Timer? _limitTimer;
   Timer? _silenceTimer;
   Stopwatch? _stopwatch;
+  var _stoppingRecording = false;
   var _generation = 0;
   var _disposed = false;
 
@@ -235,11 +236,24 @@ final class FollowReadingController
   Future<void> stopRecording() async {
     final current = state.valueOrNull;
     final sentence = current?.sentence;
-    if (current == null || sentence == null || !current.isRecording) return;
+    if (current == null ||
+        sentence == null ||
+        !current.isRecording ||
+        _stoppingRecording) {
+      return;
+    }
+    // The silence timer and the visible stop button may fire in the same
+    // frame.  Native MediaRecorder is not safe to stop twice concurrently.
+    _stoppingRecording = true;
     final generation = _generation;
     _stopwatch?.stop();
-    await _stopTimersAndLevels();
     try {
+      _setState(current.copyWith(
+        phase: FollowReadingPhase.scoring,
+        elapsed: _stopwatch?.elapsed ?? current.elapsed,
+        level: 0,
+      ));
+      await _stopTimersAndLevels();
       final audioPath = await _recorder.stop();
       if (!_isCurrent(generation)) return;
       final record = await _records.createRecord(
@@ -264,6 +278,8 @@ final class FollowReadingController
       if (_isCurrent(generation)) _setFailure(error.message);
     } on Object {
       if (_isCurrent(generation)) _setFailure('录音没有保存成功，请再试一次');
+    } finally {
+      _stoppingRecording = false;
     }
   }
 
