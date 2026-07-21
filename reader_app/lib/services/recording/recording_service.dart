@@ -106,7 +106,7 @@ final class RecordAudioRecordingService implements AudioRecordingService {
       _activePath = path;
       _levelController = levels;
       _amplitudeSubscription = _recorder
-          .onAmplitudeChanged(const Duration(milliseconds: 120))
+          .onAmplitudeChanged(const Duration(milliseconds: 200))
           .listen((amplitude) {
         if (!levels.isClosed) {
           // -60dBFS is close to silence for a child-facing meter.

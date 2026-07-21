@@ -180,8 +180,8 @@ final class _JustAudioSentenceAudioEngine implements SentenceAudioEngine {
 
   @override
   Stream<Duration> get positionStream => _player.createPositionStream(
-        minPeriod: const Duration(milliseconds: 60),
-        maxPeriod: const Duration(milliseconds: 60),
+        minPeriod: const Duration(milliseconds: 100),
+        maxPeriod: const Duration(milliseconds: 100),
       );
 
   @override

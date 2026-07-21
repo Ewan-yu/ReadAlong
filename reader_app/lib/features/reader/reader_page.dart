@@ -258,10 +258,12 @@ class _ReaderViewState extends ConsumerState<_ReaderView> {
   }
 
   void _precacheAround(int index) {
-    for (final candidate in [index - 1, index, index + 1]) {
+    // The visible page loads itself. Prefetch only the likely next page so a
+    // three-page full-resolution cache cannot overwhelm emulator GPU bridges.
+    for (final candidate in [index + 1]) {
       if (candidate < 0 || candidate >= widget.book.pages.length) continue;
       precacheImage(
-        FileImage(File(widget.book.pages[candidate].imagePath)),
+        _readerPageImage(widget.book.pages[candidate]),
         context,
         onError: (_, __) {},
       );
@@ -286,10 +288,12 @@ class _ReaderViewState extends ConsumerState<_ReaderView> {
       followReadingProvider,
       _handleFollowReadingFeedback,
     );
-    final followReading = ref.watch(followReadingProvider);
+    final followSentence = ref.watch(
+      followReadingProvider.select((value) => value.valueOrNull?.sentence),
+    );
     final activeSentence = _mode == _ReaderMode.point
         ? pointReading.valueOrNull?.activeSentence
-        : followReading.valueOrNull?.sentence;
+        : followSentence;
     final pageView = PageView.builder(
       key: const ValueKey('reader-page-view'),
       controller: _pageController,
@@ -354,8 +358,9 @@ class _ReaderViewState extends ConsumerState<_ReaderView> {
                           ),
                         ),
                       ),
-                      Image.file(
-                        imageFile,
+                      Image(
+                        key: ValueKey('reader-page-image-${page.pageNumber}'),
+                        image: _readerPageImage(page),
                         fit: BoxFit.contain,
                         errorBuilder: (_, __, ___) => _MissingReaderPage(
                           pageNumber: page.pageNumber,
@@ -446,66 +451,82 @@ class _ReaderViewState extends ConsumerState<_ReaderView> {
               ],
             );
           }
+          final compact = constraints.maxWidth < AppSizes.readerWideLayout;
+          final followPanelHeight =
+              (constraints.maxHeight * (compact ? 0.36 : 0.31))
+                  .clamp(196.0, 268.0)
+                  .toDouble();
           return Column(
             children: [
               Expanded(child: readerArea),
-              AnimatedSize(
-                duration: const Duration(milliseconds: 180),
-                curve: Curves.easeOut,
-                child: _mode == _ReaderMode.point
-                    ? pointReading.valueOrNull?.subtitleSentence == null
-                        ? const SizedBox.shrink()
-                        : _ReaderSubtitleBand(
-                            state: pointReading.requireValue,
-                            onReplay: () => unawaited(
-                              ref
-                                  .read(pointReadingProvider.notifier)
-                                  .replaySubtitleSentence(),
-                            ),
-                            onFollow: () {
-                              final sentence =
-                                  pointReading.valueOrNull?.subtitleSentence;
-                              if (sentence == null) return;
-                              final controller = ref.read(
-                                followReadingProvider.notifier,
-                              );
-                              controller.selectSentence(sentence);
-                              setState(() => _mode = _ReaderMode.follow);
-                              unawaited(controller.playDemonstration());
-                            },
-                            compact: constraints.maxWidth <
-                                AppSizes.readerWideLayout,
-                            maxHeight: (constraints.maxHeight * 0.42)
-                                .clamp(0.0, 280.0),
-                          )
-                    : _FollowReadingPanel(
-                        state: followReading,
-                        compact:
-                            constraints.maxWidth < AppSizes.readerWideLayout,
-                        onDemo: () => unawaited(ref
-                            .read(followReadingProvider.notifier)
-                            .playDemonstration()),
-                        onRecord: () => unawaited(ref
-                            .read(followReadingProvider.notifier)
-                            .startRecording()),
-                        onStop: () => unawaited(ref
-                            .read(followReadingProvider.notifier)
-                            .stopRecording()),
-                        onRetry: () => unawaited(ref
-                            .read(followReadingProvider.notifier)
-                            .retryScoring()),
-                        onMyRecording: () => unawaited(ref
-                            .read(followReadingProvider.notifier)
-                            .playMyRecording()),
-                        onRepeat: () => unawaited(ref
-                            .read(followReadingProvider.notifier)
-                            .startRecording()),
-                        onNext: () => _nextFollowSentence(
-                          pointReading.valueOrNull,
-                          followReading.valueOrNull?.sentence,
+              if (_mode == _ReaderMode.point)
+                AnimatedSize(
+                  duration: const Duration(milliseconds: 180),
+                  curve: Curves.easeOut,
+                  child: pointReading.valueOrNull?.subtitleSentence == null
+                      ? const SizedBox.shrink()
+                      : _ReaderSubtitleBand(
+                          state: pointReading.requireValue,
+                          onReplay: () => unawaited(
+                            ref
+                                .read(pointReadingProvider.notifier)
+                                .replaySubtitleSentence(),
+                          ),
+                          onFollow: () {
+                            final sentence =
+                                pointReading.valueOrNull?.subtitleSentence;
+                            if (sentence == null) return;
+                            final controller = ref.read(
+                              followReadingProvider.notifier,
+                            );
+                            controller.selectSentence(sentence);
+                            setState(() => _mode = _ReaderMode.follow);
+                            unawaited(controller.playDemonstration());
+                          },
+                          compact: compact,
+                          maxHeight:
+                              (constraints.maxHeight * 0.42).clamp(0.0, 280.0),
                         ),
-                      ),
-              ),
+                )
+              else
+                SizedBox(
+                  key: const ValueKey('follow-stable-panel'),
+                  height: followPanelHeight,
+                  child: RepaintBoundary(
+                    child: Consumer(
+                      builder: (context, panelRef, _) {
+                        final followReading =
+                            panelRef.watch(followReadingProvider);
+                        return _FollowReadingPanel(
+                          state: followReading,
+                          compact: compact,
+                          onDemo: () => unawaited(panelRef
+                              .read(followReadingProvider.notifier)
+                              .playDemonstration()),
+                          onRecord: () => unawaited(panelRef
+                              .read(followReadingProvider.notifier)
+                              .startRecording()),
+                          onStop: () => unawaited(panelRef
+                              .read(followReadingProvider.notifier)
+                              .stopRecording()),
+                          onRetry: () => unawaited(panelRef
+                              .read(followReadingProvider.notifier)
+                              .retryScoring()),
+                          onMyRecording: () => unawaited(panelRef
+                              .read(followReadingProvider.notifier)
+                              .playMyRecording()),
+                          onRepeat: () => unawaited(panelRef
+                              .read(followReadingProvider.notifier)
+                              .startRecording()),
+                          onNext: () => _nextFollowSentence(
+                            pointReading.valueOrNull,
+                            followReading.valueOrNull?.sentence,
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ),
             ],
           );
         },
@@ -711,6 +732,11 @@ class _ReaderViewState extends ConsumerState<_ReaderView> {
     });
   }
 }
+
+ImageProvider<Object> _readerPageImage(ReaderPageData page) => ResizeImage(
+      FileImage(File(page.imagePath)),
+      width: page.widthPx.clamp(1, 2048),
+    );
 
 class _ReaderHighlight extends StatelessWidget {
   const _ReaderHighlight({required this.sentence, required this.imageRect});
@@ -1068,7 +1094,11 @@ class _FollowReadingPanel extends StatelessWidget {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const CircularProgressIndicator(),
+              const Icon(
+                Icons.hearing_rounded,
+                size: 36,
+                color: AppColors.primary,
+              ),
               const SizedBox(height: AppSpacing.unit),
               const Text('录音已收到，正在评分…'),
             ],
@@ -1236,7 +1266,16 @@ class _FollowPanelFrame extends StatelessWidget {
                 color: AppColors.scrim, blurRadius: 16, offset: Offset(0, -3))
           ],
         ),
-        child: Center(child: child),
+        child: LayoutBuilder(
+          builder: (context, constraints) => SingleChildScrollView(
+            primary: false,
+            physics: const ClampingScrollPhysics(),
+            child: ConstrainedBox(
+              constraints: BoxConstraints(minHeight: constraints.maxHeight),
+              child: Center(child: child),
+            ),
+          ),
+        ),
       );
 }
 

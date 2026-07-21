@@ -377,20 +377,26 @@ void main() {
     expect(toggleSize.height, greaterThanOrEqualTo(AppSizes.minTouchTarget));
   });
 
-  testWidgets('首次打开只缓存当前页和下一页原图', (tester) async {
+  testWidgets('阅读页使用受限尺寸解码且不预载远端页面', (tester) async {
     final book = await prepareBook(tester);
     await pumpReader(tester, book: Future.value(book));
     await tester.pumpAndSettle();
 
     bool isCached(int page) {
       final status = PaintingBinding.instance.imageCache.statusForKey(
-        FileImage(File(book.pages[page - 1].imagePath)),
+        ResizeImage(
+          FileImage(File(book.pages[page - 1].imagePath)),
+          width: book.pages[page - 1].widthPx.clamp(1, 2048),
+        ),
       );
       return status.pending || status.live || status.keepAlive;
     }
 
-    expect(isCached(1), isTrue);
-    expect(isCached(2), isTrue);
+    final visible = tester.widget<Image>(
+      find.byKey(const ValueKey('reader-page-image-1')),
+    );
+    expect(visible.image, isA<ResizeImage>());
+    expect((visible.image as ResizeImage).width, lessThanOrEqualTo(2048));
     expect(isCached(3), isFalse);
     expect(isCached(4), isFalse);
   });
@@ -860,5 +866,27 @@ void main() {
     expect(find.text('重播本句'), findsNothing);
     expect(find.text('开始录音'), findsNothing);
     expect(find.byType(Slider), findsNothing);
+  });
+
+  testWidgets('跟读面板固定尺寸并隔离重绘以保护低性能模拟器', (tester) async {
+    final book = await prepareBook(tester, pageCount: 1);
+    await pumpReader(tester, book: Future.value(book));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('跟读'));
+    await tester.pump();
+
+    final panel = find.byKey(const ValueKey('follow-stable-panel'));
+    expect(panel, findsOneWidget);
+    expect(tester.getSize(panel).height, inInclusiveRange(196, 268));
+    expect(
+      find.descendant(of: panel, matching: find.byType(RepaintBoundary)),
+      findsWidgets,
+    );
+    expect(
+      find.descendant(of: panel, matching: find.byType(AnimatedSize)),
+      findsNothing,
+    );
+    expect(tester.takeException(), isNull);
   });
 }

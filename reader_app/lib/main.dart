@@ -5,6 +5,13 @@ import 'core/router.dart';
 import 'core/theme/tokens.dart';
 
 void main() {
+  WidgetsFlutterBinding.ensureInitialized();
+  // Full-resolution picture-book pages can easily occupy tens of megabytes
+  // each after RGBA decoding. Keep enough room for the visible page and one
+  // prefetched neighbour without pressuring emulator graphics bridges.
+  PaintingBinding.instance.imageCache
+    ..maximumSize = 24
+    ..maximumSizeBytes = 64 << 20;
   runApp(const ProviderScope(child: ReadAlongApp()));
 }
 

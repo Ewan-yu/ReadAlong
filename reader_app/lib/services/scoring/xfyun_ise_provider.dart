@@ -179,7 +179,9 @@ final class XfyunIseProvider implements ScoringProvider, IseConnectionProbe {
             },
             'data': {
               'status': isLast ? 2 : 1,
-              'data': base64.encode(pcm16k.sublist(offset, end)),
+              'data': base64.encode(
+                Uint8List.sublistView(pcm16k, offset, end),
+              ),
             },
           }),
         );
@@ -249,7 +251,7 @@ String _rfc1123(DateTime value) {
 ScoreResult parseXfyunIseXml(String source) {
   try {
     final document = XmlDocument.parse(source);
-    final elements = document.descendants.whereType<XmlElement>().toList();
+    final elements = document.descendants.whereType<XmlElement>();
     final sentence = elements.cast<XmlElement?>().firstWhere(
           (element) =>
               element?.getAttribute('fluency_score') != null &&
