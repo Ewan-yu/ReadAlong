@@ -107,7 +107,11 @@ Uint8List _wav() {
   return bytes;
 }
 
-ReaderSentence _sentence(String id) => ReaderSentence(
+ReaderSentence _sentence(
+  String id, {
+  Duration clipDuration = const Duration(seconds: 1),
+}) =>
+    ReaderSentence(
       id: id,
       pageNumber: 1,
       sequence: 1,
@@ -117,7 +121,7 @@ ReaderSentence _sentence(String id) => ReaderSentence(
       audio: SentenceAudioClip(
         path: '$id.ogg',
         start: Duration.zero,
-        end: const Duration(seconds: 1),
+        end: clipDuration,
       ),
       wordTimings: const [],
     );
@@ -167,6 +171,8 @@ void main() {
   Future<void> scoreOneTake(FollowReadingController controller) async {
     controller.selectSentence(_sentence('sentence-one'));
     await controller.startRecording();
+    expect(currentState().recordingWarmUp, const Duration(milliseconds: 700));
+    expect(currentState().recordingLimit, const Duration(seconds: 7));
     await controller.stopRecording();
     expect(currentState().phase, FollowReadingPhase.scored);
     expect(currentState().result?.childScore, 88);
@@ -189,6 +195,74 @@ void main() {
     expect(await controller.playMyRecording(), isFalse);
     expect(currentState().phase, FollowReadingPhase.scored);
     expect(await File(record.audioPath).exists(), isTrue);
+  });
+
+  test('录音时长按示范音长度缩放并保持儿童合理上下限', () {
+    final short = followRecordingTimingFor(_sentence('short'));
+    expect(short.referenceDuration, const Duration(seconds: 1));
+    expect(short.warmUpDuration, const Duration(milliseconds: 700));
+    expect(short.minimumDuration, const Duration(milliseconds: 2200));
+    expect(short.trailingSilenceDuration, const Duration(milliseconds: 1700));
+    expect(short.maximumDuration, const Duration(seconds: 7));
+
+    final long = followRecordingTimingFor(
+      _sentence('long', clipDuration: const Duration(seconds: 8)),
+    );
+    expect(long.minimumDuration, const Duration(seconds: 7));
+    expect(long.trailingSilenceDuration, const Duration(milliseconds: 2460));
+    expect(long.maximumDuration, const Duration(milliseconds: 27500));
+  });
+
+  test('初始静音不会结束录音且开口后过最短时长才允许收尾', () {
+    final timing = followRecordingTimingFor(_sentence('my-mom'));
+    final tracker = FollowVoiceActivityTracker(timing);
+
+    expect(
+      tracker.update(
+        elapsed: const Duration(seconds: 5),
+        level: 0.01,
+      ),
+      FollowVoiceActivityAction.cancelSilenceTimer,
+    );
+    expect(tracker.heardSpeech, isFalse);
+
+    expect(
+      tracker.update(
+        elapsed: const Duration(milliseconds: 800),
+        level: 0.2,
+      ),
+      FollowVoiceActivityAction.cancelSilenceTimer,
+    );
+    expect(tracker.heardSpeech, isFalse);
+    expect(
+      tracker.update(
+        elapsed: const Duration(seconds: 1),
+        level: 0.2,
+      ),
+      FollowVoiceActivityAction.cancelSilenceTimer,
+    );
+    expect(tracker.heardSpeech, isTrue);
+    expect(
+      tracker.update(
+        elapsed: const Duration(seconds: 2),
+        level: 0.01,
+      ),
+      FollowVoiceActivityAction.cancelSilenceTimer,
+    );
+    expect(
+      tracker.update(
+        elapsed: const Duration(milliseconds: 2200),
+        level: 0.01,
+      ),
+      FollowVoiceActivityAction.armSilenceTimer,
+    );
+    expect(
+      tracker.update(
+        elapsed: const Duration(milliseconds: 2300),
+        level: 0.2,
+      ),
+      FollowVoiceActivityAction.cancelSilenceTimer,
+    );
   });
 
   test('确认结果后删除一次性录音且不影响当前句', () async {

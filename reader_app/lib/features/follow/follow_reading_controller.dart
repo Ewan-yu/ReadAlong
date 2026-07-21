@@ -20,6 +20,82 @@ enum FollowReadingPhase {
   failed,
 }
 
+const followSpeechLevelThreshold = 0.08;
+const _speechFramesRequired = 2;
+
+final class FollowRecordingTiming {
+  const FollowRecordingTiming({
+    required this.referenceDuration,
+    required this.warmUpDuration,
+    required this.minimumDuration,
+    required this.trailingSilenceDuration,
+    required this.maximumDuration,
+  });
+
+  final Duration referenceDuration;
+  final Duration warmUpDuration;
+  final Duration minimumDuration;
+  final Duration trailingSilenceDuration;
+  final Duration maximumDuration;
+}
+
+FollowRecordingTiming followRecordingTimingFor(ReaderSentence sentence) {
+  final clipDuration = sentence.audio.end - sentence.audio.start;
+  final reference = clipDuration > Duration.zero
+      ? clipDuration
+      : const Duration(milliseconds: 1500);
+  return FollowRecordingTiming(
+    referenceDuration: reference,
+    warmUpDuration: const Duration(milliseconds: 700),
+    minimumDuration: _clampDuration(
+      _scaleDuration(reference, 0.85) + const Duration(milliseconds: 1200),
+      const Duration(milliseconds: 2200),
+      const Duration(seconds: 7),
+    ),
+    trailingSilenceDuration: _clampDuration(
+      _scaleDuration(reference, 0.12) + const Duration(milliseconds: 1500),
+      const Duration(milliseconds: 1700),
+      const Duration(milliseconds: 2600),
+    ),
+    maximumDuration: _clampDuration(
+      _scaleDuration(reference, 3) + const Duration(milliseconds: 3500),
+      const Duration(seconds: 7),
+      const Duration(seconds: 30),
+    ),
+  );
+}
+
+enum FollowVoiceActivityAction { cancelSilenceTimer, armSilenceTimer }
+
+/// Initial room silence must never finish a take. The trailing-silence timer
+/// can only be armed after speech was heard and the sentence-aware minimum
+/// recording window has elapsed.
+final class FollowVoiceActivityTracker {
+  FollowVoiceActivityTracker(this.timing);
+
+  final FollowRecordingTiming timing;
+  bool heardSpeech = false;
+  var _consecutiveSpeechFrames = 0;
+
+  FollowVoiceActivityAction update({
+    required Duration elapsed,
+    required double level,
+  }) {
+    if (level >= followSpeechLevelThreshold) {
+      _consecutiveSpeechFrames++;
+      if (_consecutiveSpeechFrames >= _speechFramesRequired) {
+        heardSpeech = true;
+      }
+      return FollowVoiceActivityAction.cancelSilenceTimer;
+    }
+    _consecutiveSpeechFrames = 0;
+    if (!heardSpeech || elapsed < timing.minimumDuration) {
+      return FollowVoiceActivityAction.cancelSilenceTimer;
+    }
+    return FollowVoiceActivityAction.armSilenceTimer;
+  }
+}
+
 /// A short-lived practice take. Follow-reading audio is intentionally kept
 /// outside the durable reading/dubbing data model and is deleted as soon as
 /// the result flow finishes.
@@ -43,6 +119,9 @@ final class FollowReadingState {
     this.result,
     this.elapsed = Duration.zero,
     this.level = 0,
+    this.recordingWarmUp = const Duration(milliseconds: 700),
+    this.recordingLimit = const Duration(seconds: 30),
+    this.heardSpeech = false,
     this.playbackPosition = Duration.zero,
     this.playbackDuration = Duration.zero,
     this.activeWordIndex,
@@ -55,6 +134,9 @@ final class FollowReadingState {
   final ScoreResult? result;
   final Duration elapsed;
   final double level;
+  final Duration recordingWarmUp;
+  final Duration recordingLimit;
+  final bool heardSpeech;
   final Duration playbackPosition;
   final Duration playbackDuration;
   final int? activeWordIndex;
@@ -70,6 +152,9 @@ final class FollowReadingState {
     Object? result = _unset,
     Duration? elapsed,
     double? level,
+    Duration? recordingWarmUp,
+    Duration? recordingLimit,
+    bool? heardSpeech,
     Duration? playbackPosition,
     Duration? playbackDuration,
     Object? activeWordIndex = _unset,
@@ -87,6 +172,9 @@ final class FollowReadingState {
             identical(result, _unset) ? this.result : result as ScoreResult?,
         elapsed: elapsed ?? this.elapsed,
         level: level ?? this.level,
+        recordingWarmUp: recordingWarmUp ?? this.recordingWarmUp,
+        recordingLimit: recordingLimit ?? this.recordingLimit,
+        heardSpeech: heardSpeech ?? this.heardSpeech,
         playbackPosition: playbackPosition ?? this.playbackPosition,
         playbackDuration: playbackDuration ?? this.playbackDuration,
         activeWordIndex: identical(activeWordIndex, _unset)
@@ -112,6 +200,7 @@ final class FollowReadingController
   Timer? _limitTimer;
   Timer? _silenceTimer;
   Stopwatch? _stopwatch;
+  FollowVoiceActivityTracker? _voiceActivity;
   var _stoppingRecording = false;
   var _recordSequence = 0;
   var _generation = 0;
@@ -201,6 +290,7 @@ final class FollowReadingController
     final sentence = current?.sentence;
     if (current == null || sentence == null || current.isRecording) return;
     final generation = ++_generation;
+    final timing = followRecordingTimingFor(sentence);
     try {
       await _player.stop();
       if (!_isCurrent(generation)) return;
@@ -215,12 +305,16 @@ final class FollowReadingController
         return;
       }
       _stopwatch = Stopwatch()..start();
+      _voiceActivity = FollowVoiceActivityTracker(timing);
       _setState(current.copyWith(
         phase: FollowReadingPhase.recording,
         record: null,
         result: null,
         elapsed: Duration.zero,
         level: 0,
+        recordingWarmUp: timing.warmUpDuration,
+        recordingLimit: timing.maximumDuration,
+        heardSpeech: false,
         playbackPosition: Duration.zero,
         playbackDuration: Duration.zero,
         activeWordIndex: null,
@@ -231,9 +325,19 @@ final class FollowReadingController
         final latest = state.valueOrNull;
         if (latest == null || !latest.isRecording) return;
         final elapsed = _stopwatch?.elapsed ?? Duration.zero;
-        _setState(latest.copyWith(elapsed: elapsed, level: level.value));
-        if (level.value < 0.05) {
-          _silenceTimer ??= Timer(const Duration(milliseconds: 1500), () {
+        final voiceActivity = _voiceActivity;
+        if (voiceActivity == null) return;
+        final action = voiceActivity.update(
+          elapsed: elapsed,
+          level: level.value,
+        );
+        _setState(latest.copyWith(
+          elapsed: elapsed,
+          level: level.value,
+          heardSpeech: voiceActivity.heardSpeech,
+        ));
+        if (action == FollowVoiceActivityAction.armSilenceTimer) {
+          _silenceTimer ??= Timer(timing.trailingSilenceDuration, () {
             unawaited(stopRecording());
           });
         } else {
@@ -241,7 +345,7 @@ final class FollowReadingController
           _silenceTimer = null;
         }
       });
-      _limitTimer = Timer(const Duration(seconds: 30), () {
+      _limitTimer = Timer(timing.maximumDuration, () {
         unawaited(stopRecording());
       });
     } on RecordingException catch (error) {
@@ -430,6 +534,7 @@ final class FollowReadingController
     _silenceTimer = null;
     await _levels?.cancel();
     _levels = null;
+    _voiceActivity = null;
   }
 
   void _setFailure(String message) {
@@ -470,4 +575,14 @@ final class FollowReadingController
   void _setState(FollowReadingState value) {
     if (!_disposed) state = AsyncData(value);
   }
+}
+
+Duration _scaleDuration(Duration value, double factor) => Duration(
+      milliseconds: (value.inMilliseconds * factor).round(),
+    );
+
+Duration _clampDuration(Duration value, Duration minimum, Duration maximum) {
+  if (value < minimum) return minimum;
+  if (value > maximum) return maximum;
+  return value;
 }

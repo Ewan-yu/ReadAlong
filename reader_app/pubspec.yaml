@@ -1,7 +1,7 @@
 name: reader_app
 description: ReadAlong 跟读宝 — 儿童绘本点读阅读端
 publish_to: none
-version: 0.1.1+2
+version: 0.1.2+3
 
 environment:
   sdk: ">=3.0.0 <4.0.0"

@@ -1124,6 +1124,14 @@ class _FollowReadingPanel extends StatelessWidget {
       );
     }
     if (value.phase == FollowReadingPhase.recording) {
+      final isWarmingUp = value.elapsed < value.recordingWarmUp;
+      final recordingPrompt = isWarmingUp
+          ? '准备一下，马上开始…'
+          : !value.heardSpeech
+              ? '开始读吧，我在认真听'
+              : value.level < followSpeechLevelThreshold
+                  ? '读完后停一下，会自动结束'
+                  : '听得很清楚，继续读吧';
       return _ReaderControlPanelFrame(
         child: Padding(
           padding: const EdgeInsets.all(AppSpacing.cardPadding),
@@ -1132,15 +1140,18 @@ class _FollowReadingPanel extends StatelessWidget {
             children: [
               _FollowSentenceText(sentence: sentence),
               const SizedBox(height: AppSpacing.unit),
-              Text('${_formatPlaybackTime(value.elapsed)} / 00:30',
-                  style: const TextStyle(color: AppColors.textSecondary)),
+              Text(
+                '${_formatPlaybackTime(value.elapsed)} / '
+                '${_formatPlaybackTime(value.recordingLimit)}',
+                style: const TextStyle(color: AppColors.textSecondary),
+              ),
               const SizedBox(height: AppSpacing.unit),
               _RecordingMeter(level: value.level),
               const SizedBox(height: AppSpacing.unit),
               Text(
-                value.level < 0.05 ? '声音有点小，再靠近一点' : '听得很清楚，继续读吧',
+                recordingPrompt,
                 style: TextStyle(
-                    color: value.level < 0.05
+                    color: !value.heardSpeech
                         ? AppColors.accent
                         : AppColors.primaryDark),
               ),
