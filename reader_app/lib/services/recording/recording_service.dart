@@ -46,20 +46,29 @@ abstract interface class AudioRecordingService {
 
 final recordingServiceProvider =
     FutureProvider.autoDispose<AudioRecordingService>((ref) async {
+  final temporary = await ref.watch(appTemporaryDirectoryProvider.future);
   final documents = await ref.watch(appDocumentsDirectoryProvider.future);
-  final service = RecordAudioRecordingService(documentsDirectory: documents);
+  final service = RecordAudioRecordingService(temporaryDirectory: temporary);
+  await service.purgeStaleRecordings();
+  await purgeLegacyFollowRecordings(documents);
+  try {
+    final index = await ref.watch(shelfIndexProvider.future);
+    await index.deleteAllReadingRecords();
+  } on Object {
+    // Legacy metadata cleanup must not make the microphone unavailable.
+  }
   ref.onDispose(() => unawaited(service.dispose()));
   return service;
 });
 
 final class RecordAudioRecordingService implements AudioRecordingService {
   RecordAudioRecordingService({
-    required Directory documentsDirectory,
+    required Directory temporaryDirectory,
     AudioRecorder? recorder,
-  })  : _documentsDirectory = documentsDirectory,
+  })  : _temporaryDirectory = temporaryDirectory,
         _recorder = recorder ?? AudioRecorder();
 
-  final Directory _documentsDirectory;
+  final Directory _temporaryDirectory;
   final AudioRecorder _recorder;
   StreamSubscription<Amplitude>? _amplitudeSubscription;
   StreamController<RecordingLevel>? _levelController;
@@ -83,9 +92,11 @@ final class RecordAudioRecordingService implements AudioRecordingService {
       throw const RecordingException('请允许麦克风权限后再开始录音');
     }
 
-    final folder = Directory(
-      p.join(_documentsDirectory.path, 'records', _safeSegment(libraryId)),
-    );
+    final folder = Directory(p.join(
+      _temporaryDirectory.path,
+      'readalong-follow-recordings',
+      _safeSegment(libraryId),
+    ));
     await folder.create(recursive: true);
     final filename = '${_safeSegment(sentenceId)}_'
         '${DateTime.now().toUtc().toIso8601String().replaceAll(':', '-')}.wav';
@@ -167,6 +178,11 @@ final class RecordAudioRecordingService implements AudioRecordingService {
     await _recorder.dispose();
   }
 
+  /// Removes takes left behind when Android terminated the previous process.
+  /// This directory is reserved for disposable follow-reading practice only.
+  Future<void> purgeStaleRecordings() =>
+      purgeStaleFollowRecordings(_temporaryDirectory);
+
   Future<void> _cleanupActiveRecording({required bool deleteFile}) async {
     final activePath = _activePath;
     _activePath = null;
@@ -191,6 +207,28 @@ final class RecordAudioRecordingService implements AudioRecordingService {
     _amplitudeSubscription = null;
     await _levelController?.close();
     _levelController = null;
+  }
+}
+
+/// M4 originally stored follow-reading WAV files in Documents/records. Remove
+/// that legacy folder after an upgrade; future durable dubbing audio must use a
+/// separate directory and therefore is not affected by this migration.
+Future<void> purgeLegacyFollowRecordings(Directory documentsDirectory) =>
+    _deleteDirectoryIfExists(
+        Directory(p.join(documentsDirectory.path, 'records')));
+
+Future<void> purgeStaleFollowRecordings(Directory temporaryDirectory) =>
+    _deleteDirectoryIfExists(
+      Directory(
+        p.join(temporaryDirectory.path, 'readalong-follow-recordings'),
+      ),
+    );
+
+Future<void> _deleteDirectoryIfExists(Directory directory) async {
+  try {
+    if (await directory.exists()) await directory.delete(recursive: true);
+  } on Object {
+    // Cache cleanup is best-effort and must never disable microphone access.
   }
 }
 

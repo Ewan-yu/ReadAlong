@@ -1,11 +1,8 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../data/appdb/app_database_providers.dart';
-import '../../data/appdb/shelf_index.dart';
 import '../../services/recording/recording_service.dart';
 import '../../services/scoring/score_models.dart';
 import '../../services/scoring/scoring_provider.dart';
@@ -21,6 +18,21 @@ enum FollowReadingPhase {
   scoring,
   scored,
   failed,
+}
+
+/// A short-lived practice take. Follow-reading audio is intentionally kept
+/// outside the durable reading/dubbing data model and is deleted as soon as
+/// the result flow finishes.
+final class FollowRecording {
+  const FollowRecording({
+    required this.id,
+    required this.audioPath,
+    required this.referenceText,
+  });
+
+  final int id;
+  final String audioPath;
+  final String referenceText;
 }
 
 final class FollowReadingState {
@@ -39,7 +51,7 @@ final class FollowReadingState {
 
   final FollowReadingPhase phase;
   final ReaderSentence? sentence;
-  final ReadingRecord? record;
+  final FollowRecording? record;
   final ScoreResult? result;
   final Duration elapsed;
   final double level;
@@ -68,8 +80,9 @@ final class FollowReadingState {
         sentence: identical(sentence, _unset)
             ? this.sentence
             : sentence as ReaderSentence?,
-        record:
-            identical(record, _unset) ? this.record : record as ReadingRecord?,
+        record: identical(record, _unset)
+            ? this.record
+            : record as FollowRecording?,
         result:
             identical(result, _unset) ? this.result : result as ScoreResult?,
         elapsed: elapsed ?? this.elapsed,
@@ -95,12 +108,12 @@ final class FollowReadingController
   late final AudioRecordingService _recorder;
   late final SentenceAudioPlayer _player;
   late final ScoringProvider _scorer;
-  late final ShelfIndex _records;
   StreamSubscription<RecordingLevel>? _levels;
   Timer? _limitTimer;
   Timer? _silenceTimer;
   Stopwatch? _stopwatch;
   var _stoppingRecording = false;
+  var _recordSequence = 0;
   var _generation = 0;
   var _disposed = false;
 
@@ -109,11 +122,11 @@ final class FollowReadingController
     _player = ref.watch(sentenceAudioPlayerProvider);
     _scorer = ref.watch(scoringProvider);
     _recorder = await ref.watch(recordingServiceProvider.future);
-    _records = await ref.watch(shelfIndexProvider.future);
     ref.onDispose(() {
+      final record = state.valueOrNull?.record;
       _disposed = true;
       _generation++;
-      unawaited(_cancelActiveRecording());
+      unawaited(_disposeTransientState(record));
     });
     return const FollowReadingState();
   }
@@ -123,6 +136,7 @@ final class FollowReadingController
     unawaited(_cancelActiveRecording());
     final current = state.valueOrNull;
     if (current == null) return;
+    unawaited(_deleteRecording(current.record));
     _setState(
       FollowReadingState(sentence: sentence),
     );
@@ -130,7 +144,9 @@ final class FollowReadingController
 
   Future<void> stopForPageChange() async {
     _generation++;
+    final record = state.valueOrNull?.record;
     await _cancelActiveRecording();
+    await _deleteRecording(record);
     if (_disposed || state.valueOrNull == null) return;
     _setState(const FollowReadingState());
   }
@@ -187,6 +203,8 @@ final class FollowReadingController
     final generation = ++_generation;
     try {
       await _player.stop();
+      if (!_isCurrent(generation)) return;
+      await _deleteRecording(current.record);
       if (!_isCurrent(generation)) return;
       final session = await _recorder.start(
         libraryId: arg,
@@ -256,14 +274,11 @@ final class FollowReadingController
       await _stopTimersAndLevels();
       final audioPath = await _recorder.stop();
       if (!_isCurrent(generation)) return;
-      final record = await _records.createRecord(
-        libraryId: arg,
-        sentenceId: sentence.id,
-        referenceText: sentence.text,
+      final record = FollowRecording(
+        id: ++_recordSequence,
         audioPath: audioPath,
-        provider: _scorer.name,
+        referenceText: sentence.text,
       );
-      if (!_isCurrent(generation)) return;
       final latest = state.valueOrNull;
       if (latest == null) return;
       _setState(latest.copyWith(
@@ -299,21 +314,28 @@ final class FollowReadingController
     await _score(record, generation);
   }
 
-  /// The score is persisted before it is presented.  Dismissing the child
-  /// result dialog only returns the reading controls to their ready state.
-  void acknowledgeResult() {
+  /// Finishes the one-off practice flow and removes its temporary WAV.
+  Future<void> acknowledgeResult() async {
     final current = state.valueOrNull;
     if (current == null || current.phase != FollowReadingPhase.scored) return;
     _setState(current.copyWith(
       phase: FollowReadingPhase.idle,
+      record: null,
       result: null,
       failure: null,
     ));
+    try {
+      await _player.stop();
+    } on Object {
+      // File cleanup remains useful even if native playback already stopped.
+    }
+    await _deleteRecording(current.record);
   }
 
-  Future<void> playMyRecording() async {
+  /// Plays in-place so the score dialog can stay open for repeated listening.
+  Future<bool> playMyRecording() async {
     final record = state.valueOrNull?.record;
-    if (record == null) return;
+    if (record == null) return false;
     try {
       await _player.stop();
       await _player.play(
@@ -324,29 +346,19 @@ final class FollowReadingController
           wholeFile: true,
         ),
       );
+      return true;
     } on Object {
-      _setFailure('我的录音暂时无法播放，请再录一次');
+      return false;
     }
   }
 
-  Future<void> _score(ReadingRecord record, int generation) async {
+  Future<void> _score(FollowRecording record, int generation) async {
     try {
-      await _records.updateRecord(
-        id: record.id,
-        status: ReadingRecordStatus.scoring,
-      );
       final bytes = await File(record.audioPath).readAsBytes();
       final pcm = parseWavPcm16(bytes).pcm16k;
       final result = await _scorer.score(
         pcm16k: pcm,
         refText: record.referenceText,
-      );
-      if (!_isCurrent(generation)) return;
-      await _records.updateRecord(
-        id: record.id,
-        status: ReadingRecordStatus.scored,
-        childScore: result.childScore,
-        detailJson: jsonEncode(_scoreDetails(result)),
       );
       if (!_isCurrent(generation)) return;
       final current = state.valueOrNull;
@@ -367,19 +379,10 @@ final class FollowReadingController
   }
 
   Future<void> _markScoreFailed(
-    ReadingRecord record,
+    FollowRecording record,
     String message,
     int generation,
   ) async {
-    try {
-      await _records.updateRecord(
-        id: record.id,
-        status: ReadingRecordStatus.failed,
-        detailJson: jsonEncode({'error': message}),
-      );
-    } on Object {
-      // Keep the local WAV even if a transient database operation fails.
-    }
     if (!_isCurrent(generation)) return;
     final current = state.valueOrNull;
     if (current != null) {
@@ -396,6 +399,27 @@ final class FollowReadingController
       await _recorder.cancel();
     } on Object {
       // The service may not have initialized when auto-dispose runs.
+    }
+  }
+
+  Future<void> _disposeTransientState(FollowRecording? record) async {
+    await _cancelActiveRecording();
+    try {
+      await _player.stop();
+    } on Object {
+      // The shared player may already be disposed by its provider.
+    }
+    await _deleteRecording(record);
+  }
+
+  Future<void> _deleteRecording(FollowRecording? record) async {
+    if (record == null) return;
+    try {
+      final file = File(record.audioPath);
+      if (await file.exists()) await file.delete();
+    } on Object {
+      // The cache directory is purged when the service starts again, so an
+      // unavailable file never blocks the child from continuing to read.
     }
   }
 
@@ -447,15 +471,3 @@ final class FollowReadingController
     if (!_disposed) state = AsyncData(value);
   }
 }
-
-Map<String, Object?> _scoreDetails(ScoreResult score) => {
-      'total': score.total,
-      'accuracy': score.accuracy,
-      'fluency': score.fluency,
-      'standard': score.standard,
-      'integrity': score.integrity,
-      'words': [
-        for (final word in score.words)
-          {'word': word.word, 'accuracy': word.accuracy},
-      ],
-    };

@@ -180,6 +180,15 @@ void main() {
       childScore: 82.5,
       detailJson: '{"accuracy":80}',
     );
+    await index.deleteAllReadingRecords();
+
+    final db = await databaseFactoryFfi.openDatabase(index.databasePath);
+    final countRows = await db.rawQuery('SELECT COUNT(*) AS count FROM record');
+    final remainingRecords = countRows.single['count'] as int;
+    await db.close();
+    expect(remainingRecords, 0);
+    expect((await index.loadProgress('library-a'))?.currentPage, 3);
+
     await index.deleteRecordsForBook('library-a');
 
     expect(await index.loadProgress('library-a'), isNull);

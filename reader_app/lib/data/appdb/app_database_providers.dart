@@ -11,6 +11,10 @@ final appDocumentsDirectoryProvider = FutureProvider<Directory>(
   (_) => getApplicationDocumentsDirectory(),
 );
 
+final appTemporaryDirectoryProvider = FutureProvider<Directory>(
+  (_) => getTemporaryDirectory(),
+);
+
 final appDatabaseFactoryProvider = Provider<sqflite.DatabaseFactory>(
   (_) => sqflite.databaseFactory,
 );

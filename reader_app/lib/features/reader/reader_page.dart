@@ -670,58 +670,63 @@ class _ReaderViewState extends ConsumerState<_ReaderView> {
           score: score,
           onDemo: () {
             Navigator.of(dialogContext).pop();
-            ref
-                .read(followReadingControllerProvider(widget.book.libraryId)
-                    .notifier)
-                .acknowledgeResult();
-            unawaited(
-              ref
-                  .read(followReadingControllerProvider(widget.book.libraryId)
-                      .notifier)
-                  .playDemonstration(),
-            );
+            unawaited(_finishScoreAndPlayDemonstration());
           },
           onRepeat: () {
             Navigator.of(dialogContext).pop();
-            ref
-                .read(followReadingControllerProvider(widget.book.libraryId)
-                    .notifier)
-                .acknowledgeResult();
-            unawaited(
-              ref
-                  .read(followReadingControllerProvider(widget.book.libraryId)
-                      .notifier)
-                  .startRecording(),
-            );
+            unawaited(_finishScoreAndRecordAgain());
           },
           onMyRecording: () {
-            Navigator.of(dialogContext).pop();
-            ref
-                .read(followReadingControllerProvider(widget.book.libraryId)
-                    .notifier)
-                .acknowledgeResult();
-            unawaited(
-              ref
-                  .read(followReadingControllerProvider(widget.book.libraryId)
-                      .notifier)
-                  .playMyRecording(),
-            );
+            unawaited(_playMyRecordingInScoreDialog());
           },
           onNext: () {
             Navigator.of(dialogContext).pop();
-            ref
-                .read(followReadingControllerProvider(widget.book.libraryId)
-                    .notifier)
-                .acknowledgeResult();
-            unawaited(_nextFollowSentence(
-              ref
-                  .read(pointReadingControllerProvider(widget.book.libraryId))
-                  .valueOrNull,
-              sentence,
-            ));
+            unawaited(_finishScoreAndGoNext(sentence));
           },
         ),
       ),
+    );
+  }
+
+  Future<void> _finishScoreAndPlayDemonstration() async {
+    final controller = ref.read(
+      followReadingControllerProvider(widget.book.libraryId).notifier,
+    );
+    await controller.acknowledgeResult();
+    await controller.playDemonstration();
+  }
+
+  Future<void> _finishScoreAndRecordAgain() async {
+    final controller = ref.read(
+      followReadingControllerProvider(widget.book.libraryId).notifier,
+    );
+    await controller.acknowledgeResult();
+    await controller.startRecording();
+  }
+
+  Future<void> _playMyRecordingInScoreDialog() async {
+    final played = await ref
+        .read(
+          followReadingControllerProvider(widget.book.libraryId).notifier,
+        )
+        .playMyRecording();
+    if (!mounted || played) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('我的录音暂时无法播放，请再录一次')),
+    );
+  }
+
+  Future<void> _finishScoreAndGoNext(ReaderSentence sentence) async {
+    final controller = ref.read(
+      followReadingControllerProvider(widget.book.libraryId).notifier,
+    );
+    await controller.acknowledgeResult();
+    if (!mounted) return;
+    await _nextFollowSentence(
+      ref
+          .read(pointReadingControllerProvider(widget.book.libraryId))
+          .valueOrNull,
+      sentence,
     );
   }
 
@@ -1341,6 +1346,7 @@ class _FollowScoreDialog extends StatelessWidget {
       _ => '太棒了！🌟',
     };
     return Dialog(
+      key: const ValueKey('follow-score-dialog'),
       insetPadding: const EdgeInsets.all(AppSpacing.pageMargin),
       backgroundColor: AppColors.bgAlt,
       shape: RoundedRectangleBorder(
@@ -1388,6 +1394,7 @@ class _FollowScoreDialog extends StatelessWidget {
                       label: const Text('听示范'),
                     ),
                     OutlinedButton.icon(
+                      key: const ValueKey('follow-play-my-recording'),
                       onPressed: onMyRecording,
                       icon: const Icon(Icons.play_arrow_rounded),
                       label: const Text('听我的录音'),

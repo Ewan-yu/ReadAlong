@@ -342,12 +342,24 @@ class ShelfIndex {
   Future<void> deleteRecordsForBook(String libraryId) async {
     final db = await _open();
     try {
-      await db.delete('record', where: 'library_id = ?', whereArgs: [libraryId]);
+      await db
+          .delete('record', where: 'library_id = ?', whereArgs: [libraryId]);
       await db.delete(
         'reading_progress',
         where: 'library_id = ?',
         whereArgs: [libraryId],
       );
+    } finally {
+      await db.close();
+    }
+  }
+
+  /// Clears legacy follow-reading score rows after practice recordings became
+  /// transient. Reading progress and imported books remain untouched.
+  Future<void> deleteAllReadingRecords() async {
+    final db = await _open();
+    try {
+      await db.delete('record');
     } finally {
       await db.close();
     }

@@ -26,7 +26,12 @@ android {
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = 33
         targetSdk = 35
-        versionCode = flutter.versionCode
+        // BlueStacks may uninstall/reinstall an APK when its versionCode is
+        // unchanged, which would erase imported books and secure API keys.
+        // A project-epoch timestamp makes every newly packaged APK a monotonic
+        // in-place upgrade while the pubspec build number remains a floor.
+        def packagedVersionCode = (Math.floorDiv(System.currentTimeMillis(), 1000L) - 1704067200L).toInteger()
+        versionCode = Math.max(flutter.versionCode, packagedVersionCode)
         versionName = flutter.versionName
     }
 

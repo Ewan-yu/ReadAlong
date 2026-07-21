@@ -1,6 +1,8 @@
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:path/path.dart' as p;
 import 'package:reader_app/services/recording/recording_service.dart';
 
 Uint8List _wav({
@@ -46,5 +48,31 @@ void main() {
       () => parseWavPcm16(Uint8List.fromList([1, 2, 3])),
       throwsA(isA<RecordingException>()),
     );
+  });
+
+  test('启动清理只删除临时跟读目录和旧版 records 目录', () async {
+    final root = await Directory.systemTemp.createTemp('follow_cleanup_test_');
+    addTearDown(() => root.delete(recursive: true));
+    final temporary = Directory(p.join(root.path, 'cache'));
+    final documents = Directory(p.join(root.path, 'documents'));
+    final transient = File(p.join(
+      temporary.path,
+      'readalong-follow-recordings',
+      'book',
+      'take.wav',
+    ));
+    final legacy = File(p.join(documents.path, 'records', 'book', 'old.wav'));
+    final importedBook =
+        File(p.join(documents.path, 'books', 'book', 'page.webp'));
+    await transient.create(recursive: true);
+    await legacy.create(recursive: true);
+    await importedBook.create(recursive: true);
+
+    await purgeStaleFollowRecordings(temporary);
+    await purgeLegacyFollowRecordings(documents);
+
+    expect(await transient.exists(), isFalse);
+    expect(await legacy.exists(), isFalse);
+    expect(await importedBook.exists(), isTrue);
   });
 }
