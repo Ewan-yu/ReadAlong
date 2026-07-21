@@ -21,39 +21,26 @@ class ShelfPage extends ConsumerWidget {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('ReadAlong 跟读宝'),
-        backgroundColor: AppColors.bg,
-        surfaceTintColor: AppColors.bg,
+        title: const _ShelfBrand(),
+        actions: [
+          IconButton(
+            key: const ValueKey('shelf-settings'),
+            onPressed: () => context.push('/settings'),
+            icon: const Icon(Icons.settings_outlined),
+            tooltip: '设置',
+          ),
+          const SizedBox(width: AppSpacing.unit),
+        ],
       ),
       body: shelf.when(
         data: (state) => _ShelfContents(
           state: state,
           onOpen: (book) => _openBook(context, book),
           onDelete: (book) => _confirmDelete(context, ref, book),
+          onImport: () => _importBook(context, ref),
         ),
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (_, __) => const _ShelfLoadError(),
-      ),
-      floatingActionButton: shelf.maybeWhen(
-        data: (state) => FloatingActionButton.extended(
-          onPressed: state.isMutating ? null : () => _importBook(context, ref),
-          backgroundColor: AppColors.primary,
-          foregroundColor: AppColors.bgAlt,
-          disabledElevation: 0,
-          icon: state.isMutating
-              ? const SizedBox(
-                  width: 20,
-                  height: 20,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2.5,
-                    color: AppColors.textSecondary,
-                  ),
-                )
-              : const Icon(Icons.add),
-          label: Text(state.isMutating ? '导入中' : '导入绘本'),
-          tooltip: state.isMutating ? '正在导入绘本' : '导入绘本',
-        ),
-        orElse: () => null,
       ),
     );
   }
@@ -299,18 +286,26 @@ class _ShelfContents extends StatelessWidget {
     required this.state,
     required this.onOpen,
     required this.onDelete,
+    required this.onImport,
   });
 
   final ShelfState state;
   final ValueChanged<ShelfBook> onOpen;
   final ValueChanged<ShelfBook> onDelete;
+  final VoidCallback onImport;
 
   @override
   Widget build(BuildContext context) {
     if (state.books.isEmpty) {
-      return const CustomScrollView(
+      return CustomScrollView(
         slivers: [
-          SliverFillRemaining(hasScrollBody: false, child: _ShelfEmptyState())
+          SliverFillRemaining(
+            hasScrollBody: false,
+            child: _ShelfEmptyState(
+              enabled: !state.isMutating,
+              onImport: onImport,
+            ),
+          )
         ],
       );
     }
@@ -322,26 +317,82 @@ class _ShelfContents extends StatelessWidget {
             AppSpacing.pageMargin,
             AppSpacing.cardPadding,
             AppSpacing.pageMargin,
-            AppSpacing.pageMargin + AppSizes.primaryButton,
+            0,
           ),
-          sliver: SliverGrid(
-            gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-              maxCrossAxisExtent: 240,
-              mainAxisSpacing: AppSpacing.pageMargin,
-              crossAxisSpacing: AppSpacing.cardPadding,
-              childAspectRatio: 0.68,
+          sliver: SliverToBoxAdapter(
+            child: _ShelfImportCard(
+              enabled: !state.isMutating,
+              onImport: onImport,
             ),
-            delegate: SliverChildBuilderDelegate(
-              (context, index) {
-                final book = state.books[index];
-                return _BookTile(
-                  book: book,
-                  onTap: state.isMutating ? null : () => onOpen(book),
-                  onLongPress: state.isMutating ? null : () => onDelete(book),
-                );
-              },
-              childCount: state.books.length,
+          ),
+        ),
+        SliverPadding(
+          padding: const EdgeInsets.fromLTRB(
+            AppSpacing.pageMargin,
+            AppSpacing.pageMargin,
+            AppSpacing.pageMargin,
+            AppSpacing.cardPadding,
+          ),
+          sliver: SliverToBoxAdapter(
+            child: Row(
+              children: [
+                const Icon(Icons.auto_stories_outlined),
+                const SizedBox(width: AppSpacing.unit),
+                Text(
+                  '我的绘本',
+                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                        color: AppColors.textPrimary,
+                        fontWeight: FontWeight.w700,
+                      ),
+                ),
+                const SizedBox(width: AppSpacing.unit),
+                Text(
+                  '(${state.books.length})',
+                  style: const TextStyle(
+                    color: AppColors.textSecondary,
+                    fontSize: 16,
+                  ),
+                ),
+              ],
             ),
+          ),
+        ),
+        SliverPadding(
+          padding: const EdgeInsets.fromLTRB(
+            AppSpacing.pageMargin,
+            0,
+            AppSpacing.pageMargin,
+            AppSpacing.pageMargin,
+          ),
+          sliver: SliverLayoutBuilder(
+            builder: (context, constraints) {
+              final width = constraints.crossAxisExtent;
+              final columns = width < 568
+                  ? 2
+                  : width < 976
+                      ? 3
+                      : 4;
+              return SliverGrid(
+                gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: columns,
+                  mainAxisSpacing: AppSpacing.pageMargin,
+                  crossAxisSpacing: AppSpacing.cardPadding,
+                  childAspectRatio: 0.68,
+                ),
+                delegate: SliverChildBuilderDelegate(
+                  (context, index) {
+                    final book = state.books[index];
+                    return _BookTile(
+                      book: book,
+                      onTap: state.isMutating ? null : () => onOpen(book),
+                      onLongPress:
+                          state.isMutating ? null : () => onDelete(book),
+                    );
+                  },
+                  childCount: state.books.length,
+                ),
+              );
+            },
           ),
         ),
       ],
@@ -350,7 +401,10 @@ class _ShelfContents extends StatelessWidget {
 }
 
 class _ShelfEmptyState extends StatelessWidget {
-  const _ShelfEmptyState();
+  const _ShelfEmptyState({required this.enabled, required this.onImport});
+
+  final bool enabled;
+  final VoidCallback onImport;
 
   @override
   Widget build(BuildContext context) => Padding(
@@ -377,6 +431,13 @@ class _ShelfEmptyState extends StatelessWidget {
               '让爸爸妈妈用电脑制作绘本资源包，然后导入这里吧',
               textAlign: TextAlign.center,
               style: TextStyle(fontSize: 16, color: AppColors.textSecondary),
+            ),
+            const SizedBox(height: AppSpacing.pageMargin),
+            FilledButton.icon(
+              key: const ValueKey('shelf-empty-import-button'),
+              onPressed: enabled ? onImport : null,
+              icon: const Icon(Icons.add),
+              label: const Text('导入绘本'),
             ),
           ],
         ),
@@ -405,78 +466,205 @@ class _BookTile extends StatelessWidget {
         button: true,
         enabled: onTap != null,
         child: Material(
-          color: AppColors.bg,
+          color: AppColors.bgAlt,
+          elevation: 2,
+          shadowColor: AppColors.scrim,
+          borderRadius: BorderRadius.circular(AppRadius.card),
           child: InkWell(
             key: ValueKey('book-tile-gesture-${book.libraryId}'),
             onTap: onTap,
             onLongPress: onLongPress,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                AspectRatio(
-                  aspectRatio: 3 / 4,
-                  child: Stack(
-                    fit: StackFit.expand,
-                    children: [
-                      DecoratedBox(
-                        decoration: BoxDecoration(
-                          color: AppColors.bgAlt,
-                          border: Border.all(color: AppColors.border),
-                          borderRadius: BorderRadius.circular(AppRadius.card),
-                        ),
-                        child: ClipRRect(
-                          borderRadius: BorderRadius.circular(AppRadius.card),
-                          child: _BookCover(book: book),
-                        ),
-                      ),
-                      Positioned(
-                        right: AppSpacing.unit,
-                        bottom: AppSpacing.unit,
-                        child: DecoratedBox(
+            borderRadius: BorderRadius.circular(AppRadius.card),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(AppRadius.card),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  AspectRatio(
+                    aspectRatio: 3 / 4,
+                    child: Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        DecoratedBox(
                           decoration: BoxDecoration(
-                            color: AppColors.primaryContainer,
-                            borderRadius: BorderRadius.circular(
-                              AppRadius.thumbnail,
-                            ),
+                            color: AppColors.bgAlt,
+                            border: Border.all(color: AppColors.border),
+                            borderRadius: BorderRadius.circular(AppRadius.card),
                           ),
-                          child: Padding(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: AppSpacing.unit,
-                              vertical: AppSpacing.unit / 2,
+                          child: ClipRRect(
+                            borderRadius: BorderRadius.circular(AppRadius.card),
+                            child: _BookCover(book: book),
+                          ),
+                        ),
+                        Positioned(
+                          right: AppSpacing.unit,
+                          bottom: AppSpacing.unit,
+                          child: DecoratedBox(
+                            decoration: BoxDecoration(
+                              color: AppColors.primaryContainer,
+                              borderRadius: BorderRadius.circular(
+                                AppRadius.thumbnail,
+                              ),
                             ),
-                            child: Text(
-                              '${book.pageCount} 页',
-                              style: const TextStyle(
-                                color: AppColors.primaryDark,
-                                fontSize: 14,
-                                fontWeight: FontWeight.w600,
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: AppSpacing.unit,
+                                vertical: AppSpacing.unit / 2,
+                              ),
+                              child: Text(
+                                '${book.pageCount} 页',
+                                style: const TextStyle(
+                                  color: AppColors.primaryDark,
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w600,
+                                ),
                               ),
                             ),
                           ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
-                ),
-                Expanded(
-                  child: Align(
-                    alignment: Alignment.centerLeft,
-                    child: Text(
-                      book.title,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: AppColors.textPrimary,
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600,
+                  Expanded(
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: AppSpacing.cardPadding,
+                        vertical: AppSpacing.unit,
+                      ),
+                      child: Align(
+                        alignment: Alignment.centerLeft,
+                        child: Text(
+                          book.title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: AppColors.textPrimary,
+                            fontSize: 18,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
                       ),
                     ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         ),
+      );
+}
+
+class _ShelfBrand extends StatelessWidget {
+  const _ShelfBrand();
+
+  @override
+  Widget build(BuildContext context) => const Row(
+        children: [
+          DecoratedBox(
+            decoration: BoxDecoration(
+              color: AppColors.primary,
+              borderRadius: BorderRadius.all(Radius.circular(12)),
+            ),
+            child: SizedBox(
+              width: 40,
+              height: 40,
+              child: Icon(Icons.menu_book_rounded, color: AppColors.bgAlt),
+            ),
+          ),
+          SizedBox(width: AppSpacing.unit),
+          Expanded(
+            child: Text(
+              'ReadAlong 跟读宝',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
+      );
+}
+
+class _ShelfImportCard extends StatelessWidget {
+  const _ShelfImportCard({required this.enabled, required this.onImport});
+
+  final bool enabled;
+  final VoidCallback onImport;
+
+  @override
+  Widget build(BuildContext context) => LayoutBuilder(
+        builder: (context, constraints) {
+          const icon = DecoratedBox(
+            decoration: BoxDecoration(
+              color: AppColors.primaryContainer,
+              borderRadius: BorderRadius.all(
+                Radius.circular(AppRadius.card),
+              ),
+            ),
+            child: SizedBox(
+              width: 64,
+              height: 64,
+              child: Icon(
+                Icons.drive_folder_upload_outlined,
+                size: 36,
+                color: AppColors.primary,
+              ),
+            ),
+          );
+          final description = Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                '导入 .readalongbook 资源包',
+                style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      color: AppColors.textPrimary,
+                      fontWeight: FontWeight.w700,
+                    ),
+              ),
+              const SizedBox(height: AppSpacing.unit / 2),
+              const Text(
+                '从本地文件选择资源包，添加新的绘本到书架',
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(color: AppColors.textSecondary),
+              ),
+            ],
+          );
+          final button = FilledButton.icon(
+            key: const ValueKey('shelf-import-card-button'),
+            onPressed: enabled ? onImport : null,
+            icon: const Icon(Icons.add),
+            label: const Text('导入绘本'),
+          );
+          final compact = constraints.maxWidth < 520;
+          return Card(
+            child: Padding(
+              padding: const EdgeInsets.all(AppSpacing.cardPadding),
+              child: compact
+                  ? Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Row(
+                          children: [
+                            icon,
+                            const SizedBox(width: AppSpacing.cardPadding),
+                            Expanded(child: description),
+                          ],
+                        ),
+                        const SizedBox(height: AppSpacing.cardPadding),
+                        button,
+                      ],
+                    )
+                  : Row(
+                      children: [
+                        icon,
+                        const SizedBox(width: AppSpacing.cardPadding),
+                        Expanded(child: description),
+                        const SizedBox(width: AppSpacing.cardPadding),
+                        button,
+                      ],
+                    ),
+            ),
+          );
+        },
       );
 }
 

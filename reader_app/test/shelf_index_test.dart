@@ -159,4 +159,29 @@ void main() {
     expect(await index.findByLibraryId('book-older'), older);
     expect(await index.listBooks(), [newer, older]);
   });
+
+  test('运行时进度和评分记录按 libraryId 隔离保存', () async {
+    await index.saveProgress(libraryId: 'library-a', currentPage: 3);
+    expect((await index.loadProgress('library-a'))?.currentPage, 3);
+    expect(await index.loadProgress('library-b'), isNull);
+
+    final record = await index.createRecord(
+      libraryId: 'library-a',
+      sentenceId: 's0003',
+      referenceText: 'Hello, Granny.',
+      audioPath: '${tempDir.path}/records/s0003.wav',
+      provider: 'xfyun_ise',
+    );
+    expect(record.status, ReadingRecordStatus.saved);
+
+    await index.updateRecord(
+      id: record.id,
+      status: ReadingRecordStatus.scored,
+      childScore: 82.5,
+      detailJson: '{"accuracy":80}',
+    );
+    await index.deleteRecordsForBook('library-a');
+
+    expect(await index.loadProgress('library-a'), isNull);
+  });
 }

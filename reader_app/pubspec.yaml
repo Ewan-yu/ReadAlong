@@ -22,6 +22,7 @@ dependencies:
   crypto: ^3.0.3
   # 音频
   just_audio: ^0.9.40
+  record: 5.1.2
   # 评分（讯飞 ISE WebSocket）
   web_socket_channel: ^3.0.0
   xml: ^6.5.0
@@ -36,3 +37,11 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+
+# The Flutter 3.24 / AGP 8.1 template needs the mutually-compatible 5.1
+# platform set. Newer record plugins require AGP 8.5+ and currently resolve
+# incompatible desktop interface versions.
+dependency_overrides:
+  record_android: 1.2.3
+  record_platform_interface: 1.0.0
+  record_linux: 0.5.0

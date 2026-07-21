@@ -164,6 +164,26 @@ void main() {
     expect(currentState().activeWordIndex, isNull);
   });
 
+  test('播放完成后可重播字幕句', () async {
+    final controller = await readyController();
+
+    final firstPlay = controller.playAt(1, const Offset(0.2, 0.15));
+    await pumpEventQueue();
+    player.pending.single.complete();
+    await firstPlay;
+
+    final replay = controller.replaySubtitleSentence();
+    await pumpEventQueue();
+
+    expect(player.stopCalls, 2);
+    expect(player.played.map((clip) => clip.path), ['first.ogg', 'first.ogg']);
+    expect(currentState().activeSentence?.id, 'first');
+    expect(currentState().isPlaying, isTrue);
+
+    player.pending.last.complete();
+    await replay;
+  });
+
   test('位置回调更新片段进度和当前词', () async {
     book = PointReadingBook(
       libraryId: 'copy-2',

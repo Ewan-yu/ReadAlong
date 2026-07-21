@@ -731,6 +731,10 @@ void main() {
       find.byKey(const ValueKey('reader-subtitle-active-word-1')),
       findsNothing,
     );
+    expect(
+      find.byKey(const ValueKey('reader-subtitle-active-word-null')),
+      findsNothing,
+    );
   });
 
   testWidgets('无 timing 句显示完整原文且没有词高亮', (tester) async {

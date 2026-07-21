@@ -102,9 +102,11 @@ Future<_ScriptedShelfController> _pumpShelf(
 }
 
 Future<void> _tapImport(WidgetTester tester) async {
-  tester
-      .widget<FloatingActionButton>(find.byType(FloatingActionButton))
-      .onPressed!();
+  final cardButton = find.byKey(const ValueKey('shelf-import-card-button'));
+  final importButton = cardButton.evaluate().isNotEmpty
+      ? cardButton
+      : find.byKey(const ValueKey('shelf-empty-import-button'));
+  await tester.tap(importButton);
   await tester.pump();
 }
 
@@ -149,13 +151,11 @@ void main() {
       findsOneWidget,
     );
     expect(find.text('导入绘本'), findsOneWidget);
-    expect(
-      tester
-          .widget<FloatingActionButton>(find.byType(FloatingActionButton))
-          .onPressed,
-      isNotNull,
+    expect(find.byType(FloatingActionButton), findsNothing);
+    _expectMinTouchTarget(
+      tester,
+      find.byKey(const ValueKey('shelf-empty-import-button')),
     );
-    _expectMinTouchTarget(tester, find.byType(FloatingActionButton));
   });
 
   testWidgets('书架标题省略且封面边界稳定保持 3:4', (tester) async {
@@ -201,7 +201,7 @@ void main() {
     final wideFirstRow = _visibleFirstRowCount(tester);
 
     expect(narrowFirstRow, 2);
-    expect(wideFirstRow, 5);
+    expect(wideFirstRow, 4);
   });
 
   testWidgets('校验错误对话框可滚动到最末错误', (tester) async {
@@ -322,10 +322,12 @@ void main() {
     );
 
     expect(find.text(book.title), findsOneWidget);
-    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+    expect(find.byType(FloatingActionButton), findsNothing);
     expect(
       tester
-          .widget<FloatingActionButton>(find.byType(FloatingActionButton))
+          .widget<FilledButton>(
+            find.byKey(const ValueKey('shelf-import-card-button')),
+          )
           .onPressed,
       isNull,
     );

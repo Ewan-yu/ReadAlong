@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -69,9 +70,29 @@ final shelfLibraryProvider = FutureProvider<ShelfLibrary>((ref) async {
   return LocalShelfLibrary(
     importer: importer,
     shelfIndex: shelfIndex,
-    recordCleaner: const NoopBookRecordCleaner(),
+    recordCleaner: _LocalBookRecordCleaner(
+      documentsDirectory: documents,
+      shelfIndex: shelfIndex,
+    ),
   );
 });
+
+final class _LocalBookRecordCleaner implements BookRecordCleaner {
+  const _LocalBookRecordCleaner({
+    required this.documentsDirectory,
+    required this.shelfIndex,
+  });
+
+  final Directory documentsDirectory;
+  final ShelfIndex shelfIndex;
+
+  @override
+  Future<void> deleteForBook(String libraryId) async {
+    await shelfIndex.deleteRecordsForBook(libraryId);
+    final directory = Directory(p.join(documentsDirectory.path, 'records', libraryId));
+    if (await directory.exists()) await directory.delete(recursive: true);
+  }
+}
 
 final bookPackPickerProvider = Provider<BookPackPicker>(
   (_) => const FilePickerBookPackPicker(),

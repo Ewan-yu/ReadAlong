@@ -13,6 +13,7 @@ abstract final class AppColors {
   static const highlightBorder = Color(0xFFD0A52E); // 点读 bbox 专用描边
   static const danger = Color(0xFFD9534F); // 错词标红/删除
   static const success = Color(0xFF3BA55D);
+  static const scrim = Color(0x1F2B2B2B);
 
   // 中性色
   static const bg = Color(0xFFF7F5F0); // 阅读端全局暖底（纸感，禁纯白大底）
@@ -39,10 +40,11 @@ abstract final class AppSizes {
   static const minTouchTarget = 48.0; // 全部可点目标下限
   static const primaryButton = 72.0; // 播放/录音主按钮直径
   static const topBarHeight = 64.0;
-  static const thumbnailStripWidth = 76.0;
+  static const thumbnailStripWidth = 88.0;
   static const readerWideLayout = 720.0;
-  static const readerCollapsedStripWidth = 48.0;
+  static const readerCollapsedStripWidth = 56.0;
   static const readerThumbnailHeight = 96.0;
+  static const shelfCardMaxWidth = 260.0;
 }
 
 ThemeData buildAppTheme() {
@@ -56,13 +58,64 @@ ThemeData buildAppTheme() {
       surface: AppColors.bgAlt,
     ),
     scaffoldBackgroundColor: AppColors.bg,
+    appBarTheme: const AppBarTheme(
+      backgroundColor: AppColors.bg,
+      foregroundColor: AppColors.textPrimary,
+      surfaceTintColor: Colors.transparent,
+      elevation: 0,
+      centerTitle: false,
+      toolbarHeight: AppSizes.topBarHeight,
+      titleTextStyle: TextStyle(
+        color: AppColors.textPrimary,
+        fontSize: 22,
+        fontWeight: FontWeight.w700,
+      ),
+    ),
+    cardTheme: CardTheme(
+      color: AppColors.bgAlt,
+      surfaceTintColor: Colors.transparent,
+      elevation: 1,
+      margin: EdgeInsets.zero,
+      shape: RoundedRectangleBorder(
+        side: const BorderSide(color: AppColors.border),
+        borderRadius: BorderRadius.circular(AppRadius.card),
+      ),
+    ),
+    inputDecorationTheme: InputDecorationTheme(
+      filled: true,
+      fillColor: AppColors.bgAlt,
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(AppRadius.card),
+        borderSide: const BorderSide(color: AppColors.border),
+      ),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(AppRadius.card),
+        borderSide: const BorderSide(color: AppColors.border),
+      ),
+      contentPadding: const EdgeInsets.symmetric(
+        horizontal: AppSpacing.cardPadding,
+        vertical: 14,
+      ),
+    ),
     filledButtonTheme: FilledButtonThemeData(
       style: FilledButton.styleFrom(
         backgroundColor: AppColors.primary,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(AppRadius.button),
         ),
-        minimumSize: const Size(AppSizes.minTouchTarget, AppSizes.minTouchTarget),
+        minimumSize:
+            const Size(AppSizes.minTouchTarget, AppSizes.minTouchTarget),
+      ),
+    ),
+    outlinedButtonTheme: OutlinedButtonThemeData(
+      style: OutlinedButton.styleFrom(
+        foregroundColor: AppColors.primaryDark,
+        side: const BorderSide(color: AppColors.primary),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(AppRadius.button),
+        ),
+        minimumSize:
+            const Size(AppSizes.minTouchTarget, AppSizes.minTouchTarget),
       ),
     ),
   );

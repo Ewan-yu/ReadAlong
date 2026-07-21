@@ -93,6 +93,18 @@ final class PointReadingController
     );
     if (group.isEmpty) return;
 
+    await _playSentences(group);
+  }
+
+  Future<void> replaySubtitleSentence() async {
+    final sentence = state.valueOrNull?.subtitleSentence;
+    if (sentence == null) return;
+    await _playSentences([sentence]);
+  }
+
+  Future<void> _playSentences(List<ReaderSentence> group) async {
+    final current = state.valueOrNull;
+    if (current == null || group.isEmpty) return;
     final generation = ++_generation;
     try {
       await _player.stop();

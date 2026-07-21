@@ -74,6 +74,62 @@ class ShelfBook {
       );
 }
 
+final class ReadingProgress {
+  const ReadingProgress({
+    required this.libraryId,
+    required this.currentPage,
+    required this.updatedAt,
+  });
+
+  final String libraryId;
+  final int currentPage;
+  final DateTime updatedAt;
+}
+
+enum ReadingRecordStatus { saved, scoring, scored, failed }
+
+final class ReadingRecord {
+  const ReadingRecord({
+    required this.id,
+    required this.libraryId,
+    required this.sentenceId,
+    required this.referenceText,
+    required this.audioPath,
+    required this.status,
+    required this.provider,
+    required this.createdAt,
+    required this.updatedAt,
+    this.childScore,
+    this.detailJson,
+  });
+
+  final int id;
+  final String libraryId;
+  final String sentenceId;
+  final String referenceText;
+  final String audioPath;
+  final ReadingRecordStatus status;
+  final double? childScore;
+  final String? detailJson;
+  final String provider;
+  final DateTime createdAt;
+  final DateTime updatedAt;
+
+  factory ReadingRecord.fromMap(Map<String, Object?> map) => ReadingRecord(
+        id: map['id']! as int,
+        libraryId: map['library_id']! as String,
+        sentenceId: map['sentence_id']! as String,
+        referenceText: map['reference_text']! as String,
+        audioPath: map['audio_path']! as String,
+        status: ReadingRecordStatus.values.byName(map['status']! as String),
+        childScore: (map['child_score'] as num?)?.toDouble(),
+        detailJson: map['detail_json'] as String?,
+        provider: map['provider']! as String,
+        createdAt: DateTime.parse(map['created_at']! as String),
+        updatedAt: DateTime.parse(map['updated_at']! as String),
+      );
+}
+
 class ShelfIndex {
   final String databasePath;
   final DatabaseFactory databaseFactory;
@@ -182,13 +238,129 @@ class ShelfIndex {
     }
   }
 
+  Future<ReadingProgress?> loadProgress(String libraryId) async {
+    final db = await _open();
+    try {
+      final rows = await db.query(
+        'reading_progress',
+        where: 'library_id = ?',
+        whereArgs: [libraryId],
+        limit: 1,
+      );
+      if (rows.isEmpty) return null;
+      final row = rows.single;
+      return ReadingProgress(
+        libraryId: row['library_id']! as String,
+        currentPage: row['current_page']! as int,
+        updatedAt: DateTime.parse(row['updated_at']! as String),
+      );
+    } finally {
+      await db.close();
+    }
+  }
+
+  Future<void> saveProgress({
+    required String libraryId,
+    required int currentPage,
+  }) async {
+    final db = await _open();
+    try {
+      await db.insert(
+        'reading_progress',
+        {
+          'library_id': libraryId,
+          'current_page': currentPage,
+          'updated_at': DateTime.now().toUtc().toIso8601String(),
+        },
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+    } finally {
+      await db.close();
+    }
+  }
+
+  Future<ReadingRecord> createRecord({
+    required String libraryId,
+    required String sentenceId,
+    required String referenceText,
+    required String audioPath,
+    required String provider,
+  }) async {
+    final db = await _open();
+    try {
+      final now = DateTime.now().toUtc();
+      final id = await db.insert('record', {
+        'library_id': libraryId,
+        'sentence_id': sentenceId,
+        'reference_text': referenceText,
+        'audio_path': audioPath,
+        'status': ReadingRecordStatus.saved.name,
+        'provider': provider,
+        'created_at': now.toIso8601String(),
+        'updated_at': now.toIso8601String(),
+      });
+      return ReadingRecord(
+        id: id,
+        libraryId: libraryId,
+        sentenceId: sentenceId,
+        referenceText: referenceText,
+        audioPath: audioPath,
+        status: ReadingRecordStatus.saved,
+        provider: provider,
+        createdAt: now,
+        updatedAt: now,
+      );
+    } finally {
+      await db.close();
+    }
+  }
+
+  Future<void> updateRecord({
+    required int id,
+    required ReadingRecordStatus status,
+    double? childScore,
+    String? detailJson,
+  }) async {
+    final db = await _open();
+    try {
+      await db.update(
+        'record',
+        {
+          'status': status.name,
+          'child_score': childScore,
+          'detail_json': detailJson,
+          'updated_at': DateTime.now().toUtc().toIso8601String(),
+        },
+        where: 'id = ?',
+        whereArgs: [id],
+      );
+    } finally {
+      await db.close();
+    }
+  }
+
+  Future<void> deleteRecordsForBook(String libraryId) async {
+    final db = await _open();
+    try {
+      await db.delete('record', where: 'library_id = ?', whereArgs: [libraryId]);
+      await db.delete(
+        'reading_progress',
+        where: 'library_id = ?',
+        whereArgs: [libraryId],
+      );
+    } finally {
+      await db.close();
+    }
+  }
+
   Future<Database> _open() async {
     await Directory(p.dirname(databasePath)).create(recursive: true);
     return databaseFactory.openDatabase(
       databasePath,
       options: OpenDatabaseOptions(
-        version: 2,
-        onCreate: (db, _) => db.execute('''
+        version: 3,
+        onCreate: (db, _) async {
+          await db.execute('''
           CREATE TABLE shelf_book (
             book_id TEXT PRIMARY KEY,
             source_book_id TEXT NOT NULL,
@@ -199,7 +371,9 @@ class ShelfIndex {
             package_sha256 TEXT NOT NULL,
             imported_at TEXT NOT NULL
           )
-        '''),
+        ''');
+          await _createRuntimeTables(db);
+        },
         onUpgrade: (db, oldVersion, newVersion) async {
           if (oldVersion < 2) {
             await db.execute(
@@ -210,8 +384,38 @@ class ShelfIndex {
               [''],
             );
           }
+          if (oldVersion < 3) await _createRuntimeTables(db);
         },
       ),
     );
   }
+}
+
+Future<void> _createRuntimeTables(Database db) async {
+  await db.execute('''
+    CREATE TABLE IF NOT EXISTS reading_progress (
+      library_id TEXT PRIMARY KEY,
+      current_page INTEGER NOT NULL,
+      updated_at TEXT NOT NULL
+    )
+  ''');
+  await db.execute('''
+    CREATE TABLE IF NOT EXISTS record (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      library_id TEXT NOT NULL,
+      sentence_id TEXT NOT NULL,
+      reference_text TEXT NOT NULL,
+      audio_path TEXT NOT NULL,
+      status TEXT NOT NULL,
+      child_score REAL,
+      detail_json TEXT,
+      provider TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )
+  ''');
+  await db.execute('''
+    CREATE INDEX IF NOT EXISTS idx_record_library_sentence
+    ON record(library_id, sentence_id, created_at DESC)
+  ''');
 }
