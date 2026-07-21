@@ -466,10 +466,12 @@ class _ReaderViewState extends ConsumerState<_ReaderView> {
                               final sentence =
                                   pointReading.valueOrNull?.subtitleSentence;
                               if (sentence == null) return;
-                              ref
-                                  .read(followReadingProvider.notifier)
-                                  .selectSentence(sentence);
+                              final controller = ref.read(
+                                followReadingProvider.notifier,
+                              );
+                              controller.selectSentence(sentence);
                               setState(() => _mode = _ReaderMode.follow);
+                              unawaited(controller.playDemonstration());
                             },
                             compact: constraints.maxWidth <
                                 AppSizes.readerWideLayout,
@@ -544,9 +546,11 @@ class _ReaderViewState extends ConsumerState<_ReaderView> {
       _showMessageAfterFrame('点一下绘本中的一句话，就可以开始跟读');
       return;
     }
-    ref
-        .read(followReadingControllerProvider(widget.book.libraryId).notifier)
-        .selectSentence(selected);
+    final controller = ref.read(
+      followReadingControllerProvider(widget.book.libraryId).notifier,
+    );
+    controller.selectSentence(selected);
+    unawaited(controller.playDemonstration());
   }
 
   Future<void> _nextFollowSentence(
@@ -572,9 +576,11 @@ class _ReaderViewState extends ConsumerState<_ReaderView> {
       await Future<void>.delayed(const Duration(milliseconds: 280));
       if (!mounted) return;
     }
-    ref
-        .read(followReadingControllerProvider(widget.book.libraryId).notifier)
-        .selectSentence(next);
+    final controller = ref.read(
+      followReadingControllerProvider(widget.book.libraryId).notifier,
+    );
+    controller.selectSentence(next);
+    unawaited(controller.playDemonstration());
   }
 
   void _handlePointReadingFeedback(
@@ -663,6 +669,19 @@ class _ReaderViewState extends ConsumerState<_ReaderView> {
                   .read(followReadingControllerProvider(widget.book.libraryId)
                       .notifier)
                   .startRecording(),
+            );
+          },
+          onMyRecording: () {
+            Navigator.of(dialogContext).pop();
+            ref
+                .read(followReadingControllerProvider(widget.book.libraryId)
+                    .notifier)
+                .acknowledgeResult();
+            unawaited(
+              ref
+                  .read(followReadingControllerProvider(widget.book.libraryId)
+                      .notifier)
+                  .playMyRecording(),
             );
           },
           onNext: () {
@@ -1051,7 +1070,7 @@ class _FollowReadingPanel extends StatelessWidget {
             children: [
               const CircularProgressIndicator(),
               const SizedBox(height: AppSpacing.unit),
-              const Text('正在认真听你读…'),
+              const Text('录音已收到，正在评分…'),
             ],
           ),
         ),
@@ -1280,12 +1299,14 @@ class _FollowScoreDialog extends StatelessWidget {
     required this.sentence,
     required this.score,
     required this.onDemo,
+    required this.onMyRecording,
     required this.onRepeat,
     required this.onNext,
   });
   final ReaderSentence sentence;
   final ScoreResult score;
   final VoidCallback onDemo;
+  final VoidCallback onMyRecording;
   final VoidCallback onRepeat;
   final VoidCallback onNext;
 
@@ -1342,6 +1363,11 @@ class _FollowScoreDialog extends StatelessWidget {
                       onPressed: onDemo,
                       icon: const Icon(Icons.volume_up_outlined),
                       label: const Text('听示范'),
+                    ),
+                    OutlinedButton.icon(
+                      onPressed: onMyRecording,
+                      icon: const Icon(Icons.play_arrow_rounded),
+                      label: const Text('听我的录音'),
                     ),
                     OutlinedButton.icon(
                       onPressed: onRepeat,
