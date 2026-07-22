@@ -143,6 +143,65 @@ void main() {
       expect(result.ok, isTrue, reason: '合法包应通过: ${result.errors}');
     });
 
+    test('带可选原音的 schema v1 合法包通过校验', () async {
+      final result = await BookPackValidator.validateBytes(
+        _fixture('fixture_book_with_original.readalongbook'),
+        databaseFactory: databaseFactoryFfi,
+      );
+
+      expect(result.ok, isTrue, reason: '合法原音包应通过: ${result.errors}');
+    });
+
+    test('坏包：manifest 声明原音但文件缺失被拒绝', () async {
+      final result = await BookPackValidator.validateBytes(
+        _fixture('bad_original_missing_file.readalongbook'),
+        databaseFactory: databaseFactoryFfi,
+      );
+
+      expect(result.ok, isFalse);
+      expect(result.errors, contains(contains('缺少原音文件')));
+    });
+
+    test('坏包：原音文件大小与声明不一致被拒绝', () async {
+      final result = await BookPackValidator.validateBytes(
+        _fixture('bad_original_size.readalongbook'),
+        databaseFactory: databaseFactoryFfi,
+      );
+
+      expect(result.ok, isFalse);
+      expect(result.errors, contains(contains('大小不一致')));
+    });
+
+    test('坏包：原音文件哈希与声明不一致被拒绝', () async {
+      final result = await BookPackValidator.validateBytes(
+        _fixture('bad_original_hash.readalongbook'),
+        databaseFactory: databaseFactoryFfi,
+      );
+
+      expect(result.ok, isFalse);
+      expect(result.errors, contains(contains('sha256 不一致')));
+    });
+
+    test('坏包：原音路径不是权威路径被拒绝', () async {
+      final result = await BookPackValidator.validateBytes(
+        _fixture('bad_original_path.readalongbook'),
+        databaseFactory: databaseFactoryFfi,
+      );
+
+      expect(result.ok, isFalse);
+      expect(result.errors, contains(contains('原音路径非法')));
+    });
+
+    test('坏包：未声明的 original 资源被拒绝', () async {
+      final result = await BookPackValidator.validateBytes(
+        _fixture('bad_original_undeclared.readalongbook'),
+        databaseFactory: databaseFactoryFfi,
+      );
+
+      expect(result.ok, isFalse);
+      expect(result.errors, contains(contains('未在 manifest.json 声明')));
+    });
+
     test('坏包：缺 alignment.db 被拒绝', () async {
       final result = await BookPackValidator.validateBytes(
         _fixture('bad_missing_file.readalongbook'),
@@ -275,6 +334,23 @@ void main() {
       expect(File('${entry.bookDir}/manifest.json').existsSync(), isTrue);
       expect(File('${entry.bookDir}/align/alignment.db').existsSync(), isTrue);
       expect(await shelfIndex.findById(entry.libraryId), entry);
+    });
+
+    test('可选原音随合法包原样解压到只读资源目录', () async {
+      final bytes = _fixture('fixture_book_with_original.readalongbook');
+      final archive = ZipDecoder().decodeBytes(bytes);
+      final expected = archive
+          .firstWhere((file) => file.name == 'original/source.mp3')
+          .content as List<int>;
+
+      final result = await importer.import(bytes);
+
+      expect(result.ok, isTrue, reason: '${result.errors}');
+      expect(
+        await File('${result.entry!.bookDir}/original/source.mp3')
+            .readAsBytes(),
+        expected,
+      );
     });
 
     test('相同包再次导入返回已导入且不重复写索引', () async {

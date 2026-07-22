@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:archive/archive_io.dart';
+import 'package:crypto/crypto.dart';
 import 'package:sqflite/sqflite.dart' as sqflite;
 
 import 'archive_entries.dart';
@@ -78,6 +79,8 @@ class BookPackValidator {
       errors.add('book_id 格式非法: $bookId');
     }
 
+    _validateOriginalAudio(manifest, byName, errors);
+
     // 5. 页面图片存在
     for (final page
         in ((manifest['pages'] as List?) ?? []).cast<Map<String, dynamic>>()) {
@@ -101,6 +104,81 @@ class BookPackValidator {
     return errors.isEmpty
         ? ValidationResult.pass()
         : ValidationResult.fail(errors);
+  }
+
+  static void _validateOriginalAudio(
+    Map<String, dynamic> manifest,
+    Map<String, ArchiveFile> byName,
+    List<String> errors,
+  ) {
+    final originalFiles = byName.entries
+        .where(
+            (entry) => entry.value.isFile && entry.key.startsWith('original/'))
+        .map((entry) => entry.key)
+        .toSet();
+    final raw = manifest['original_audio'];
+    if (raw == null) {
+      for (final path in originalFiles) {
+        errors.add('原音资源未在 manifest.json 声明: $path');
+      }
+      return;
+    }
+    if (raw is! Map<String, dynamic>) {
+      errors.add('manifest.json original_audio 必须是对象');
+      return;
+    }
+    for (final key in BookPackSchema.originalAudioRequiredKeys) {
+      if (!raw.containsKey(key)) {
+        errors.add('manifest.json original_audio 缺字段: $key');
+      }
+    }
+    if (!BookPackSchema.originalAudioRequiredKeys.every(raw.containsKey)) {
+      return;
+    }
+
+    final path = raw['path'];
+    if (path != BookPackSchema.originalAudioPath) {
+      errors.add('原音路径非法: $path');
+    }
+    if (raw['mime_type'] != BookPackSchema.originalAudioMimeType) {
+      errors.add('原音 MIME 类型非法: ${raw['mime_type']}');
+    }
+    final declaredSize = raw['size_bytes'];
+    if (declaredSize is! int || declaredSize <= 0) {
+      errors.add('原音 size_bytes 非法: $declaredSize');
+    }
+    final declaredHash = raw['sha256'];
+    if (declaredHash is! String ||
+        !BookPackSchema.sha256Pattern.hasMatch(declaredHash)) {
+      errors.add('原音 sha256 非法: $declaredHash');
+    }
+    final duration = raw['duration_ms'];
+    if (duration is! int || duration <= 0) {
+      errors.add('原音 duration_ms 非法: $duration');
+    }
+    if (raw['alignment_status'] != BookPackSchema.originalAudioRawStatus) {
+      errors.add('原音 alignment_status 非法: ${raw['alignment_status']}');
+    }
+
+    final declaredPath = path is String ? path : null;
+    final file = declaredPath == null ? null : byName[declaredPath];
+    if (file == null || !file.isFile) {
+      errors.add('缺少原音文件: $declaredPath');
+    } else {
+      final content = List<int>.from(file.content as List<int>);
+      if (declaredSize is int && content.length != declaredSize) {
+        errors.add('原音文件大小不一致: 声明 $declaredSize，实际 ${content.length}');
+      }
+      final actualHash = sha256.convert(content).toString();
+      if (declaredHash is String && actualHash != declaredHash) {
+        errors.add('原音文件 sha256 不一致');
+      }
+    }
+
+    for (final extraPath
+        in originalFiles.where((entry) => entry != declaredPath)) {
+      errors.add('存在未声明的原音资源: $extraPath');
+    }
   }
 
   static Future<List<String>> _validateDb(
