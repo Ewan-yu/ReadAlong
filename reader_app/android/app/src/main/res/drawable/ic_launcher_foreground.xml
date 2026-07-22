@@ -1,0 +1,32 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Friendly open book, kept inside Android's adaptive-icon safe zone. -->
+    <path
+        android:fillColor="#166B62"
+        android:pathData="M54,42 C45,36 34,36 25,40 L25,75 C34,71 45,72 54,79 Z" />
+    <path
+        android:fillColor="#1D8A7E"
+        android:pathData="M54,42 C63,36 74,36 83,40 L83,75 C74,71 63,72 54,79 Z" />
+    <path
+        android:fillColor="#E3F2EF"
+        android:pathData="M50,47 C43,43 35,43 30,45 L30,68 C37,66 44,67 50,71 Z" />
+    <path
+        android:fillColor="#E3F2EF"
+        android:pathData="M58,47 C65,43 73,43 78,45 L78,68 C71,66 64,67 58,71 Z" />
+    <path
+        android:fillColor="#F08C1B"
+        android:pathData="M49,31 C51.8,28.3 56.2,28.3 59,31 L59,38 C56.2,35.3 51.8,35.3 49,38 Z" />
+    <path
+        android:fillColor="#F7E9A8"
+        android:pathData="M62,27 L64.5,29.5 L67,27 L64.5,24.5 Z" />
+    <path
+        android:fillColor="#F08C1B"
+        android:pathData="M67,32 L69,34 L71,32 L69,30 Z" />
+    <path
+        android:fillColor="#F08C1B"
+        android:pathData="M38,32 L40,34 L42,32 L40,30 Z" />
+</vector>
