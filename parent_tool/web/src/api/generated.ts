@@ -757,6 +757,20 @@ export interface components {
             /** Detail */
             detail: string;
         };
+        /** ExportOriginalAudioInfo */
+        ExportOriginalAudioInfo: {
+            /**
+             * Path
+             * @default original/source.mp3
+             */
+            path: string;
+            /** Size Bytes */
+            size_bytes: number;
+            /** Sha256 */
+            sha256: string;
+            /** Duration Ms */
+            duration_ms?: number | null;
+        };
         /** ExportPackageInfo */
         ExportPackageInfo: {
             /** Filename */
@@ -771,6 +785,7 @@ export interface components {
             audio_provider_counts?: {
                 [key: string]: number;
             };
+            original_audio?: components["schemas"]["ExportOriginalAudioInfo"] | null;
             /** Size Bytes */
             size_bytes?: number | null;
             /** Sha256 */

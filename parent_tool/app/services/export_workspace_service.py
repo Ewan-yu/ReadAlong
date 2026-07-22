@@ -5,11 +5,17 @@ from pathlib import Path, PurePosixPath
 
 from app.models.audio import AudioGenerationReport
 from app.models.errors import PipelineError
-from app.models.export_workspace import ExportCheck, ExportPackageInfo, ExportWorkspaceResponse
+from app.models.export_workspace import (
+    ExportCheck,
+    ExportOriginalAudioInfo,
+    ExportPackageInfo,
+    ExportWorkspaceResponse,
+)
 from app.models.ocr import OcrSentences
 from app.models.pages import PagePlan
 from app.models.pipeline import StepId, StepStatus, StepSuccess
 from app.pipeline.artifacts import ArtifactStore
+from app.pipeline.hashing import file_sha256
 from app.pipeline.paths import WorkspacePaths, ensure_within
 from app.pipeline.state_repository import StateRepository
 
@@ -27,6 +33,12 @@ class ExportWorkspaceService:
         pages = self._load_pages(book_id, state.steps[StepId.PAGES].status, state.steps[StepId.PAGES].success, checks)
         sentences = self._load_sentences(book_id, state.steps[StepId.PROOFREAD].status, state.steps[StepId.PROOFREAD].success, checks)
         audio = self._load_audio(book_id, state.steps[StepId.AUDIO].status, state.steps[StepId.AUDIO].success, checks)
+        original_audio = self._load_original_audio(
+            book_id,
+            state.source.original_audio_path,
+            state.source.original_audio_sha256,
+            checks,
+        )
         page_count = len(tuple(output for entry in pages.pages for output in entry.outputs)) if pages else 0
         sentence_count = len(sentences.sentences) if sentences else 0
         timing_count = sum(item.word_timing is not None for item in audio.sentences) if audio else 0
@@ -56,7 +68,27 @@ class ExportWorkspaceService:
             try:
                 report = json.loads((root / "validation_report.json").read_text(encoding="utf-8"))
                 size_bytes, sha256 = int(report["size_bytes"]), str(report["sha256"])
-                checks.append(ExportCheck(id="bundle", label="资源包校验", status="pass", detail="已生成并通过 manifest、页面、音频与 alignment 校验。"))
+                packaged_original = report.get("original_audio")
+                if original_audio is not None:
+                    if not self._matches_original_audio(packaged_original, original_audio):
+                        checks.append(
+                            ExportCheck(
+                                id="bundle",
+                                label="资源包校验",
+                                status="warning",
+                                detail="现有资源包尚未包含当前原音，请重新生成。",
+                            )
+                        )
+                        export_revision_id = None
+                        size_bytes = None
+                        sha256 = None
+                    else:
+                        original_audio = original_audio.model_copy(
+                            update={"duration_ms": int(packaged_original["duration_ms"])}
+                        )
+                        checks.append(ExportCheck(id="bundle", label="资源包校验", status="pass", detail="已生成并通过 manifest、页面、音频、原音与 alignment 校验。"))
+                else:
+                    checks.append(ExportCheck(id="bundle", label="资源包校验", status="pass", detail="已生成并通过 manifest、页面、音频与 alignment 校验。"))
             except (OSError, ValueError, KeyError, TypeError):
                 checks.append(ExportCheck(id="bundle", label="资源包校验", status="error", detail="导出报告已损坏，请重新生成资源包。"))
                 export_revision_id = None
@@ -65,7 +97,7 @@ class ExportWorkspaceService:
             ready=ready,
             suggested_title=book_id.replace("-", " ").title(),
             checks=tuple(checks),
-            package=ExportPackageInfo(filename=filename, page_count=page_count, sentence_count=sentence_count, word_timing_sentence_count=timing_count, audio_provider_counts=provider_counts, size_bytes=size_bytes, sha256=sha256),
+            package=ExportPackageInfo(filename=filename, page_count=page_count, sentence_count=sentence_count, word_timing_sentence_count=timing_count, audio_provider_counts=provider_counts, original_audio=original_audio, size_bytes=size_bytes, sha256=sha256),
             export_revision_id=export_revision_id,
         )
 
@@ -120,6 +152,84 @@ class ExportWorkspaceService:
         except (OSError, ValueError, PipelineError):
             checks.append(ExportCheck(id="audio-source", label="语音生成", status="error", detail="音频产物不可用，请重新生成语音。"))
             return None
+
+    def _load_original_audio(
+        self,
+        book_id: str,
+        declared_path: str | None,
+        declared_sha256: str | None,
+        checks: list[ExportCheck],
+    ) -> ExportOriginalAudioInfo | None:
+        if declared_path is None and declared_sha256 is None:
+            return None
+        if not declared_path or not declared_sha256:
+            checks.append(
+                ExportCheck(
+                    id="original-audio",
+                    label="原音音频",
+                    status="error",
+                    detail="原音记录不完整，请重新创建绘本工作区。",
+                )
+            )
+            return None
+        try:
+            root = self.paths.book(book_id)
+            source = ensure_within(root, root / Path(declared_path))
+            if not source.is_file() or source.stat().st_size <= 0:
+                raise OSError
+            actual_sha256 = file_sha256(source)
+            if actual_sha256 != declared_sha256:
+                checks.append(
+                    ExportCheck(
+                        id="original-audio",
+                        label="原音音频",
+                        status="error",
+                        detail="原音文件已被修改，请重新导入后再导出。",
+                    )
+                )
+                return None
+            info = ExportOriginalAudioInfo(
+                size_bytes=source.stat().st_size,
+                sha256=actual_sha256,
+            )
+            checks.append(
+                ExportCheck(
+                    id="original-audio",
+                    label="原音音频",
+                    status="pass",
+                    detail="MP3 原音已就绪，将原样打包为 original/source.mp3。",
+                )
+            )
+            return info
+        except (OSError, PipelineError):
+            checks.append(
+                ExportCheck(
+                    id="original-audio",
+                    label="原音音频",
+                    status="error",
+                    detail="原音文件不存在或不可读取，无法导出。",
+                )
+            )
+            return None
+
+    @staticmethod
+    def _matches_original_audio(
+        packaged: object,
+        source: ExportOriginalAudioInfo,
+    ) -> bool:
+        if not isinstance(packaged, dict):
+            return False
+        try:
+            return (
+                packaged["path"] == source.path
+                and packaged["mime_type"] == "audio/mpeg"
+                and int(packaged["size_bytes"]) == source.size_bytes
+                and packaged["sha256"] == source.sha256
+                and int(packaged["duration_ms"]) > 0
+                and packaged["alignment_status"] == "raw"
+            )
+        except (KeyError, TypeError, ValueError):
+            return False
 
     def _require(self, book_id: str, step: StepId, success: StepSuccess, label: str) -> StepSuccess:
         if not self._verify(book_id, step, success):

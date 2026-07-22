@@ -77,7 +77,7 @@ export type AudioWorkspaceSentence = AudioWorkspace["sentences"][number];
 export type ExportWorkspace = {
   ready: boolean; suggested_title: string; export_revision_id?: string | null;
   checks: Array<{ id: string; label: string; status: "pass" | "warning" | "error"; detail: string }>;
-  package: { filename: string; page_count: number; sentence_count: number; word_timing_sentence_count: number; audio_provider_counts: Record<string, number>; size_bytes?: number | null; sha256?: string | null };
+  package: { filename: string; page_count: number; sentence_count: number; word_timing_sentence_count: number; audio_provider_counts: Record<string, number>; original_audio?: { path: string; size_bytes: number; sha256: string; duration_ms?: number | null } | null; size_bytes?: number | null; sha256?: string | null };
 };
 
 const client = createClient<paths>({ baseUrl: "" });
