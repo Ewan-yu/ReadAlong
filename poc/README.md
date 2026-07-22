@@ -1,5 +1,37 @@
 # VoxCPM 排雷验证（PoC）
 
+## M5 人声/背景分离 PoC（Demucs）
+
+M5 WP2 使用 `htdemucs` 与 `htdemucs_ft` 比较真实绘本原音的人声/背景分离质量。该能力不进入 `parent_tool/pyproject.toml`，原工作区音频只读，所有 WAV、试听片段和报告写入已忽略的 `poc/out/demucs/`。
+
+国内网络建议先使用带断点续传、重试和 SHA-256 校验的下载脚本：
+
+```powershell
+$python = 'D:\Program Files\Anaconda3\envs\readalong\python.exe'
+$cache = 'F:\Source\ReadAlong\pretrained_models\Demucs'
+& $python poc/download_demucs_models.py --cache $cache
+```
+
+默认权重源为 `https://dl.fbaipublicfiles.com/demucs/`。如果直连不可用，可把提供同样 `hybrid_transformer/` 目录结构的国内镜像传给 `--base-url`，或设置 `DEMUCS_MODEL_BASE_URL`。已完成的 `.part` 文件会续传，最终文件按 Demucs 文件名中的 SHA-256 前缀校验。
+
+运行真实双模型 PoC：
+
+```powershell
+& $python poc/demucs_separation_poc.py `
+  'F:\ReadAlongData\workspaces\0-411-2-my-family-20260718-04\original_audio.mp3' `
+  --cache $cache
+```
+
+每个模型输出 `vocals.wav`、`no_vocals.wav`，以及开头/中段/结尾各 12 秒的原音、人声、背景 Ogg。`separation_report.json` 记录源 SHA-256、时长漂移、推理耗时、RTF、CUDA 峰值和响度指标。人工试听结论仍是背景轨是否可进入产品的最终门禁。
+
+如果本机已有 stable-ts/Whisper 缓存，可额外筛查背景中的旁白残留：
+
+```powershell
+& $python poc/analyze_demucs_leakage.py poc/out/demucs/separation_report.json --model tiny
+```
+
+`leakage_analysis.json` 会比较原音、人声轨和背景轨的转写词覆盖与序列相似度。Whisper 对纯音乐可能产生幻觉，因此该指标只用于发现明显残留，不能代替三段人工试听。
+
 > ✅ **PoC-A 已通过**（2026-07-05 实测于 RTX 4070）
 > 这是**验证脚本**，不是正式项目代码。目的：确认 VoxCPM2 能否作为 ReadAlong 的 TTS 主力方案。
 
