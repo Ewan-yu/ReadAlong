@@ -2,13 +2,15 @@
 """M1.1 — 夹具资源包生成器。
 
 产出一本合法的迷你 .readalongbook（2 页 4 句，程序化生成图片与音频），
-以及 4 种坏包变体，供 reader_app 的 BookPackValidator 单测使用：
+以及坏包变体，供 reader_app 的 BookPackValidator 单测使用：
 
   fixture_book.readalongbook           合法包
   bad_missing_file.readalongbook       缺 align/alignment.db
   bad_bbox.readalongbook               句子 bbox 越界（x+w>1）
   bad_empty_text.readalongbook         句子 text 为空
   bad_path_escape.readalongbook        zip 内含 ../ 路径逃逸条目
+  fixture_book_with_original.readalongbook  合法可选原音包
+  bad_original_*.readalongbook         原音声明/文件不一致
 
 用法（无 GPU 依赖，任意 Python>=3.10 + pillow）：
     python shared/fixtures/make_fixture_book.py [输出目录]
@@ -17,6 +19,7 @@
 from __future__ import annotations
 
 import io
+import hashlib
 import json
 import math
 import sqlite3
@@ -32,6 +35,9 @@ SCHEMA_SQL = REPO_ROOT / "shared" / "schema" / "alignment.sql"
 BOOK_ID = "fixture-book-0001"
 TITLE = "Fixture Book"
 SCHEMA_VERSION = 1
+ORIGINAL_AUDIO_PATH = "original/source.mp3"
+ORIGINAL_AUDIO = b"ID3" + bytes(range(64))
+ORIGINAL_AUDIO_DURATION_MS = 1250
 
 # 2 页，每页 2 句。bbox 为归一化坐标。
 PAGES = [
@@ -150,7 +156,7 @@ def _make_alignment_db(sentences_override: list | None = None) -> bytes:
         return db_path.read_bytes()
 
 
-def _make_manifest() -> bytes:
+def _make_manifest(original_audio: bytes | None = None) -> bytes:
     manifest = {
         "schema_version": SCHEMA_VERSION,
         "book_id": BOOK_ID,
@@ -170,6 +176,15 @@ def _make_manifest() -> bytes:
             for p in PAGES
         ],
     }
+    if original_audio is not None:
+        manifest["original_audio"] = {
+            "path": ORIGINAL_AUDIO_PATH,
+            "mime_type": "audio/mpeg",
+            "size_bytes": len(original_audio),
+            "sha256": hashlib.sha256(original_audio).hexdigest(),
+            "duration_ms": ORIGINAL_AUDIO_DURATION_MS,
+            "alignment_status": "raw",
+        }
     # 生成前先过一遍自家 schema，防夹具本身漂移
     try:
         import jsonschema
@@ -181,7 +196,7 @@ def _make_manifest() -> bytes:
     return json.dumps(manifest, ensure_ascii=False, indent=2).encode("utf-8")
 
 
-def _build_entries() -> dict[str, bytes]:
+def _build_entries(*, include_original: bool = False) -> dict[str, bytes]:
     entries: dict[str, bytes] = {}
     _make_page_images(entries)
     beep = _make_beep_ogg()
@@ -189,8 +204,23 @@ def _build_entries() -> dict[str, bytes]:
         for s in p["sentences"]:
             entries[f"tts/{s['id']}.ogg"] = beep
     entries["align/alignment.db"] = _make_alignment_db()
-    entries["manifest.json"] = _make_manifest()
+    if include_original:
+        entries[ORIGINAL_AUDIO_PATH] = ORIGINAL_AUDIO
+    entries["manifest.json"] = _make_manifest(ORIGINAL_AUDIO if include_original else None)
     return entries
+
+
+def _mutate_manifest(
+    entries: dict[str, bytes],
+    mutate,
+) -> dict[str, bytes]:
+    changed = dict(entries)
+    manifest = json.loads(changed["manifest.json"].decode("utf-8"))
+    mutate(manifest)
+    changed["manifest.json"] = json.dumps(
+        manifest, ensure_ascii=False, indent=2
+    ).encode("utf-8")
+    return changed
 
 
 def _write_zip(path: Path, entries: dict[str, bytes]) -> None:
@@ -237,6 +267,41 @@ def main() -> None:
     bad = dict(good)
     bad["../evil.txt"] = b"path escape"
     _write_zip(out_dir / "bad_path_escape.readalongbook", bad)
+
+    original = _build_entries(include_original=True)
+    _write_zip(out_dir / "fixture_book_with_original.readalongbook", original)
+
+    bad = dict(original)
+    del bad[ORIGINAL_AUDIO_PATH]
+    _write_zip(out_dir / "bad_original_missing_file.readalongbook", bad)
+
+    bad = _mutate_manifest(
+        original,
+        lambda manifest: manifest["original_audio"].__setitem__(
+            "size_bytes", len(ORIGINAL_AUDIO) + 1
+        ),
+    )
+    _write_zip(out_dir / "bad_original_size.readalongbook", bad)
+
+    bad = _mutate_manifest(
+        original,
+        lambda manifest: manifest["original_audio"].__setitem__(
+            "sha256", "0" * 64
+        ),
+    )
+    _write_zip(out_dir / "bad_original_hash.readalongbook", bad)
+
+    bad = _mutate_manifest(
+        original,
+        lambda manifest: manifest["original_audio"].__setitem__(
+            "path", "original/other.mp3"
+        ),
+    )
+    _write_zip(out_dir / "bad_original_path.readalongbook", bad)
+
+    bad = dict(good)
+    bad[ORIGINAL_AUDIO_PATH] = ORIGINAL_AUDIO
+    _write_zip(out_dir / "bad_original_undeclared.readalongbook", bad)
 
     print("\n完成。合法包可直接导入 reader_app；坏包用于 BookPackValidator 单测。")
 

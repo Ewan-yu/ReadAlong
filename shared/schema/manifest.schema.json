@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "readalong/manifest.schema.json",
   "title": "ReadAlong 资源包 manifest.json",
-  "description": "资源包(.readalongbook)入口文件。schema_version=1。改格式必须 bump 版本并记 CHANGELOG.md。",
+  "description": "资源包(.readalongbook)入口文件。schema_version=1。向后兼容的可选字段记 CHANGELOG；破坏性变更必须 bump 版本。",
   "type": "object",
   "required": ["schema_version", "book_id", "title", "language", "created_at", "generator", "page_count", "page_image", "thumbnail", "pages"],
   "properties": {
@@ -40,6 +40,20 @@
         "format": { "type": "string", "enum": ["jpg"] },
         "max_long_edge_px": { "type": "integer" },
         "quality": { "type": "integer", "minimum": 1, "maximum": 100 }
+      }
+    },
+    "original_audio": {
+      "type": "object",
+      "description": "可选的完整绘本原音。M5.1 仅打包 raw 原音；对齐和背景轨由后续可选字段扩展。",
+      "additionalProperties": false,
+      "required": ["path", "mime_type", "size_bytes", "sha256", "duration_ms", "alignment_status"],
+      "properties": {
+        "path": { "type": "string", "const": "original/source.mp3" },
+        "mime_type": { "type": "string", "const": "audio/mpeg" },
+        "size_bytes": { "type": "integer", "minimum": 1 },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "duration_ms": { "type": "integer", "minimum": 1 },
+        "alignment_status": { "type": "string", "const": "raw" }
       }
     },
     "pages": {

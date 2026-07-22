@@ -15,3 +15,10 @@
   - `sentence.shared_bbox` 标记块级共享 bbox（命中连播）
   - `word_timing` 可缺失（词序一致性校验失败的句子降级整句字幕）
 - 阅读端 `record` 表**不在**资源包内（App 私有库，见 functional-design B4）
+
+### 2026-07-22：可选原音资源（向后兼容 minor）
+
+- `manifest.json` 新增可选 `original_audio` 对象；既有必填键和 `schema_version=1` 不变。
+- M5.1 声明 `original/source.mp3` 的 MIME、字节数、SHA-256、时长和 `alignment_status=raw`。
+- 旧阅读端可忽略该字段与额外资源；支持原音的阅读端在字段存在时必须验证声明文件、大小和哈希。
+- 原音仍为只读包资源；运行时录音和未来配音 Take 不写入资源包。

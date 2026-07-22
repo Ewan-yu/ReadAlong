@@ -19,6 +19,20 @@ abstract final class BookPackSchema {
     'pages',
   };
 
+  /// manifest.original_audio 存在时的必填字段。
+  static const originalAudioRequiredKeys = {
+    'path',
+    'mime_type',
+    'size_bytes',
+    'sha256',
+    'duration_ms',
+    'alignment_status',
+  };
+
+  static const originalAudioPath = 'original/source.mp3';
+  static const originalAudioMimeType = 'audio/mpeg';
+  static const originalAudioRawStatus = 'raw';
+
   /// alignment.db 必须存在的表（与 alignment.sql 一致）
   static const alignmentTables = {'book', 'page', 'sentence', 'word_timing'};
 
@@ -30,4 +44,5 @@ abstract final class BookPackSchema {
 
   /// book_id 规则（与 manifest.schema.json pattern 一致）
   static final bookIdPattern = RegExp(r'^[a-z0-9][a-z0-9-]{2,63}$');
+  static final sha256Pattern = RegExp(r'^[0-9a-f]{64}$');
 }
