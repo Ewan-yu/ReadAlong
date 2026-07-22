@@ -17,12 +17,17 @@ from app.models.pages import PagePlan
 from app.models.pipeline import StepId, StepResult, utc_now
 from app.pipeline.definitions import StepRunContext
 from app.pipeline.hashing import file_sha256
+from app.pipeline.paths import ensure_within
+from app.providers.media import FfprobeMediaProbe
 
 
 class ExportStep:
     step_id = StepId.EXPORT
     implementation_version = "export-v1"
     params_model = ExportParams
+
+    def __init__(self, media_probe: FfprobeMediaProbe | None = None) -> None:
+        self._media_probe = media_probe or FfprobeMediaProbe()
 
     def run(self, context: StepRunContext, params: ExportParams) -> StepResult:
         try:
@@ -48,22 +53,108 @@ class ExportStep:
         bundle = context.staging_dir / bundle_name
         with tempfile.TemporaryDirectory(prefix=".export-", dir=context.staging_dir) as temporary:
             assembly = Path(temporary)
-            manifest = self._manifest(context.book_id, title, plan)
+            original_audio = self._copy_original_audio(assembly, context)
+            manifest = self._manifest(context.book_id, title, plan, original_audio)
             self._validate_manifest(manifest)
             (assembly / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
             self._copy_pages(assembly, pages_root, outputs)
             self._copy_audio(assembly, audio_root, by_audio)
             self._write_alignment(assembly / "align" / "alignment.db", context.book_id, title, manifest, sentences, by_audio)
             self._zip(assembly, bundle)
-        report = {"book_id": context.book_id, "pages": len(outputs), "sentences": len(sentences.sentences), "word_timing_sentences": sum(item.word_timing is not None for item in audio.sentences), "size_bytes": bundle.stat().st_size, "sha256": file_sha256(bundle)}
+        report = {
+            "book_id": context.book_id,
+            "pages": len(outputs),
+            "sentences": len(sentences.sentences),
+            "word_timing_sentences": sum(
+                item.word_timing is not None for item in audio.sentences
+            ),
+            "size_bytes": bundle.stat().st_size,
+            "sha256": file_sha256(bundle),
+            "original_audio": original_audio,
+        }
         (context.staging_dir / "validation_report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
         context.progress(1, "资源包导出完成。")
         return StepResult(outputs=(bundle_name, "validation_report.json"), summary=report)
 
     @staticmethod
-    def _manifest(book_id: str, title: str, plan: PagePlan) -> dict:
+    def _manifest(
+        book_id: str,
+        title: str,
+        plan: PagePlan,
+        original_audio: dict | None = None,
+    ) -> dict:
         outputs = [(entry, item) for entry in plan.pages for item in entry.outputs]
-        return {"schema_version": 1, "book_id": book_id, "title": title, "language": "en", "created_at": utc_now().isoformat(), "generator": {"name": "ReadAlong Parent Tool", "version": "0.1.0"}, "page_count": len(outputs), "page_image": {"format": "webp", "max_long_edge_px": plan.params.reading_long_edge, "quality": plan.params.webp_quality}, "thumbnail": {"format": "jpg", "max_long_edge_px": plan.params.thumbnail_long_edge, "quality": plan.params.thumbnail_quality}, "pages": [{"page_no": item.page_no, "image": item.page_image, "thumbnail": item.thumbnail, "width_px": item.width, "height_px": item.height, "source_pdf_page": entry.source_pdf_page, "source_region": item.region.value} for entry, item in outputs]}
+        manifest = {"schema_version": 1, "book_id": book_id, "title": title, "language": "en", "created_at": utc_now().isoformat(), "generator": {"name": "ReadAlong Parent Tool", "version": "0.1.0"}, "page_count": len(outputs), "page_image": {"format": "webp", "max_long_edge_px": plan.params.reading_long_edge, "quality": plan.params.webp_quality}, "thumbnail": {"format": "jpg", "max_long_edge_px": plan.params.thumbnail_long_edge, "quality": plan.params.thumbnail_quality}, "pages": [{"page_no": item.page_no, "image": item.page_image, "thumbnail": item.thumbnail, "width_px": item.width, "height_px": item.height, "source_pdf_page": entry.source_pdf_page, "source_region": item.region.value} for entry, item in outputs]}
+        if original_audio is not None:
+            manifest["original_audio"] = original_audio
+        return manifest
+
+    def _copy_original_audio(
+        self,
+        assembly: Path,
+        context: StepRunContext,
+    ) -> dict | None:
+        declared_path = context.source_original_audio_path
+        declared_sha256 = context.source_original_audio_sha256
+        if declared_path is None and declared_sha256 is None:
+            return None
+        if not declared_path or not declared_sha256:
+            raise PipelineError(
+                "ORIGINAL_AUDIO_STATE_INVALID",
+                "工作区原音信息不完整，请重新创建绘本工作区。",
+                status_code=409,
+            )
+        source = ensure_within(context.workspace_dir, context.workspace_dir / Path(declared_path))
+        if not source.is_file():
+            raise PipelineError(
+                "ORIGINAL_AUDIO_MISSING",
+                "工作区中的原音音频不存在，无法导出。",
+                details={"path": declared_path},
+                status_code=409,
+            )
+        size_bytes = source.stat().st_size
+        if size_bytes <= 0:
+            raise PipelineError(
+                "ORIGINAL_AUDIO_INVALID",
+                "工作区中的原音音频为空，无法导出。",
+                status_code=409,
+            )
+        actual_sha256 = file_sha256(source)
+        if actual_sha256 != declared_sha256:
+            raise PipelineError(
+                "ORIGINAL_AUDIO_HASH_MISMATCH",
+                "原音音频已被修改，请重新导入后再导出。",
+                details={"expected": declared_sha256, "actual": actual_sha256},
+                status_code=409,
+            )
+        target = assembly / "original" / "source.mp3"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            shutil.copyfile(source, target)
+        except OSError as exc:
+            raise PipelineError(
+                "ORIGINAL_AUDIO_COPY_FAILED",
+                "原音音频无法写入资源包。",
+                status_code=500,
+            ) from exc
+        packaged_size = target.stat().st_size
+        packaged_sha256 = file_sha256(target)
+        if packaged_size != size_bytes or packaged_sha256 != declared_sha256:
+            raise PipelineError(
+                "ORIGINAL_AUDIO_HASH_MISMATCH",
+                "原音音频在导出期间发生变化，请重试。",
+                details={"expected": declared_sha256, "actual": packaged_sha256},
+                status_code=409,
+            )
+        duration_ms = self._media_probe.duration_ms(target, context.cancellation)
+        return {
+            "path": "original/source.mp3",
+            "mime_type": "audio/mpeg",
+            "size_bytes": packaged_size,
+            "sha256": packaged_sha256,
+            "duration_ms": duration_ms,
+            "alignment_status": "raw",
+        }
 
     @staticmethod
     def _validate_manifest(manifest: dict) -> None:

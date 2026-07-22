@@ -37,6 +37,7 @@ from app.pipeline.paths import WorkspacePaths
 from app.pipeline.state_repository import StateRepository
 from app.pipeline.steps import AudioStep, AutoProofreadStep, ExportStep, OcrStep, PageProcessingStep
 from app.providers.align import StableTsWordAligner
+from app.providers.media import FfprobeMediaProbe
 from app.providers.ocr import PaddleOcrProvider
 from app.providers.tts import FfmpegOpusTranscoder, VoxCpmTtsProvider
 from app.services.workspace_service import WorkspaceService
@@ -111,7 +112,7 @@ def create_app(
                         transcoder,
                         voice_profile_service,
                     ),
-                    ExportStep(),
+                    ExportStep(FfprobeMediaProbe()),
                 )
             )
             engine = PipelineEngine(states, artifacts, registry)

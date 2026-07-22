@@ -61,6 +61,8 @@ class StepRunContext:
     dependency_outputs: dict[StepId, Path]
     progress: ProgressReporter
     cancellation: CancellationToken
+    source_original_audio_path: str | None = None
+    source_original_audio_sha256: str | None = None
 
 
 class PipelineStep(Protocol):

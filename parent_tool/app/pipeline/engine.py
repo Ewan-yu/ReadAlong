@@ -114,11 +114,16 @@ class PipelineEngine:
                 status_code=422,
             ) from exc
         params_hash = canonical_sha256(params.model_dump(mode="json"))
+        source_fingerprint = None
+        if step_id is StepId.PAGES:
+            source_fingerprint = state.source.pdf_sha256
+        elif step_id is StepId.EXPORT:
+            source_fingerprint = state.source.original_audio_sha256
         fingerprint = input_fingerprint(
             step_id=step_id.value,
             implementation_version=step.implementation_version,
             params_hash=params_hash,
-            source_fingerprint=state.source.pdf_sha256 if step_id is StepId.PAGES else None,
+            source_fingerprint=source_fingerprint,
             dependencies=dependency_fingerprints,
         )
         current = state.steps[step_id]
@@ -218,18 +223,29 @@ class PipelineEngine:
         published_root: str | None = None
         try:
             cancellation.raise_if_cancelled()
+            current_state = self.states.load(plan.book_id)
             context = StepRunContext(
                 book_id=plan.book_id,
                 workspace_dir=self.artifacts.paths.book(plan.book_id),
                 staging_dir=prepared.staging_dir,
                 source_pdf_sha256=(
-                    self.states.load(plan.book_id).source.pdf_sha256
+                    current_state.source.pdf_sha256
                     if plan.step_id is StepId.PAGES
                     else None
                 ),
                 dependency_outputs=plan.dependency_outputs,
                 progress=reporter,
                 cancellation=cancellation,
+                source_original_audio_path=(
+                    current_state.source.original_audio_path
+                    if plan.step_id is StepId.EXPORT
+                    else None
+                ),
+                source_original_audio_sha256=(
+                    current_state.source.original_audio_sha256
+                    if plan.step_id is StepId.EXPORT
+                    else None
+                ),
             )
             result = plan.step.run(context, plan.params)
             cancellation.raise_if_cancelled()
