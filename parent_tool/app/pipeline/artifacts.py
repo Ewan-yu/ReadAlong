@@ -75,9 +75,40 @@ class ArtifactStore:
         staging.rename(target)
         return target.relative_to(self.paths.book(book_id)).as_posix()
 
+    def publish_candidate(self, book_id: str, step_id: StepId, revision_id: str, staging: Path) -> str:
+        expected_staging_root = self.paths.book(book_id) / ".runs"
+        ensure_within(expected_staging_root, staging)
+        target = self.paths.candidate(book_id, step_id, revision_id)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if target.exists():
+            raise _output_error("候选产物目录已经存在。", path=str(target))
+        staging.rename(target)
+        return target.relative_to(self.paths.book(book_id)).as_posix()
+
+    def promote_candidate(self, book_id: str, revision_id: str, success: StepSuccess) -> StepSuccess:
+        source = self.paths.candidate(book_id, StepId.ORIGINAL_AUDIO, revision_id)
+        if not self.verify(book_id, StepId.ORIGINAL_AUDIO, success):
+            raise PipelineError("ORIGINAL_AUDIO_CANDIDATE_INVALID", "原音分离候选已损坏，请重新分离。", status_code=409)
+        target = self.paths.revision(book_id, StepId.ORIGINAL_AUDIO, revision_id)
+        if not target.exists():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(source, target)
+        published = success.model_copy(update={"output_root": target.relative_to(self.paths.book(book_id)).as_posix()})
+        if not self.verify(book_id, StepId.ORIGINAL_AUDIO, published):
+            raise PipelineError("ORIGINAL_AUDIO_CANDIDATE_INVALID", "无法发布完整的原音分离候选。", status_code=409)
+        return published
+
     def verify(self, book_id: str, step_id: StepId, success: StepSuccess) -> bool:
         try:
-            expected = self.paths.revision(book_id, step_id, success.revision_id)
+            is_candidate = (
+                step_id is StepId.ORIGINAL_AUDIO
+                and success.output_root.startswith("06_original_audio/candidates/")
+            )
+            expected = (
+                self.paths.candidate(book_id, step_id, success.revision_id)
+                if is_candidate
+                else self.paths.revision(book_id, step_id, success.revision_id)
+            )
             actual = ensure_within(
                 self.paths.book(book_id), self.paths.book(book_id) / Path(success.output_root)
             )
@@ -123,12 +154,21 @@ class ArtifactStore:
             for step in state.steps.values()
             if (success := step.success) is not None
         }
+        confirmed = state.original_audio_review.confirmed
+        if confirmed is not None:
+            referenced.add(confirmed.output_root)
         book_dir = self.paths.book(state.book_id)
         for step_id in StepId:
             revisions = self.paths.revisions(state.book_id, step_id)
             if not revisions.is_dir():
                 continue
             for candidate in revisions.iterdir():
+                relative = candidate.relative_to(book_dir).as_posix()
+                if candidate.is_dir() and relative not in referenced:
+                    shutil.rmtree(candidate, ignore_errors=True)
+        candidates = self.paths.candidates(state.book_id, StepId.ORIGINAL_AUDIO)
+        if candidates.is_dir():
+            for candidate in candidates.iterdir():
                 relative = candidate.relative_to(book_dir).as_posix()
                 if candidate.is_dir() and relative not in referenced:
                     shutil.rmtree(candidate, ignore_errors=True)

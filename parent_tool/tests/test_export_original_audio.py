@@ -32,7 +32,7 @@ from app.models.pages import (
     PageRegion,
     SourcePageSize,
 )
-from app.models.pipeline import PipelineState, StepId, StepResult
+from app.models.pipeline import PipelineState, StepId, StepResult, StepSuccess, utc_now
 from app.pipeline.artifacts import ArtifactStore
 from app.pipeline.definitions import CancellationToken, StepRegistry
 from app.pipeline.engine import PipelineEngine, RunPlan, SkippedRun
@@ -363,3 +363,53 @@ def test_export_fingerprint_changes_with_original_audio_hash(tmp_path: Path) -> 
     assert isinstance(second, RunPlan)
 
     assert second.input_fingerprint != first.input_fingerprint
+
+
+def test_confirmed_background_is_packaged_and_changes_export_fingerprint(
+    tmp_path: Path,
+) -> None:
+    engine, states, paths, _probe, _original_bytes = _ready_engine(tmp_path)
+    artifacts = engine.artifacts
+    root = paths.revision("book-1", StepId.ORIGINAL_AUDIO, "r-background-12345678")
+    root.mkdir(parents=True)
+    background = root / "background.ogg"
+    background.write_bytes(b"verified background")
+    report = {
+        "source_sha256": states.load("book-1").source.original_audio_sha256,
+        "background": {
+            "path": "background.ogg",
+            "sha256": file_sha256(background),
+            "duration_ms": 12_345,
+        },
+    }
+    (root / "separation_report.json").write_text(json.dumps(report), encoding="utf-8")
+    outputs, output_fingerprint = artifacts.build_manifest(
+        root, ("background.ogg", "separation_report.json")
+    )
+    confirmed = StepSuccess(
+        revision_id="r-background-12345678",
+        output_root=root.relative_to(paths.book("book-1")).as_posix(),
+        params_hash="a" * 64,
+        input_fingerprint="b" * 64,
+        output_fingerprint=output_fingerprint,
+        outputs=outputs,
+        completed_at=utc_now(),
+    )
+
+    def confirm(state: PipelineState) -> None:
+        state.original_audio_review = state.original_audio_review.model_copy(
+            update={"confirmed": confirmed, "confirmed_at": utc_now()}
+        )
+
+    states.update("book-1", confirm)
+    before = engine.plan("book-1", StepId.EXPORT, {})
+    assert isinstance(before, RunPlan)
+    success = _run(engine, StepId.EXPORT, "52345678-1234-4234-8234-123456789abc")
+    with zipfile.ZipFile(paths.book("book-1") / success.output_root / "book-1.readalongbook") as archive:
+        assert archive.read("original/background.ogg") == b"verified background"
+        original = json.loads(archive.read("manifest.json"))["original_audio"]
+    assert original["background"]["path"] == "original/background.ogg"
+    assert original["background"]["sha256"] == file_sha256(background)
+    after = engine.plan("book-1", StepId.EXPORT, {})
+    assert isinstance(after, SkippedRun)
+    assert before.input_fingerprint == success.input_fingerprint

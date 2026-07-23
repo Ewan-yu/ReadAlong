@@ -47,7 +47,14 @@ def test_new_pipeline_has_all_pending_steps() -> None:
 
     assert state.schema_version == 1
     assert state.revision == 0
-    assert set(state.steps) == {"pages", "ocr", "proofread", "audio", "export"}
+    assert set(state.steps) == {
+        "pages",
+        "ocr",
+        "proofread",
+        "audio",
+        "export",
+        "original_audio",
+    }
     assert {step.status for step in state.steps.values()} == {StepStatus.PENDING}
 
 

@@ -17,6 +17,7 @@ from app.models.pipeline import (
     AttemptSummary,
     PipelineErrorInfo,
     PipelineState,
+    StepId,
     StepState,
     StepStatus,
     utc_now,
@@ -164,6 +165,12 @@ class StateRepository:
                 details={"book_id": book_id, "schema_version": raw.get("schema_version")},
                 status_code=409,
             )
+        # schema_version=1 permits additive internal state.  Old workspaces
+        # must not be forced through a destructive rebuild just because M5
+        # added a non-UI processing step.
+        raw_steps = raw.get("steps")
+        if isinstance(raw_steps, dict) and StepId.ORIGINAL_AUDIO.value not in raw_steps:
+            raw_steps[StepId.ORIGINAL_AUDIO.value] = StepState().model_dump(mode="json")
         try:
             return PipelineState.model_validate(raw)
         except ValidationError as exc:

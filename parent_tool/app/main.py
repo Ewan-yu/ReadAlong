@@ -25,6 +25,7 @@ from app.api.routes.exports import router as export_router
 from app.api.routes.pipeline import router as pipeline_router
 from app.api.routes.system import router as system_router
 from app.api.routes.voices import router as voices_router
+from app.api.routes.original_audio import router as original_audio_router
 from app.config import Settings, UserSettingsStore
 from app.jobs.events import EventBus
 from app.jobs.manager import JobManager
@@ -35,7 +36,8 @@ from app.pipeline.definitions import StepRegistry
 from app.pipeline.engine import PipelineEngine
 from app.pipeline.paths import WorkspacePaths
 from app.pipeline.state_repository import StateRepository
-from app.pipeline.steps import AudioStep, AutoProofreadStep, ExportStep, OcrStep, PageProcessingStep
+from app.pipeline.steps import AudioStep, AutoProofreadStep, ExportStep, OcrStep, OriginalAudioStep, PageProcessingStep
+from app.providers.separation import DemucsSeparationProvider
 from app.providers.align import StableTsWordAligner
 from app.providers.media import FfprobeMediaProbe
 from app.providers.ocr import PaddleOcrProvider
@@ -48,6 +50,7 @@ from app.services.proofread_workspace_service import ProofreadWorkspaceService
 from app.services.audio_workspace_service import AudioWorkspaceService
 from app.services.export_workspace_service import ExportWorkspaceService
 from app.services.voice_profile_service import VoiceProfileService
+from app.services.original_audio_review_service import OriginalAudioReviewService
 
 
 ExecutorFactory = Callable[[], ThreadPoolExecutor]
@@ -113,6 +116,7 @@ def create_app(
                         voice_profile_service,
                     ),
                     ExportStep(FfprobeMediaProbe()),
+                    OriginalAudioStep(DemucsSeparationProvider()),
                 )
             )
             engine = PipelineEngine(states, artifacts, registry)
@@ -145,6 +149,7 @@ def create_app(
             application.state.proofread_workspace_service = ProofreadWorkspaceService(paths, states, artifacts)
             application.state.audio_workspace_service = AudioWorkspaceService(paths, states, artifacts)
             application.state.export_workspace_service = ExportWorkspaceService(paths, states, artifacts)
+            application.state.original_audio_review_service = OriginalAudioReviewService(states, artifacts)
             WorkspaceMigrationService.cleanup_pending_source(resolved_settings, settings_store)
             yield
         finally:
@@ -171,6 +176,7 @@ def create_app(
     application.include_router(export_router)
     application.include_router(system_router)
     application.include_router(voices_router)
+    application.include_router(original_audio_router)
 
     web_dist = Path(__file__).parent.parent / "web" / "dist"
     if web_dist.exists():

@@ -32,6 +32,9 @@ abstract final class BookPackSchema {
   static const originalAudioPath = 'original/source.mp3';
   static const originalAudioMimeType = 'audio/mpeg';
   static const originalAudioRawStatus = 'raw';
+  static const originalAudioBackgroundPath = 'original/background.ogg';
+  static const originalAudioBackgroundMimeType = 'audio/ogg';
+  static const originalAudioBackgroundMethod = 'source_separation';
 
   /// alignment.db 必须存在的表（与 alignment.sql 一致）
   static const alignmentTables = {'book', 'page', 'sentence', 'word_timing'};

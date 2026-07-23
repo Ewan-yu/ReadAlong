@@ -13,6 +13,7 @@ from app.services.workspace_service import WorkspaceService
 from app.services.workspace_catalog_service import WorkspaceCatalogService
 from app.services.workspace_migration_service import WorkspaceMigrationService
 from app.services.voice_profile_service import VoiceProfileService
+from app.services.original_audio_review_service import OriginalAudioReviewService
 
 
 def get_job_manager(request: Request) -> JobManager:
@@ -57,3 +58,7 @@ def get_audio_workspace_service(request: Request) -> AudioWorkspaceService:
 
 def get_export_workspace_service(request: Request) -> ExportWorkspaceService:
     return request.app.state.export_workspace_service
+
+
+def get_original_audio_review_service(request: Request) -> OriginalAudioReviewService:
+    return request.app.state.original_audio_review_service

@@ -54,6 +54,7 @@ class ExportStep:
         with tempfile.TemporaryDirectory(prefix=".export-", dir=context.staging_dir) as temporary:
             assembly = Path(temporary)
             original_audio = self._copy_original_audio(assembly, context)
+            self._copy_confirmed_background(assembly, context, original_audio)
             manifest = self._manifest(context.book_id, title, plan, original_audio)
             self._validate_manifest(manifest)
             (assembly / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
@@ -154,6 +155,48 @@ class ExportStep:
             "sha256": packaged_sha256,
             "duration_ms": duration_ms,
             "alignment_status": "raw",
+        }
+
+    @staticmethod
+    def _copy_confirmed_background(
+        assembly: Path,
+        context: StepRunContext,
+        original_audio: dict | None,
+    ) -> None:
+        if original_audio is None or context.confirmed_original_audio_output is None:
+            return
+        root = context.confirmed_original_audio_output
+        try:
+            report = json.loads((root / "separation_report.json").read_text(encoding="utf-8"))
+            background = report["background"]
+            source_hash = report["source_sha256"]
+            source = root / background["path"]
+            if (
+                source_hash != original_audio["sha256"]
+                or background["path"] != "background.ogg"
+                or not source.is_file()
+                or file_sha256(source) != background["sha256"]
+                or int(background["duration_ms"]) <= 0
+            ):
+                raise ValueError
+        except (OSError, KeyError, TypeError, ValueError) as exc:
+            raise PipelineError(
+                "ORIGINAL_AUDIO_BACKGROUND_INVALID",
+                "已确认的原音背景轨已损坏，请重新分离或选择纯人声。",
+                status_code=409,
+            ) from exc
+        target = assembly / "original" / "background.ogg"
+        shutil.copyfile(source, target)
+        digest = file_sha256(target)
+        if digest != background["sha256"]:
+            raise PipelineError("ORIGINAL_AUDIO_BACKGROUND_INVALID", "背景轨复制校验失败。", status_code=409)
+        original_audio["background"] = {
+            "path": "original/background.ogg",
+            "mime_type": "audio/ogg",
+            "size_bytes": target.stat().st_size,
+            "sha256": digest,
+            "duration_ms": int(background["duration_ms"]),
+            "method": "source_separation",
         }
 
     @staticmethod

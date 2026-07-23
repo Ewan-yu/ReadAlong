@@ -21,6 +21,9 @@ class StepId(str, Enum):
     PROOFREAD = "proofread"
     AUDIO = "audio"
     EXPORT = "export"
+    # Internal processing step.  It deliberately remains after EXPORT so
+    # existing 01–05 workspace directories never move.
+    ORIGINAL_AUDIO = "original_audio"
 
 
 class StepStatus(str, Enum):
@@ -114,6 +117,18 @@ class PipelineSource(FrozenModel):
     original_audio_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
 
+class OriginalAudioReview(FrozenModel):
+    """The only separation revision allowed to affect an export.
+
+    A completed separation job is merely a candidate (stored in the normal
+    step state).  Keeping the confirmed result separately prevents a new or
+    failed retry from silently replacing the background track in a book.
+    """
+
+    confirmed: StepSuccess | None = None
+    confirmed_at: datetime | None = None
+
+
 class PipelineState(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -124,6 +139,7 @@ class PipelineState(BaseModel):
     updated_at: datetime
     source: PipelineSource
     steps: dict[StepId, StepState]
+    original_audio_review: OriginalAudioReview = Field(default_factory=OriginalAudioReview)
 
     @model_validator(mode="after")
     def validate_steps(self) -> "PipelineState":

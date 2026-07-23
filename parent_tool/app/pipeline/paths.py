@@ -94,15 +94,28 @@ class WorkspacePaths:
             raise _invalid_path(job_id)
 
     def revisions(self, book_id: str, step_id: StepId) -> Path:
-        index = list(StepId).index(step_id) + 1
-        directory = {
-            StepId.PAGES: "pages",
-            StepId.OCR: "ocr",
-            StepId.PROOFREAD: "proofread",
-            StepId.AUDIO: "audio",
-            StepId.EXPORT: "export",
+        index, directory = {
+            StepId.PAGES: (1, "pages"),
+            StepId.OCR: (2, "ocr"),
+            StepId.PROOFREAD: (3, "proofread"),
+            StepId.AUDIO: (4, "audio"),
+            StepId.EXPORT: (5, "export"),
+            StepId.ORIGINAL_AUDIO: (6, "original_audio"),
         }[step_id]
         return self.book(book_id) / f"{index:02d}_{directory}" / "revisions"
+
+    def candidates(self, book_id: str, step_id: StepId) -> Path:
+        if step_id is not StepId.ORIGINAL_AUDIO:
+            raise _invalid_path(step_id.value)
+        return self.book(book_id) / "06_original_audio" / "candidates"
+
+    def candidate(self, book_id: str, step_id: StepId, revision_id: str) -> Path:
+        if not _REVISION_ID.fullmatch(revision_id):
+            raise _invalid_path(revision_id)
+        return ensure_within(
+            self.candidates(book_id, step_id),
+            self.candidates(book_id, step_id) / revision_id,
+        )
 
     def revision(self, book_id: str, step_id: StepId, revision_id: str) -> Path:
         if not _REVISION_ID.fullmatch(revision_id):

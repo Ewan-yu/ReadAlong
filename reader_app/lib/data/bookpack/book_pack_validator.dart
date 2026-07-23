@@ -175,8 +175,57 @@ class BookPackValidator {
       }
     }
 
-    for (final extraPath
-        in originalFiles.where((entry) => entry != declaredPath)) {
+    final background = raw['background'];
+    String? backgroundPath;
+    if (background != null) {
+      if (background is! Map<String, dynamic>) {
+        errors.add('原音背景轨必须是对象');
+      } else {
+        const required = {
+          'path',
+          'mime_type',
+          'size_bytes',
+          'sha256',
+          'duration_ms',
+          'method'
+        };
+        if (!required.every(background.containsKey)) {
+          errors.add('原音背景轨缺少必填字段');
+        } else {
+          backgroundPath = background['path'] as String?;
+          if (backgroundPath != BookPackSchema.originalAudioBackgroundPath ||
+              background['mime_type'] !=
+                  BookPackSchema.originalAudioBackgroundMimeType ||
+              background['method'] !=
+                  BookPackSchema.originalAudioBackgroundMethod) {
+            errors.add('原音背景轨声明非法');
+          }
+          final backgroundFile =
+              backgroundPath == null ? null : byName[backgroundPath];
+          final size = background['size_bytes'];
+          final hash = background['sha256'];
+          if (backgroundFile == null || !backgroundFile.isFile) {
+            errors.add('缺少原音背景轨: $backgroundPath');
+          } else {
+            final content = List<int>.from(backgroundFile.content as List<int>);
+            if (size is! int || size <= 0 || content.length != size) {
+              errors.add('原音背景轨大小不一致');
+            }
+            if (hash is! String ||
+                !BookPackSchema.sha256Pattern.hasMatch(hash) ||
+                sha256.convert(content).toString() != hash) {
+              errors.add('原音背景轨 sha256 不一致');
+            }
+          }
+          if (background['duration_ms'] is! int ||
+              (background['duration_ms'] as int) <= 0) {
+            errors.add('原音背景轨 duration_ms 非法');
+          }
+        }
+      }
+    }
+    for (final extraPath in originalFiles
+        .where((entry) => entry != declaredPath && entry != backgroundPath)) {
       errors.add('存在未声明的原音资源: $extraPath');
     }
   }

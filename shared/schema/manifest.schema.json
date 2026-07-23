@@ -53,7 +53,20 @@
         "size_bytes": { "type": "integer", "minimum": 1 },
         "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
         "duration_ms": { "type": "integer", "minimum": 1 },
-        "alignment_status": { "type": "string", "const": "raw" }
+        "alignment_status": { "type": "string", "const": "raw" },
+        "background": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["path", "mime_type", "size_bytes", "sha256", "duration_ms", "method"],
+          "properties": {
+            "path": { "type": "string", "const": "original/background.ogg" },
+            "mime_type": { "type": "string", "const": "audio/ogg" },
+            "size_bytes": { "type": "integer", "minimum": 1 },
+            "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+            "duration_ms": { "type": "integer", "minimum": 1 },
+            "method": { "type": "string", "const": "source_separation" }
+          }
+        }
       }
     },
     "pages": {

@@ -47,6 +47,7 @@ class RunPlan:
     params_hash: str
     input_fingerprint: str
     dependency_outputs: dict[StepId, Path]
+    confirmed_original_audio_output: Path | None
     state_revision: int
 
 
@@ -104,6 +105,18 @@ class PipelineEngine:
             dependency_fingerprints[dependency.value] = (
                 dependency_state.success.output_fingerprint
             )
+        confirmed_original_audio_output: Path | None = None
+        if step_id is StepId.EXPORT:
+            confirmed = state.original_audio_review.confirmed
+            if confirmed is not None and self.artifacts.verify(
+                book_id, StepId.ORIGINAL_AUDIO, confirmed
+            ):
+                confirmed_original_audio_output = (
+                    self.artifacts.paths.book(book_id) / confirmed.output_root
+                )
+                dependency_fingerprints[StepId.ORIGINAL_AUDIO.value] = (
+                    confirmed.output_fingerprint
+                )
         try:
             params = step.params_model.model_validate(raw_params)
         except ValidationError as exc:
@@ -117,7 +130,7 @@ class PipelineEngine:
         source_fingerprint = None
         if step_id is StepId.PAGES:
             source_fingerprint = state.source.pdf_sha256
-        elif step_id is StepId.EXPORT:
+        elif step_id in {StepId.EXPORT, StepId.ORIGINAL_AUDIO}:
             source_fingerprint = state.source.original_audio_sha256
         fingerprint = input_fingerprint(
             step_id=step_id.value,
@@ -172,6 +185,7 @@ class PipelineEngine:
             params_hash=params_hash,
             input_fingerprint=fingerprint,
             dependency_outputs=dependency_outputs,
+            confirmed_original_audio_output=confirmed_original_audio_output,
             state_revision=state.revision,
         )
 
@@ -238,14 +252,15 @@ class PipelineEngine:
                 cancellation=cancellation,
                 source_original_audio_path=(
                     current_state.source.original_audio_path
-                    if plan.step_id is StepId.EXPORT
+                    if plan.step_id in {StepId.EXPORT, StepId.ORIGINAL_AUDIO}
                     else None
                 ),
                 source_original_audio_sha256=(
                     current_state.source.original_audio_sha256
-                    if plan.step_id is StepId.EXPORT
+                    if plan.step_id in {StepId.EXPORT, StepId.ORIGINAL_AUDIO}
                     else None
                 ),
+                confirmed_original_audio_output=plan.confirmed_original_audio_output,
             )
             result = plan.step.run(context, plan.params)
             cancellation.raise_if_cancelled()
@@ -254,8 +269,14 @@ class PipelineEngine:
             )
             cancellation.raise_if_cancelled()
             revision_id = f"r-{output_fingerprint[:8]}-{prepared.job_id.split('-', 1)[0]}"
-            published_root = self.artifacts.publish(
-                plan.book_id, plan.step_id, revision_id, prepared.staging_dir
+            published_root = (
+                self.artifacts.publish_candidate(
+                    plan.book_id, plan.step_id, revision_id, prepared.staging_dir
+                )
+                if plan.step_id is StepId.ORIGINAL_AUDIO
+                else self.artifacts.publish(
+                    plan.book_id, plan.step_id, revision_id, prepared.staging_dir
+                )
             )
             now = utc_now()
             success = StepSuccess(
@@ -306,6 +327,10 @@ class PipelineEngine:
                             invalidated_at=now,
                         ),
                     )
+                    if successor is StepId.ORIGINAL_AUDIO:
+                        state.original_audio_review = state.original_audio_review.model_copy(
+                            update={"confirmed": None, "confirmed_at": None}
+                        )
 
             committed = self.states.update(plan.book_id, commit)
             try:
