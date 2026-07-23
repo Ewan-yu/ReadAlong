@@ -3,6 +3,7 @@ import 'package:go_router/go_router.dart';
 import '../features/reader/reader_page.dart';
 import '../features/reader/original_audio_page.dart';
 import '../features/dubbing/sentence_dubbing_page.dart';
+import '../features/dubbing/full_dubbing_page.dart';
 import '../features/settings/settings_page.dart';
 import '../features/shelf/shelf_page.dart';
 
@@ -29,6 +30,12 @@ GoRouter createAppRouter({String initialLocation = '/shelf'}) => GoRouter(
         GoRoute(
           path: '/reader/:libraryId/dub',
           builder: (context, state) => SentenceDubbingPage(
+            libraryId: state.pathParameters['libraryId']!,
+          ),
+        ),
+        GoRoute(
+          path: '/reader/:libraryId/dub/full',
+          builder: (context, state) => FullDubbingPage(
             libraryId: state.pathParameters['libraryId']!,
           ),
         ),

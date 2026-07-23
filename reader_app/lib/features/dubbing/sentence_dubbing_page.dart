@@ -28,8 +28,13 @@ class SentenceDubbingPage extends ConsumerWidget {
           tooltip: '返回原音欣赏',
         ),
         title: const Text('故事配音'),
-        actions: const [
-          Padding(
+        actions: [
+          TextButton.icon(
+            onPressed: () => context.go('/reader/$libraryId/dub/full'),
+            icon: const Icon(Icons.mic_rounded),
+            label: const Text('完整配音'),
+          ),
+          const Padding(
             padding: EdgeInsets.only(right: AppSpacing.cardPadding),
             child: Center(
                 child: Text('逐句作品',
