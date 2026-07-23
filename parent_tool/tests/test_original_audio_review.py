@@ -79,13 +79,27 @@ def test_candidate_requires_explicit_confirmation_and_is_promoted(tmp_path: Path
     assert candidate.output_root.startswith("06_original_audio/candidates/")
     assert states.load("book-1").original_audio_review.confirmed is None
 
-    published = OriginalAudioReviewService(states, ArtifactStore(paths)).confirm_current("book-1")
+    review = OriginalAudioReviewService(states, ArtifactStore(paths))
+    workspace = review.workspace("book-1")
+    assert workspace.status == "ready_for_review"
+    assert workspace.candidate_revision_id == candidate.revision_id
+    assert workspace.assets is not None
+    assert review.candidate_asset(
+        "book-1", candidate.revision_id, workspace.assets.vocals_preview
+    ).read_bytes() == b"preview/vocals.ogg"
+
+    published = review.confirm_current("book-1")
 
     assert published.output_root.startswith("06_original_audio/revisions/")
     state = states.load("book-1")
     assert state.original_audio_review.confirmed == published
     assert (book / published.output_root / "background.ogg").is_file()
     assert state.steps[StepId.ORIGINAL_AUDIO].status is StepStatus.DONE
+
+    review.disable_background("book-1")
+    voice_only = states.load("book-1")
+    assert voice_only.original_audio_review.background_disabled is True
+    assert review.workspace("book-1").status == "voice_only"
 
     _run(
         engine,

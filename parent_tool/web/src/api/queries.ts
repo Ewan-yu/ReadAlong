@@ -1,6 +1,6 @@
 import { queryOptions } from "@tanstack/react-query";
 
-import { getAudioWorkspace, getBookState, getCapabilities, getExportWorkspace, getPageWorkspace, getProofreadWorkspace, getStorageInfo, getStorageMigration, getVoiceProfiles, getWorkspaces } from "./client";
+import { getAudioWorkspace, getBookState, getCapabilities, getExportWorkspace, getOriginalAudioWorkspace, getPageWorkspace, getProofreadWorkspace, getStorageInfo, getStorageMigration, getVoiceProfiles, getWorkspaces } from "./client";
 
 export const workspacesQuery = queryOptions({
   queryKey: ["books"],
@@ -62,6 +62,14 @@ export const audioWorkspaceQuery = (bookId: string) =>
     queryKey: ["books", bookId, "audio", "workspace"],
     queryFn: () => getAudioWorkspace(bookId),
     staleTime: 1000,
+  });
+
+export const originalAudioWorkspaceQuery = (bookId: string) =>
+  queryOptions({
+    queryKey: ["books", bookId, "original-audio", "workspace"],
+    queryFn: () => getOriginalAudioWorkspace(bookId),
+    staleTime: 1000,
+    refetchInterval: (query) => query.state.data?.status === "processing" ? 1200 : false,
   });
 
 export const exportWorkspaceQuery = (bookId: string) =>

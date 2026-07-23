@@ -74,6 +74,23 @@ export type AudioWorkspace = {
   sentences: Array<{ sentence: OcrSentence; report?: AudioSentenceReport | null }>;
 };
 export type AudioWorkspaceSentence = AudioWorkspace["sentences"][number];
+export type OriginalAudioWorkspace = {
+  available: boolean;
+  source_filename?: string | null;
+  status: "not_available" | "not_processed" | "processing" | "ready_for_review" | "confirmed" | "voice_only" | "failed" | "stale";
+  candidate_revision_id?: string | null;
+  confirmed_revision_id?: string | null;
+  model?: string | null;
+  duration_ms?: number | null;
+  assets?: {
+    vocals_preview: string;
+    background_preview: string;
+    waveform_original: string;
+    waveform_vocals: string;
+    waveform_background: string;
+  } | null;
+  message?: string | null;
+};
 export type ExportWorkspace = {
   ready: boolean; suggested_title: string; export_revision_id?: string | null;
   checks: Array<{ id: string; label: string; status: "pass" | "warning" | "error"; detail: string }>;
@@ -280,6 +297,29 @@ export async function getAudioWorkspace(bookId: string): Promise<AudioWorkspace>
   return (await response.json()) as AudioWorkspace;
 }
 
+export async function getOriginalAudioWorkspace(bookId: string): Promise<OriginalAudioWorkspace> {
+  const response = await fetch(`/api/books/${encodeURIComponent(bookId)}/original-audio/workspace`);
+  if (!response.ok) await parseFetchError(response, "无法读取原音处理状态。");
+  return (await response.json()) as OriginalAudioWorkspace;
+}
+
+export async function separateOriginalAudio(bookId: string): Promise<{ disposition: string; jobId?: string; state?: PipelineState }> {
+  const response = await fetch(`/api/books/${encodeURIComponent(bookId)}/original-audio/separate`, { method: "POST" });
+  if (!response.ok) await parseFetchError(response, "原音分离任务未能启动。");
+  const data = (await response.json()) as { disposition: string; job_id?: string; state?: PipelineState };
+  return { disposition: data.disposition, jobId: data.job_id, state: data.state };
+}
+
+export async function confirmOriginalAudioCandidate(bookId: string): Promise<void> {
+  const response = await fetch(`/api/books/${encodeURIComponent(bookId)}/original-audio/candidates/current/confirm`, { method: "POST" });
+  if (!response.ok) await parseFetchError(response, "无法确认当前分离结果。");
+}
+
+export async function disableOriginalAudioBackground(bookId: string): Promise<void> {
+  const response = await fetch(`/api/books/${encodeURIComponent(bookId)}/original-audio/background/disable`, { method: "POST" });
+  if (!response.ok) await parseFetchError(response, "无法切换为纯人声配音路线。");
+}
+
 export async function getExportWorkspace(bookId: string): Promise<ExportWorkspace> {
   const response = await fetch(`/api/books/${encodeURIComponent(bookId)}/export/workspace`);
   if (!response.ok) await parseFetchError(response, "无法读取资源导出工作区。");
@@ -344,6 +384,15 @@ export function pageAssetUrl(bookId: string, revisionId: string, assetPath: stri
 export function audioAssetUrl(bookId: string, revisionId: string, assetPath: string): string {
   const encodedPath = assetPath.split("/").map(encodeURIComponent).join("/");
   return `/api/books/${encodeURIComponent(bookId)}/audio/revisions/${encodeURIComponent(revisionId)}/assets/${encodedPath}`;
+}
+
+export function originalAudioSourceUrl(bookId: string): string {
+  return `/api/books/${encodeURIComponent(bookId)}/original-audio/source`;
+}
+
+export function originalAudioCandidateAssetUrl(bookId: string, candidateId: string, assetPath: string): string {
+  const encodedPath = assetPath.split("/").map(encodeURIComponent).join("/");
+  return `/api/books/${encodeURIComponent(bookId)}/original-audio/candidates/${encodeURIComponent(candidateId)}/assets/${encodedPath}`;
 }
 
 export function exportDownloadUrl(bookId: string, revisionId: string): string {

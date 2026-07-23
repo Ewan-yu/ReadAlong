@@ -127,6 +127,7 @@ class OriginalAudioReview(FrozenModel):
 
     confirmed: StepSuccess | None = None
     confirmed_at: datetime | None = None
+    background_disabled: bool = False
 
 
 class PipelineState(BaseModel):

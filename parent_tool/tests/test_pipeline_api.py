@@ -372,6 +372,11 @@ def test_openapi_contains_typed_pipeline_paths(tmp_path: Path) -> None:
     assert "/api/books/{book_id}/pages/workspace" in paths
     assert "/api/books/{book_id}/pages/source/{source_pdf_page}.webp" in paths
     assert "/api/books/{book_id}/pages/revisions/{revision_id}/assets/{asset_path}" in paths
+    assert "/api/books/{book_id}/original-audio/workspace" in paths
+    assert "/api/books/{book_id}/original-audio/separate" in paths
+    assert "/api/books/{book_id}/original-audio/source" in paths
+    assert "/api/books/{book_id}/original-audio/background/disable" in paths
+    assert "/api/books/{book_id}/original-audio/candidates/{candidate_id}/assets/{asset_path}" in paths
     assert "PipelineState" in schema["components"]["schemas"]
     assert "JobSnapshot" in schema["components"]["schemas"]
     assert "ApiErrorResponse" in schema["components"]["schemas"]

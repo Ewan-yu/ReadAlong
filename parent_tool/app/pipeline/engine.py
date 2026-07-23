@@ -108,8 +108,12 @@ class PipelineEngine:
         confirmed_original_audio_output: Path | None = None
         if step_id is StepId.EXPORT:
             confirmed = state.original_audio_review.confirmed
-            if confirmed is not None and self.artifacts.verify(
+            if (
+                confirmed is not None
+                and not state.original_audio_review.background_disabled
+                and self.artifacts.verify(
                 book_id, StepId.ORIGINAL_AUDIO, confirmed
+                )
             ):
                 confirmed_original_audio_output = (
                     self.artifacts.paths.book(book_id) / confirmed.output_root
@@ -329,7 +333,11 @@ class PipelineEngine:
                     )
                     if successor is StepId.ORIGINAL_AUDIO:
                         state.original_audio_review = state.original_audio_review.model_copy(
-                            update={"confirmed": None, "confirmed_at": None}
+                            update={
+                                "confirmed": None,
+                                "confirmed_at": None,
+                                "background_disabled": False,
+                            }
                         )
 
             committed = self.states.update(plan.book_id, commit)
