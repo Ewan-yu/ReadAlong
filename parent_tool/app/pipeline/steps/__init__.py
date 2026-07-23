@@ -4,5 +4,6 @@ from app.pipeline.steps.ocr import OcrStep
 from app.pipeline.steps.pages import PageProcessingStep
 from app.pipeline.steps.proofread import AutoProofreadStep
 from app.pipeline.steps.original_audio import OriginalAudioStep
+from app.pipeline.steps.original_timeline import OriginalTimelineStep
 
-__all__ = ["AudioStep", "AutoProofreadStep", "ExportStep", "OcrStep", "OriginalAudioStep", "PageProcessingStep"]
+__all__ = ["AudioStep", "AutoProofreadStep", "ExportStep", "OcrStep", "OriginalAudioStep", "OriginalTimelineStep", "PageProcessingStep"]

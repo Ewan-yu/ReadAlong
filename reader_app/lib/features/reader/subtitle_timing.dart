@@ -17,7 +17,7 @@ final class SubtitleTextSegment {
 }
 
 final RegExp _subtitleWordPattern = RegExp(
-  r"[A-Za-z0-9]+(?:['\u2019-][A-Za-z0-9]+)*",
+  r"[A-Za-z0-9]+(?:['\u2019-][A-Za-z0-9]+)*|[\u3400-\u4DBF\u4E00-\u9FFF]",
 );
 
 List<String> normalizedSubtitleWords(String text) => _subtitleWordPattern

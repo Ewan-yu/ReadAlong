@@ -101,6 +101,7 @@ class WorkspacePaths:
             StepId.AUDIO: (4, "audio"),
             StepId.EXPORT: (5, "export"),
             StepId.ORIGINAL_AUDIO: (6, "original_audio"),
+            StepId.ORIGINAL_TIMELINE: (7, "original_timeline"),
         }[step_id]
         return self.book(book_id) / f"{index:02d}_{directory}" / "revisions"
 

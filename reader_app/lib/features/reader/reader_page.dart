@@ -15,6 +15,7 @@ import 'point_reading_models.dart';
 import 'reader_geometry.dart';
 import 'reader_models.dart';
 import 'reader_repository.dart';
+import 'original_audio_repository.dart';
 import 'subtitle_timing.dart';
 
 class ReaderPage extends ConsumerWidget {
@@ -282,6 +283,9 @@ class _ReaderViewState extends ConsumerState<_ReaderView> {
       ),
     );
     final pointReading = ref.watch(pointReadingProvider);
+    final originalAudio = ref.watch(
+      originalAudioBookProvider(widget.book.libraryId),
+    );
     final followReadingProvider =
         followReadingControllerProvider(widget.book.libraryId);
     ref.listen<AsyncValue<FollowReadingState>>(
@@ -395,6 +399,14 @@ class _ReaderViewState extends ConsumerState<_ReaderView> {
           overflow: TextOverflow.ellipsis,
         ),
         actions: [
+          if (originalAudio.hasValue)
+            IconButton(
+              onPressed: () => context.push(
+                '/reader/${widget.book.libraryId}/original',
+              ),
+              icon: const Icon(Icons.headphones_outlined),
+              tooltip: '听原音',
+            ),
           Padding(
             padding: const EdgeInsets.symmetric(vertical: AppSpacing.unit),
             child: _ReaderModeSwitch(

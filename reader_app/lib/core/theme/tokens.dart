@@ -47,6 +47,18 @@ abstract final class AppSizes {
   static const readerControlPanelMinHeight = 196.0;
   static const readerControlPanelMaxHeight = 268.0;
   static const shelfCardMaxWidth = 260.0;
+  static const originalAudioWideLayout = 600.0;
+  static const originalAudioCoverColumn = 320.0;
+  static const originalAudioCompactCoverWidth = 88.0;
+  static const originalAudioCoverFallbackIcon = 48.0;
+  static const originalAudioCoverTitle = 20.0;
+  static const originalAudioCoverMeta = 14.0;
+  static const originalAudioCurrentLyric = 44.0;
+  static const originalAudioNeighbourLyric = 26.0;
+  static const originalAudioSkipIcon = 36.0;
+  static const originalAudioPlayIcon = 42.0;
+  static const originalAudioErrorTitle = 20.0;
+  static const originalAudioErrorBody = 16.0;
 }
 
 ThemeData buildAppTheme() {

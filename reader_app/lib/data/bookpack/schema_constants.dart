@@ -32,6 +32,12 @@ abstract final class BookPackSchema {
   static const originalAudioPath = 'original/source.mp3';
   static const originalAudioMimeType = 'audio/mpeg';
   static const originalAudioRawStatus = 'raw';
+  static const originalAudioReadyStatus = 'ready';
+  static const originalAudioAlignmentStatuses = {
+    originalAudioRawStatus,
+    originalAudioReadyStatus,
+  };
+  static const originalAudioTimelinePath = 'timeline/original_timeline.json';
   static const originalAudioBackgroundPath = 'original/background.ogg';
   static const originalAudioBackgroundMimeType = 'audio/ogg';
   static const originalAudioBackgroundMethod = 'source_separation';

@@ -1,6 +1,7 @@
 import 'package:go_router/go_router.dart';
 
 import '../features/reader/reader_page.dart';
+import '../features/reader/original_audio_page.dart';
 import '../features/settings/settings_page.dart';
 import '../features/shelf/shelf_page.dart';
 
@@ -15,6 +16,12 @@ GoRouter createAppRouter({String initialLocation = '/shelf'}) => GoRouter(
         GoRoute(
           path: '/reader/:libraryId',
           builder: (context, state) => ReaderPage(
+            libraryId: state.pathParameters['libraryId']!,
+          ),
+        ),
+        GoRoute(
+          path: '/reader/:libraryId/original',
+          builder: (context, state) => OriginalAudioPage(
             libraryId: state.pathParameters['libraryId']!,
           ),
         ),

@@ -169,8 +169,10 @@ class StateRepository:
         # must not be forced through a destructive rebuild just because M5
         # added a non-UI processing step.
         raw_steps = raw.get("steps")
-        if isinstance(raw_steps, dict) and StepId.ORIGINAL_AUDIO.value not in raw_steps:
-            raw_steps[StepId.ORIGINAL_AUDIO.value] = StepState().model_dump(mode="json")
+        if isinstance(raw_steps, dict):
+            for internal_step in (StepId.ORIGINAL_AUDIO, StepId.ORIGINAL_TIMELINE):
+                if internal_step.value not in raw_steps:
+                    raw_steps[internal_step.value] = StepState().model_dump(mode="json")
         try:
             return PipelineState.model_validate(raw)
         except ValidationError as exc:

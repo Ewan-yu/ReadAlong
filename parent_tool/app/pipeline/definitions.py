@@ -18,6 +18,7 @@ STEP_DEPENDENCIES: dict[StepId, tuple[StepId, ...]] = {
     StepId.AUDIO: (StepId.PROOFREAD,),
     StepId.EXPORT: (StepId.PAGES, StepId.PROOFREAD, StepId.AUDIO),
     StepId.ORIGINAL_AUDIO: (StepId.PROOFREAD,),
+    StepId.ORIGINAL_TIMELINE: (StepId.PROOFREAD, StepId.ORIGINAL_AUDIO),
 }
 
 
@@ -65,6 +66,8 @@ class StepRunContext:
     source_original_audio_path: str | None = None
     source_original_audio_sha256: str | None = None
     confirmed_original_audio_output: Path | None = None
+    include_original_background: bool = False
+    original_timeline_output: Path | None = None
 
 
 class PipelineStep(Protocol):

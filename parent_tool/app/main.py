@@ -36,7 +36,7 @@ from app.pipeline.definitions import StepRegistry
 from app.pipeline.engine import PipelineEngine
 from app.pipeline.paths import WorkspacePaths
 from app.pipeline.state_repository import StateRepository
-from app.pipeline.steps import AudioStep, AutoProofreadStep, ExportStep, OcrStep, OriginalAudioStep, PageProcessingStep
+from app.pipeline.steps import AudioStep, AutoProofreadStep, ExportStep, OcrStep, OriginalAudioStep, OriginalTimelineStep, PageProcessingStep
 from app.providers.separation import DemucsSeparationProvider
 from app.providers.align import StableTsWordAligner
 from app.providers.media import FfprobeMediaProbe
@@ -117,6 +117,7 @@ def create_app(
                     ),
                     ExportStep(FfprobeMediaProbe()),
                     OriginalAudioStep(DemucsSeparationProvider()),
+                    OriginalTimelineStep(StableTsWordAligner(), FfprobeMediaProbe()),
                 )
             )
             engine = PipelineEngine(states, artifacts, registry)

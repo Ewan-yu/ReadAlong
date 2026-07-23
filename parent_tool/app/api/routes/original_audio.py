@@ -9,6 +9,7 @@ from app.api.dependencies import get_job_manager, get_original_audio_review_serv
 from app.jobs.manager import JobManager
 from app.models.errors import ApiErrorResponse
 from app.models.original_audio import OriginalAudioParams
+from app.models.original_timeline import OriginalTimelineParams
 from app.models.original_audio_workspace import OriginalAudioWorkspaceResponse
 from app.models.pipeline import RunSkippedResponse, RunStartedResponse, StepId, StepSuccess
 from app.pipeline.engine import SkippedRun
@@ -35,6 +36,23 @@ def separate(
     params: OriginalAudioParams = OriginalAudioParams(),
 ) -> RunStartedResponse | RunSkippedResponse:
     result = manager.start(book_id, StepId.ORIGINAL_AUDIO, params.model_dump(mode="json"), force=True)
+    if isinstance(result, SkippedRun):
+        response.status_code = status.HTTP_200_OK
+        return RunSkippedResponse(state=result.state)
+    response.status_code = status.HTTP_202_ACCEPTED
+    return RunStartedResponse(job_id=result.job_id)
+
+
+@router.post("/timeline", response_model=RunStartedResponse | RunSkippedResponse, responses={200: {"model": RunSkippedResponse}, **ERROR_RESPONSES})
+def build_timeline(
+    book_id: str,
+    response: Response,
+    manager: Annotated[JobManager, Depends(get_job_manager)],
+    params: OriginalTimelineParams = OriginalTimelineParams(),
+) -> RunStartedResponse | RunSkippedResponse:
+    """Create child-facing word timings from the confirmed vocal stem only."""
+
+    result = manager.start(book_id, StepId.ORIGINAL_TIMELINE, params.model_dump(mode="json"))
     if isinstance(result, SkippedRun):
         response.status_code = status.HTTP_200_OK
         return RunSkippedResponse(state=result.state)

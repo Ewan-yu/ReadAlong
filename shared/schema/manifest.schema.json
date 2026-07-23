@@ -53,7 +53,11 @@
         "size_bytes": { "type": "integer", "minimum": 1 },
         "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
         "duration_ms": { "type": "integer", "minimum": 1 },
-        "alignment_status": { "type": "string", "const": "raw" },
+        "alignment_status": { "type": "string", "enum": ["raw", "ready"] },
+        "timeline_path": { "type": "string", "const": "timeline/original_timeline.json" },
+        "timeline_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "timeline_sentence_count": { "type": "integer", "minimum": 1 },
+        "vocal_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
         "background": {
           "type": "object",
           "additionalProperties": false,
@@ -67,7 +71,17 @@
             "method": { "type": "string", "const": "source_separation" }
           }
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "alignment_status": { "const": "ready" } } },
+          "then": { "required": ["timeline_path", "timeline_sha256", "timeline_sentence_count", "vocal_sha256"] }
+        },
+        {
+          "if": { "properties": { "alignment_status": { "const": "raw" } } },
+          "then": { "not": { "required": ["timeline_path"] } }
+        }
+      ]
     },
     "pages": {
       "type": "array",

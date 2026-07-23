@@ -24,6 +24,10 @@ class StepId(str, Enum):
     # Internal processing step.  It deliberately remains after EXPORT so
     # existing 01–05 workspace directories never move.
     ORIGINAL_AUDIO = "original_audio"
+    # Also internal.  This is intentionally separate from separation: a
+    # candidate may be listened to, but only a confirmed vocal stem may be
+    # used to create child-facing word timings.
+    ORIGINAL_TIMELINE = "original_timeline"
 
 
 class StepStatus(str, Enum):

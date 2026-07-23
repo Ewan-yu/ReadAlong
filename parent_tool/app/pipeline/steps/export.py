@@ -17,6 +17,12 @@ from app.models.pages import PagePlan
 from app.models.pipeline import StepId, StepResult, utc_now
 from app.pipeline.definitions import StepRunContext
 from app.pipeline.hashing import file_sha256
+from app.pipeline.original_timeline import (
+    TIMELINE_PATH,
+    load_and_validate_timeline,
+    timeline_manifest_entry,
+    validate_timeline_against_alignment_db,
+)
 from app.pipeline.paths import ensure_within
 from app.providers.media import FfprobeMediaProbe
 
@@ -54,13 +60,21 @@ class ExportStep:
         with tempfile.TemporaryDirectory(prefix=".export-", dir=context.staging_dir) as temporary:
             assembly = Path(temporary)
             original_audio = self._copy_original_audio(assembly, context)
-            self._copy_confirmed_background(assembly, context, original_audio)
             manifest = self._manifest(context.book_id, title, plan, original_audio)
-            self._validate_manifest(manifest)
-            (assembly / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+            self._copy_confirmed_background(assembly, context, original_audio)
             self._copy_pages(assembly, pages_root, outputs)
             self._copy_audio(assembly, audio_root, by_audio)
-            self._write_alignment(assembly / "align" / "alignment.db", context.book_id, title, manifest, sentences, by_audio)
+            alignment_path = assembly / "align" / "alignment.db"
+            self._write_alignment(alignment_path, context.book_id, title, manifest, sentences, by_audio)
+            self._copy_original_timeline(
+                assembly,
+                context,
+                original_audio,
+                sentences,
+                alignment_path,
+            )
+            self._validate_manifest(manifest)
+            (assembly / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
             self._zip(assembly, bundle)
         report = {
             "book_id": context.book_id,
@@ -163,7 +177,11 @@ class ExportStep:
         context: StepRunContext,
         original_audio: dict | None,
     ) -> None:
-        if original_audio is None or context.confirmed_original_audio_output is None:
+        if (
+            original_audio is None
+            or context.confirmed_original_audio_output is None
+            or not context.include_original_background
+        ):
             return
         root = context.confirmed_original_audio_output
         try:
@@ -198,6 +216,57 @@ class ExportStep:
             "duration_ms": int(background["duration_ms"]),
             "method": "source_separation",
         }
+
+    @staticmethod
+    def _copy_original_timeline(
+        assembly: Path,
+        context: StepRunContext,
+        original_audio: dict | None,
+        sentences: OcrSentences,
+        alignment_path: Path,
+    ) -> None:
+        """Publish original playback only when every identity/hash gate passes.
+
+        A stale or failed timeline is deliberately omitted: raw original audio
+        remains exportable, but the reader must not advertise word highlighting.
+        """
+
+        root = context.original_timeline_output
+        if original_audio is None or root is None:
+            return
+        confirmed = context.confirmed_original_audio_output
+        if confirmed is None:
+            return
+        try:
+            separation = json.loads((confirmed / "separation_report.json").read_text(encoding="utf-8"))
+            vocal_sha256 = str(separation["vocals_preview"]["sha256"])
+            source_sha256 = str(separation["source_sha256"])
+            source = root / TIMELINE_PATH
+            if source_sha256 != original_audio["sha256"] or not source.is_file():
+                raise ValueError
+            timeline = load_and_validate_timeline(
+                source,
+                sentences=sentences,
+                proofread_revision=context.dependency_outputs[StepId.PROOFREAD].name,
+                original_audio_revision=confirmed.name,
+                original_audio_sha256=original_audio["sha256"],
+                vocal_sha256=vocal_sha256,
+                duration_ms=int(original_audio["duration_ms"]),
+            )
+            validate_timeline_against_alignment_db(timeline, alignment_path)
+        except (OSError, ValueError, TypeError, json.JSONDecodeError, PipelineError) as exc:
+            raise PipelineError(
+                "ORIGINAL_TIMELINE_EXPORT_INVALID",
+                "原音逐词时间线未通过校验，请重新生成后再导出。",
+                status_code=409,
+            ) from exc
+        target = assembly / TIMELINE_PATH
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, target)
+        if file_sha256(target) != file_sha256(source):
+            raise PipelineError("ORIGINAL_TIMELINE_EXPORT_INVALID", "原音逐词时间线复制校验失败。", status_code=409)
+        original_audio["alignment_status"] = "ready"
+        original_audio.update(timeline_manifest_entry(target, timeline))
 
     @staticmethod
     def _validate_manifest(manifest: dict) -> None:

@@ -54,6 +54,7 @@ def test_new_pipeline_has_all_pending_steps() -> None:
         "audio",
         "export",
         "original_audio",
+        "original_timeline",
     }
     assert {step.status for step in state.steps.values()} == {StepStatus.PENDING}
 

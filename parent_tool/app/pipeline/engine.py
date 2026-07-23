@@ -48,6 +48,8 @@ class RunPlan:
     input_fingerprint: str
     dependency_outputs: dict[StepId, Path]
     confirmed_original_audio_output: Path | None
+    include_original_background: bool
+    original_timeline_output: Path | None
     state_revision: int
 
 
@@ -106,11 +108,10 @@ class PipelineEngine:
                 dependency_state.success.output_fingerprint
             )
         confirmed_original_audio_output: Path | None = None
-        if step_id is StepId.EXPORT:
+        if step_id in {StepId.EXPORT, StepId.ORIGINAL_TIMELINE}:
             confirmed = state.original_audio_review.confirmed
             if (
                 confirmed is not None
-                and not state.original_audio_review.background_disabled
                 and self.artifacts.verify(
                 book_id, StepId.ORIGINAL_AUDIO, confirmed
                 )
@@ -120,6 +121,28 @@ class PipelineEngine:
                 )
                 dependency_fingerprints[StepId.ORIGINAL_AUDIO.value] = (
                     confirmed.output_fingerprint
+                )
+                if step_id is StepId.EXPORT and state.original_audio_review.background_disabled:
+                    dependency_fingerprints["original_audio_background"] = "disabled"
+            elif step_id is StepId.ORIGINAL_TIMELINE:
+                raise PipelineError(
+                    "ORIGINAL_AUDIO_CONFIRMATION_REQUIRED",
+                    "请先试听并确认原音分离结果，再生成逐词原音字幕。",
+                    status_code=409,
+                )
+        original_timeline_output: Path | None = None
+        if step_id is StepId.EXPORT:
+            timeline_state = state.steps[StepId.ORIGINAL_TIMELINE]
+            if (
+                timeline_state.status is StepStatus.DONE
+                and timeline_state.success is not None
+                and self.artifacts.verify(book_id, StepId.ORIGINAL_TIMELINE, timeline_state.success)
+            ):
+                original_timeline_output = (
+                    self.artifacts.paths.book(book_id) / timeline_state.success.output_root
+                )
+                dependency_fingerprints[StepId.ORIGINAL_TIMELINE.value] = (
+                    timeline_state.success.output_fingerprint
                 )
         try:
             params = step.params_model.model_validate(raw_params)
@@ -134,7 +157,7 @@ class PipelineEngine:
         source_fingerprint = None
         if step_id is StepId.PAGES:
             source_fingerprint = state.source.pdf_sha256
-        elif step_id in {StepId.EXPORT, StepId.ORIGINAL_AUDIO}:
+        elif step_id in {StepId.EXPORT, StepId.ORIGINAL_AUDIO, StepId.ORIGINAL_TIMELINE}:
             source_fingerprint = state.source.original_audio_sha256
         fingerprint = input_fingerprint(
             step_id=step_id.value,
@@ -190,6 +213,10 @@ class PipelineEngine:
             input_fingerprint=fingerprint,
             dependency_outputs=dependency_outputs,
             confirmed_original_audio_output=confirmed_original_audio_output,
+            include_original_background=(
+                step_id is StepId.EXPORT and not state.original_audio_review.background_disabled
+            ),
+            original_timeline_output=original_timeline_output,
             state_revision=state.revision,
         )
 
@@ -256,15 +283,17 @@ class PipelineEngine:
                 cancellation=cancellation,
                 source_original_audio_path=(
                     current_state.source.original_audio_path
-                    if plan.step_id in {StepId.EXPORT, StepId.ORIGINAL_AUDIO}
+                    if plan.step_id in {StepId.EXPORT, StepId.ORIGINAL_AUDIO, StepId.ORIGINAL_TIMELINE}
                     else None
                 ),
                 source_original_audio_sha256=(
                     current_state.source.original_audio_sha256
-                    if plan.step_id in {StepId.EXPORT, StepId.ORIGINAL_AUDIO}
+                    if plan.step_id in {StepId.EXPORT, StepId.ORIGINAL_AUDIO, StepId.ORIGINAL_TIMELINE}
                     else None
                 ),
                 confirmed_original_audio_output=plan.confirmed_original_audio_output,
+                include_original_background=plan.include_original_background,
+                original_timeline_output=plan.original_timeline_output,
             )
             result = plan.step.run(context, plan.params)
             cancellation.raise_if_cancelled()

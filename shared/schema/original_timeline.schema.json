@@ -1,0 +1,58 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "readalong/original_timeline.schema.json",
+  "title": "ReadAlong 原音逐词时间线",
+  "description": "仅在 manifest.original_audio.alignment_status=ready 时存在；时间单位为毫秒整数，全部为原音绝对时间。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "source", "audio_sha256", "duration_ms", "sentences"],
+  "properties": {
+    "schema_version": { "type": "integer", "const": 1 },
+    "audio_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "duration_ms": { "type": "integer", "minimum": 1 },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["proofread_revision", "original_audio_revision", "original_audio_sha256", "vocal_path", "vocal_sha256"],
+      "properties": {
+        "proofread_revision": { "type": "string", "pattern": "^r-[a-z0-9-]{8,80}$" },
+        "original_audio_revision": { "type": "string", "pattern": "^r-[a-z0-9-]{8,80}$" },
+        "original_audio_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "vocal_path": { "type": "string", "const": "preview/vocals.ogg" },
+        "vocal_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
+    "sentences": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+          "required": ["sentence_id", "page_no", "seq", "text", "start_ms", "end_ms", "words"],
+        "properties": {
+          "sentence_id": { "type": "string", "pattern": "^s[0-9]{4,}$" },
+          "page_no": { "type": "integer", "minimum": 1 },
+          "seq": { "type": "integer", "minimum": 1 },
+          "text": { "type": "string", "minLength": 1 },
+          "start_ms": { "type": "integer", "minimum": 0 },
+          "end_ms": { "type": "integer", "minimum": 1 },
+          "words": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["seq", "text", "start_ms", "end_ms"],
+              "properties": {
+                "seq": { "type": "integer", "minimum": 1 },
+                "text": { "type": "string", "minLength": 1 },
+                "start_ms": { "type": "integer", "minimum": 0 },
+                "end_ms": { "type": "integer", "minimum": 1 }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -51,8 +51,15 @@ void main() {
       BookPackSchema.originalAudioMimeType,
     );
     expect(
-      (originalProperties['alignment_status'] as Map<String, dynamic>)['const'],
-      BookPackSchema.originalAudioRawStatus,
+      ((originalProperties['alignment_status'] as Map<String, dynamic>)['enum']
+              as List)
+          .cast<String>()
+          .toSet(),
+      BookPackSchema.originalAudioAlignmentStatuses,
+    );
+    expect(
+      (originalProperties['timeline_path'] as Map<String, dynamic>)['const'],
+      BookPackSchema.originalAudioTimelinePath,
     );
   });
 

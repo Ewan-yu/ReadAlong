@@ -310,6 +310,13 @@ export async function separateOriginalAudio(bookId: string): Promise<{ dispositi
   return { disposition: data.disposition, jobId: data.job_id, state: data.state };
 }
 
+export async function buildOriginalAudioTimeline(bookId: string): Promise<{ disposition: string; jobId?: string; state?: PipelineState }> {
+  const response = await fetch(`/api/books/${encodeURIComponent(bookId)}/original-audio/timeline`, { method: "POST" });
+  if (!response.ok) await parseFetchError(response, "原音逐词字幕任务未能启动。");
+  const data = (await response.json()) as { disposition: string; job_id?: string; state?: PipelineState };
+  return { disposition: data.disposition, jobId: data.job_id, state: data.state };
+}
+
 export async function confirmOriginalAudioCandidate(bookId: string): Promise<void> {
   const response = await fetch(`/api/books/${encodeURIComponent(bookId)}/original-audio/candidates/current/confirm`, { method: "POST" });
   if (!response.ok) await parseFetchError(response, "无法确认当前分离结果。");
