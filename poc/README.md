@@ -1,5 +1,9 @@
 # VoxCPM 排雷验证（PoC）
 
+## M5.4 离线混音 PoC（儿童录音 + 已确认背景轨）
+
+[`m5-audio-mix-poc.md`](m5-audio-mix-poc.md) 记录了本地 ffmpeg 两遍响度归一化 PoC、纯人声降级、取消/失败处理和安全约束。它不会下载模型，且明确禁止用含原旁白的 `original/source.mp3` 与儿童录音叠加。
+
 ## M5 人声/背景分离 PoC（Demucs）
 
 M5 WP2 使用 `htdemucs` 与 `htdemucs_ft` 比较真实绘本原音的人声/背景分离质量。该能力不进入 `parent_tool/pyproject.toml`，原工作区音频只读，所有 WAV、试听片段和报告写入已忽略的 `poc/out/demucs/`。
