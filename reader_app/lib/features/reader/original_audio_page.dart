@@ -111,8 +111,14 @@ class _OriginalAudioAppBar extends StatelessWidget
         title: title == null
             ? null
             : Text(title!, maxLines: 1, overflow: TextOverflow.ellipsis),
-        actions: const [
-          Padding(
+        actions: [
+          if (libraryId != null)
+            TextButton.icon(
+              onPressed: () => context.go('/reader/$libraryId/dub'),
+              icon: const Icon(Icons.mic_none_rounded),
+              label: const Text('去配音'),
+            ),
+          const Padding(
             padding: EdgeInsets.only(right: AppSpacing.cardPadding),
             child: Center(
               child: Text(

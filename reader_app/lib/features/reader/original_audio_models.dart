@@ -10,12 +10,21 @@ final class OriginalAudioBook {
     required this.audioPath,
     required this.duration,
     required List<OriginalAudioSentence> sentences,
+    this.sourceBookId = '',
+    this.resourceSha256 = '',
+    this.timelineSha256 = '',
   }) : sentences = UnmodifiableListView(sentences);
 
   final String libraryId;
   final String audioPath;
   final Duration duration;
   final UnmodifiableListView<OriginalAudioSentence> sentences;
+
+  /// Immutable identities copied from the validated pack manifest. They keep
+  /// a child's durable dubbing project tied to exactly this imported timeline.
+  final String sourceBookId;
+  final String resourceSha256;
+  final String timelineSha256;
 }
 
 final class OriginalAudioSentence {

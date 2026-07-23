@@ -113,6 +113,9 @@ final class LocalOriginalAudioRepository implements OriginalAudioRepository {
         audioPath: sourcePath,
         duration: Duration(milliseconds: durationMs),
         sentences: sentences,
+        sourceBookId: shelfBook.sourceBookId,
+        resourceSha256: audioHash,
+        timelineSha256: original['timeline_sha256']! as String,
       );
     } on OriginalAudioLoadException {
       rethrow;
@@ -258,7 +261,8 @@ List<OriginalAudioWord> _parseWords(
       throw const OriginalAudioDataException('Timeline word text is invalid');
     }
     if (sequence is! int || sequence != index + 1) {
-      throw const OriginalAudioDataException('Timeline word sequence is invalid');
+      throw const OriginalAudioDataException(
+          'Timeline word sequence is invalid');
     }
     final start = _millisecondsToDuration(raw['start_ms']);
     final end = _millisecondsToDuration(raw['end_ms']);
