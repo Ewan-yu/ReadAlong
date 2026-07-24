@@ -11,6 +11,10 @@ enum DubbingTakeKind { sentence, full }
 
 enum DubbingTakeScoreStatus { pending, scored, failed }
 
+/// A rendered work is independent from the recording Takes it was made from.
+/// This lets a child keep listening to a finished work after replacing a Take.
+enum DubbingMixVariant { voiceOnly, background }
+
 final class DubbingProject {
   const DubbingProject({
     required this.id,
@@ -89,6 +93,36 @@ final class DubbingTake {
             .byName(map['score_status']! as String),
         scoreJson: map['score_json'] as String?,
         scoreError: map['score_error'] as String?,
+        createdAt: DateTime.parse(map['created_at']! as String),
+      );
+}
+
+final class DubbingMix {
+  const DubbingMix({
+    required this.id,
+    required this.projectId,
+    required this.audioRelativePath,
+    required this.variant,
+    required this.sourceTakeFingerprint,
+    required this.duration,
+    required this.createdAt,
+  });
+
+  final String id;
+  final String projectId;
+  final String audioRelativePath;
+  final DubbingMixVariant variant;
+  final String sourceTakeFingerprint;
+  final Duration duration;
+  final DateTime createdAt;
+
+  factory DubbingMix.fromMap(Map<String, Object?> map) => DubbingMix(
+        id: map['id']! as String,
+        projectId: map['project_id']! as String,
+        audioRelativePath: map['audio_path']! as String,
+        variant: DubbingMixVariant.values.byName(map['variant']! as String),
+        sourceTakeFingerprint: map['source_take_fingerprint']! as String,
+        duration: Duration(milliseconds: map['duration_ms']! as int),
         createdAt: DateTime.parse(map['created_at']! as String),
       );
 }

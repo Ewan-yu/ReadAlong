@@ -23,6 +23,8 @@ dependencies:
   # 音频
   just_audio: ^0.9.40
   record: 5.1.2
+  # 过渡 Android 离线混音执行器：LGPL 许可；上游已退役，见 docs/m5-implementation-plan.md。
+  ffmpeg_kit_flutter: 6.0.3
   # 评分（讯飞 ISE WebSocket）
   web_socket_channel: ^3.0.0
   xml: ^6.5.0

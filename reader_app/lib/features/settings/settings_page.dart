@@ -158,7 +158,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                           children: [
                             _buildIseCard(context),
                             const SizedBox(height: AppSpacing.pageMargin),
-                            const _AboutCard(),
+                            _AboutCard(),
                           ],
                         ),
                       ),
@@ -331,18 +331,34 @@ class _AboutCard extends StatelessWidget {
   const _AboutCard();
 
   @override
-  Widget build(BuildContext context) => const Card(
+  Widget build(BuildContext context) => Card(
         child: Padding(
-          padding: EdgeInsets.all(AppSpacing.pageMargin),
+          padding: const EdgeInsets.all(AppSpacing.pageMargin),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
+              const Text(
                 '关于 ReadAlong',
                 style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
               ),
-              SizedBox(height: AppSpacing.unit),
-              Text('版本 0.1.0 · 支持资源包 schema v1'),
+              const SizedBox(height: AppSpacing.unit),
+              const Text('版本 0.1.0 · 支持资源包 schema v1'),
+              const SizedBox(height: AppSpacing.unit),
+              const Text(
+                '离线混音使用 FFmpegKit（LGPL-3.0）；完整开源许可随应用提供。',
+                style: TextStyle(color: AppColors.textSecondary),
+              ),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: TextButton(
+                  onPressed: () => showLicensePage(
+                    context: context,
+                    applicationName: 'ReadAlong 跟读宝',
+                    applicationVersion: '0.1.2',
+                  ),
+                  child: const Text('查看开源许可'),
+                ),
+              ),
             ],
           ),
         ),

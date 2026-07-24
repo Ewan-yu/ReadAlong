@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../services/recording/recording_service.dart';
+import '../../services/audio/dubbing_mix_service.dart';
 import '../../services/scoring/scoring_provider.dart';
 import '../../services/scoring/xfyun_ise_provider.dart';
 import '../reader/original_audio_models.dart';
@@ -17,13 +18,22 @@ import 'full_take_scoring.dart';
 /// The continuous-recording surface deliberately stores a normal [DubbingTake]
 /// with a pending score.  M5.5 can later attach sentence-range scoring data to
 /// this take without moving a child's WAV or changing its project identity.
-enum FullDubbingPhase { ready, countdown, recording, saving, scoring, failed }
+enum FullDubbingPhase {
+  ready,
+  countdown,
+  recording,
+  saving,
+  scoring,
+  mixing,
+  failed
+}
 
 final class FullDubbingState {
   const FullDubbingState({
     required this.project,
     required this.original,
     required this.takes,
+    required this.mixes,
     this.phase = FullDubbingPhase.ready,
     this.countdown = 0,
     this.elapsed = Duration.zero,
@@ -34,6 +44,7 @@ final class FullDubbingState {
   final DubbingProject project;
   final OriginalAudioBook original;
   final List<DubbingTake> takes;
+  final List<DubbingMix> mixes;
   final FullDubbingPhase phase;
   final int countdown;
   final Duration elapsed;
@@ -45,13 +56,15 @@ final class FullDubbingState {
       phase == FullDubbingPhase.countdown ||
       phase == FullDubbingPhase.recording ||
       phase == FullDubbingPhase.saving ||
-      phase == FullDubbingPhase.scoring;
+      phase == FullDubbingPhase.scoring ||
+      phase == FullDubbingPhase.mixing;
   bool get canStart => !isBusy;
   bool get isComplete => project.status == DubbingProjectStatus.complete;
 
   FullDubbingState copyWith({
     DubbingProject? project,
     List<DubbingTake>? takes,
+    List<DubbingMix>? mixes,
     FullDubbingPhase? phase,
     int? countdown,
     Duration? elapsed,
@@ -62,6 +75,7 @@ final class FullDubbingState {
         project: project ?? this.project,
         original: original,
         takes: takes ?? this.takes,
+        mixes: mixes ?? this.mixes,
         phase: phase ?? this.phase,
         countdown: countdown ?? this.countdown,
         elapsed: elapsed ?? this.elapsed,
@@ -82,6 +96,7 @@ final class FullDubbingController
   late final DubbingRepository _repository;
   late final SentenceAudioPlayer _player;
   late final ScoringProvider _scorer;
+  late final DubbingMixService _mixService;
   StreamSubscription<RecordingLevel>? _levels;
   Timer? _countdownTimer;
   Timer? _elapsedTimer;
@@ -97,6 +112,7 @@ final class FullDubbingController
     _recorder = await ref.watch(recordingServiceProvider.future);
     _player = ref.watch(sentenceAudioPlayerProvider);
     _scorer = ref.watch(scoringProvider);
+    _mixService = ref.watch(dubbingMixServiceProvider);
     final original =
         await ref.watch(originalAudioBookProvider(libraryId).future);
     if (original.sourceBookId.isEmpty ||
@@ -121,12 +137,18 @@ final class FullDubbingController
             mode: DubbingMode.full,
           ));
     final takes = await _repository.listTakes(project.id);
+    final mixes = await _repository.listMixes(project.id);
     ref.onDispose(() {
       _disposed = true;
       _generation++;
       unawaited(_cancelAndStop());
     });
-    return FullDubbingState(project: project, original: original, takes: takes);
+    return FullDubbingState(
+      project: project,
+      original: original,
+      takes: takes,
+      mixes: mixes,
+    );
   }
 
   /// Gives the child three clear beats before the microphone starts.
@@ -288,6 +310,68 @@ final class FullDubbingController
   Future<void> saveDraft() => _setStatus(DubbingProjectStatus.draft);
   Future<void> complete() => _setStatus(DubbingProjectStatus.complete);
 
+  Future<void> createMix() async {
+    final current = state.valueOrNull;
+    if (current == null || current.isBusy) return;
+    final selected = current.takes.where((take) => take.isSelected).firstOrNull;
+    if (selected == null || selected.takeKind != DubbingTakeKind.full) {
+      _fail('请先选用一条完整录音。');
+      return;
+    }
+    final output = await _repository.prepareMixOutput(current.project.id);
+    final mode = current.original.backgroundPath == null
+        ? DubbingMixMode.voiceOnly
+        : DubbingMixMode.withConfirmedBackground;
+    final plan = DubbingMixPlan.forFullTake(
+      take: selected,
+      audioPath: _repository.resolveAudioPath(selected),
+      outputPath: output.absolutePath,
+      mode: mode,
+      timelineDuration: current.original.duration,
+      confirmedBackgroundPath: current.original.backgroundPath,
+      originalSourcePath: current.original.audioPath,
+    );
+    _set(current.copyWith(phase: FullDubbingPhase.mixing, failure: null));
+    try {
+      final result = await _mixService.render(plan);
+      await _repository.saveMix(
+        output: output,
+        variant: result.variant,
+        sourceTakeFingerprint: plan.sourceTakeFingerprint,
+        duration: result.duration,
+      );
+      await _refresh();
+    } on DubbingMixInputException catch (error) {
+      _fail(error.message);
+    } on DubbingMixRenderException catch (error) {
+      _fail(error.message);
+    } on Object {
+      _fail('作品没有生成成功，录音都还在，可以再试一次。');
+    }
+  }
+
+  Future<bool> playMix(DubbingMix mix) async {
+    try {
+      await _player.stop();
+      await _player.play(SentenceAudioClip(
+        path: _repository.resolveMixAudioPath(mix),
+        start: Duration.zero,
+        end: mix.duration,
+        wholeFile: true,
+      ));
+      return true;
+    } on Object {
+      return false;
+    }
+  }
+
+  Future<void> deleteMix(String mixId) async {
+    final current = state.valueOrNull;
+    if (current == null || current.isBusy) return;
+    await _repository.deleteMix(mixId);
+    await _refresh();
+  }
+
   /// Scores one full Take sequentially using in-memory PCM sentence slices.
   /// Score failures are persisted in the report and never delete the Take.
   Future<void> scoreTake(DubbingTake take) async {
@@ -335,9 +419,11 @@ final class FullDubbingController
     final project = await _repository.findProject(current.project.id);
     if (project == null) return;
     final takes = await _repository.listTakes(project.id);
+    final mixes = await _repository.listMixes(project.id);
     _set(current.copyWith(
         project: project,
         takes: takes,
+        mixes: mixes,
         phase: phase,
         countdown: 0,
         level: 0,

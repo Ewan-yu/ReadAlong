@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../services/recording/recording_service.dart';
+import '../../services/audio/dubbing_mix_service.dart';
 import '../../services/scoring/score_models.dart';
 import '../../services/scoring/scoring_provider.dart';
 import '../../services/scoring/xfyun_ise_provider.dart';
@@ -16,7 +17,7 @@ import 'dubbing_repository.dart';
 
 const sentenceDubbingMaximumTakes = 3;
 
-enum SentenceDubbingPhase { ready, recording, scoring, failed }
+enum SentenceDubbingPhase { ready, recording, scoring, mixing, failed }
 
 final class SentenceDubbingState {
   const SentenceDubbingState({
@@ -24,6 +25,7 @@ final class SentenceDubbingState {
     required this.original,
     required this.sentenceIndex,
     required this.takes,
+    required this.mixes,
     this.phase = SentenceDubbingPhase.ready,
     this.level = 0,
     this.elapsed = Duration.zero,
@@ -35,6 +37,7 @@ final class SentenceDubbingState {
   final OriginalAudioBook original;
   final int sentenceIndex;
   final List<DubbingTake> takes;
+  final List<DubbingMix> mixes;
   final SentenceDubbingPhase phase;
   final double level;
   final Duration elapsed;
@@ -43,7 +46,10 @@ final class SentenceDubbingState {
 
   OriginalAudioSentence get sentence => original.sentences[sentenceIndex];
   bool get isRecording => phase == SentenceDubbingPhase.recording;
-  bool get isBusy => isRecording || phase == SentenceDubbingPhase.scoring;
+  bool get isBusy =>
+      isRecording ||
+      phase == SentenceDubbingPhase.scoring ||
+      phase == SentenceDubbingPhase.mixing;
   bool get canRecord => !isBusy && takes.length < sentenceDubbingMaximumTakes;
   bool get canGoPrevious => !isBusy && sentenceIndex > 0;
   bool get canGoNext =>
@@ -52,6 +58,7 @@ final class SentenceDubbingState {
   SentenceDubbingState copyWith({
     int? sentenceIndex,
     List<DubbingTake>? takes,
+    List<DubbingMix>? mixes,
     SentenceDubbingPhase? phase,
     double? level,
     Duration? elapsed,
@@ -63,6 +70,7 @@ final class SentenceDubbingState {
         original: original,
         sentenceIndex: sentenceIndex ?? this.sentenceIndex,
         takes: takes ?? this.takes,
+        mixes: mixes ?? this.mixes,
         phase: phase ?? this.phase,
         level: level ?? this.level,
         elapsed: elapsed ?? this.elapsed,
@@ -92,6 +100,7 @@ final class SentenceDubbingController
   late final DubbingRepository _repository;
   late final ScoringProvider _scorer;
   late final SentenceAudioPlayer _player;
+  late final DubbingMixService _mixService;
   StreamSubscription<RecordingLevel>? _levels;
   Timer? _elapsedTimer;
   Timer? _limitTimer;
@@ -106,6 +115,7 @@ final class SentenceDubbingController
     _recorder = await ref.watch(recordingServiceProvider.future);
     _scorer = ref.watch(scoringProvider);
     _player = ref.watch(sentenceAudioPlayerProvider);
+    _mixService = ref.watch(dubbingMixServiceProvider);
     final original =
         await ref.watch(originalAudioBookProvider(libraryId).future);
     if (original.sourceBookId.isEmpty ||
@@ -131,13 +141,18 @@ final class SentenceDubbingController
           ));
     final takes = await _repository.listTakes(project.id,
         sentenceId: original.sentences.first.id);
+    final mixes = await _repository.listMixes(project.id);
     ref.onDispose(() {
       _disposed = true;
       _generation++;
       unawaited(_cancelAndStop());
     });
     return SentenceDubbingState(
-        project: project, original: original, sentenceIndex: 0, takes: takes);
+        project: project,
+        original: original,
+        sentenceIndex: 0,
+        takes: takes,
+        mixes: mixes);
   }
 
   Future<void> previousSentence() =>
@@ -331,6 +346,97 @@ final class SentenceDubbingController
     } on Object {
       return false;
     }
+  }
+
+  /// Renders only after every sentence has an explicitly selected Take.
+  /// Missing confirmed background is a supported voice-only path, never a
+  /// reason to read `source.mp3` into the command.
+  Future<void> createMix() async {
+    final current = state.valueOrNull;
+    if (current == null || current.isBusy) return;
+    final allTakes = await _repository.listTakes(current.project.id);
+    final selectedBySentence = <String, DubbingTake>{
+      for (final take in allTakes)
+        if (take.takeKind == DubbingTakeKind.sentence && take.isSelected)
+          take.sentenceId!: take,
+    };
+    if (selectedBySentence.length != current.original.sentences.length) {
+      _fail('每一句都选用一个录音后，才能生成完整作品。');
+      return;
+    }
+    final output = await _repository.prepareMixOutput(current.project.id);
+    final mode = current.original.backgroundPath == null
+        ? DubbingMixMode.voiceOnly
+        : DubbingMixMode.withConfirmedBackground;
+    final entries = current.original.sentences.map((sentence) {
+      final take = selectedBySentence[sentence.id]!;
+      return DubbingMixSentenceTake(
+        sentenceId: sentence.id,
+        sequence: sentence.sequence,
+        start: sentence.start,
+        end: sentence.end,
+        take: take,
+        audioPath: _repository.resolveAudioPath(take),
+      );
+    }).toList(growable: false);
+    final plan = DubbingMixPlan.create(
+      sentenceTakes: entries,
+      outputPath: output.absolutePath,
+      mode: mode,
+      timelineDuration: current.original.duration,
+      confirmedBackgroundPath: current.original.backgroundPath,
+      originalSourcePath: current.original.audioPath,
+    );
+    _set(current.copyWith(phase: SentenceDubbingPhase.mixing, failure: null));
+    try {
+      final result = await _mixService.render(plan);
+      await _repository.saveMix(
+        output: output,
+        variant: result.variant,
+        sourceTakeFingerprint: plan.sourceTakeFingerprint,
+        duration: result.duration,
+      );
+      await _refreshMixes();
+    } on DubbingMixInputException catch (error) {
+      _fail(error.message);
+    } on DubbingMixRenderException catch (error) {
+      _fail(error.message);
+    } on Object {
+      _fail('作品没有生成成功，录音都还在，可以再试一次。');
+    }
+  }
+
+  Future<bool> playMix(DubbingMix mix) async {
+    try {
+      await _player.stop();
+      await _player.play(SentenceAudioClip(
+        path: _repository.resolveMixAudioPath(mix),
+        start: Duration.zero,
+        end: mix.duration,
+        wholeFile: true,
+      ));
+      return true;
+    } on Object {
+      return false;
+    }
+  }
+
+  Future<void> deleteMix(String mixId) async {
+    final current = state.valueOrNull;
+    if (current == null || current.isBusy) return;
+    await _repository.deleteMix(mixId);
+    await _refreshMixes();
+  }
+
+  Future<void> _refreshMixes() async {
+    final current = state.valueOrNull;
+    if (current == null) return;
+    final mixes = await _repository.listMixes(current.project.id);
+    _set(current.copyWith(
+      mixes: mixes,
+      phase: SentenceDubbingPhase.ready,
+      failure: null,
+    ));
   }
 
   void _fail(String message) {

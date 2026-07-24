@@ -70,7 +70,7 @@ void main() {
     return file;
   }
 
-  test('现有 v3 app.db 升级后保留书架并创建配音表', () async {
+  test('现有 v3 app.db 升级后保留书架并创建配音与作品表', () async {
     final databaseFile = File(p.join(documents.path, 'app.db'));
     await databaseFile.delete();
     final legacy = await databaseFactoryFfi.openDatabase(
@@ -131,12 +131,12 @@ void main() {
     final upgraded = await databaseFactoryFfi.openDatabase(databaseFile.path);
     final tableRows = await upgraded.rawQuery(
       "SELECT name FROM sqlite_master WHERE type = 'table' "
-      "AND name IN ('dubbing_project', 'dubbing_take') ORDER BY name",
+      "AND name IN ('dubbing_mix', 'dubbing_project', 'dubbing_take') ORDER BY name",
     );
     await upgraded.close();
 
     expect(tableRows.map((row) => row['name']),
-        ['dubbing_project', 'dubbing_take']);
+        ['dubbing_mix', 'dubbing_project', 'dubbing_take']);
   });
 
   test('逐句 Take 以相对路径原子持久化到 App 私有目录', () async {

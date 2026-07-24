@@ -59,7 +59,32 @@ abstract interface class DubbingRepository {
   });
   Future<void> deleteTake(String takeId);
   Future<void> deleteProject(String projectId);
+  Future<List<DubbingMix>> listMixes(String projectId);
+  Future<DubbingMixOutput> prepareMixOutput(String projectId,
+      {String extension = '.m4a'});
+  Future<DubbingMix> saveMix({
+    required DubbingMixOutput output,
+    required DubbingMixVariant variant,
+    required String sourceTakeFingerprint,
+    required Duration duration,
+  });
+  Future<void> deleteMix(String mixId);
   String resolveAudioPath(DubbingTake take);
+  String resolveMixAudioPath(DubbingMix mix);
+}
+
+final class DubbingMixOutput {
+  const DubbingMixOutput({
+    required this.id,
+    required this.projectId,
+    required this.relativePath,
+    required this.absolutePath,
+  });
+
+  final String id;
+  final String projectId;
+  final String relativePath;
+  final String absolutePath;
 }
 
 /// Coordinates app-db rows and files without ever writing to an imported pack.
@@ -191,8 +216,71 @@ final class LocalDubbingRepository implements DubbingRepository {
   }
 
   @override
+  Future<List<DubbingMix>> listMixes(String projectId) =>
+      _shelfIndex.listDubbingMixes(projectId);
+
+  @override
+  Future<DubbingMixOutput> prepareMixOutput(String projectId,
+      {String extension = '.m4a'}) async {
+    final project = await _requireProject(projectId);
+    final id = _idGenerator();
+    final relativePath = _fileStore.mixRelativePath(
+      libraryId: project.libraryId,
+      projectId: project.id,
+      mixId: id,
+      extension: extension,
+    );
+    return DubbingMixOutput(
+      id: id,
+      projectId: project.id,
+      relativePath: relativePath,
+      absolutePath: _fileStore.resolveRelativePath(relativePath),
+    );
+  }
+
+  @override
+  Future<DubbingMix> saveMix({
+    required DubbingMixOutput output,
+    required DubbingMixVariant variant,
+    required String sourceTakeFingerprint,
+    required Duration duration,
+  }) async {
+    final rendered = File(output.absolutePath);
+    if (!await rendered.exists() || await rendered.length() == 0) {
+      throw FileSystemException('混音作品未生成', output.absolutePath);
+    }
+    try {
+      return await _shelfIndex.createDubbingMix(
+        id: output.id,
+        projectId: output.projectId,
+        audioRelativePath: output.relativePath,
+        variant: variant,
+        sourceTakeFingerprint: sourceTakeFingerprint,
+        duration: duration,
+      );
+    } catch (_) {
+      try {
+        await rendered.delete();
+      } on Object {}
+      rethrow;
+    }
+  }
+
+  @override
+  Future<void> deleteMix(String mixId) async {
+    final mix = await _shelfIndex.findDubbingMix(mixId);
+    if (mix == null) return;
+    await _shelfIndex.deleteDubbingMix(mixId);
+    await _fileStore.deleteRelativeFile(mix.audioRelativePath);
+  }
+
+  @override
   String resolveAudioPath(DubbingTake take) =>
       _fileStore.resolveRelativePath(take.audioRelativePath);
+
+  @override
+  String resolveMixAudioPath(DubbingMix mix) =>
+      _fileStore.resolveRelativePath(mix.audioRelativePath);
 
   Future<DubbingProject> _requireProject(String id) async {
     final project = await _shelfIndex.findDubbingProject(id);

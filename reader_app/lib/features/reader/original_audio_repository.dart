@@ -108,6 +108,10 @@ final class LocalOriginalAudioRepository implements OriginalAudioRepository {
         sourceSentences,
         Duration(milliseconds: durationMs),
       );
+      final backgroundPath = await _loadConfirmedBackground(
+        bookDirectory: shelfBook.bookDir,
+        original: original,
+      );
       return OriginalAudioBook(
         libraryId: shelfBook.libraryId,
         audioPath: sourcePath,
@@ -116,12 +120,38 @@ final class LocalOriginalAudioRepository implements OriginalAudioRepository {
         sourceBookId: shelfBook.sourceBookId,
         resourceSha256: audioHash,
         timelineSha256: original['timeline_sha256']! as String,
+        backgroundPath: backgroundPath,
       );
     } on OriginalAudioLoadException {
       rethrow;
     } on Object {
       throw const OriginalAudioDataException();
     }
+  }
+
+  Future<String?> _loadConfirmedBackground({
+    required String bookDirectory,
+    required Map<String, dynamic> original,
+  }) async {
+    final background = original['background'];
+    if (background == null) return null;
+    if (background is! Map<String, dynamic> ||
+        background['path'] != 'original/background.ogg' ||
+        background['sha256'] is! String ||
+        !BookPackSchema.sha256Pattern
+            .hasMatch(background['sha256'] as String)) {
+      throw const OriginalAudioDataException(
+          'Background track declaration is invalid');
+    }
+    final path = _resolveInside(bookDirectory, background['path']);
+    if (!await File(path).exists()) {
+      throw const OriginalAudioDataException('Background track is missing');
+    }
+    final hash = (await sha256.bind(File(path).openRead()).first).toString();
+    if (hash != background['sha256']) {
+      throw const OriginalAudioDataException('Background track hash mismatch');
+    }
+    return path;
   }
 
   Future<List<({String id, int pageNumber, int sequence, String text})>>

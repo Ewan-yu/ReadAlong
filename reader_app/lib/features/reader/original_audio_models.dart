@@ -13,6 +13,7 @@ final class OriginalAudioBook {
     this.sourceBookId = '',
     this.resourceSha256 = '',
     this.timelineSha256 = '',
+    this.backgroundPath,
   }) : sentences = UnmodifiableListView(sentences);
 
   final String libraryId;
@@ -25,6 +26,10 @@ final class OriginalAudioBook {
   final String sourceBookId;
   final String resourceSha256;
   final String timelineSha256;
+
+  /// Null means that the parent deliberately did not approve a safe background
+  /// track.  The dubbing flow then makes a clearly labelled voice-only work.
+  final String? backgroundPath;
 }
 
 final class OriginalAudioSentence {

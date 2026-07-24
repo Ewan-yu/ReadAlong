@@ -93,7 +93,10 @@ class _DubbingView extends ConsumerWidget {
             onSelect: (take) => unawaited(controller.selectTake(take.id)),
             onDelete: (take) => unawaited(controller.deleteTake(take.id)),
             onPlay: (take) => unawaited(controller.playTake(take)),
-            onRetryScore: (take) => unawaited(controller.retryScore(take)));
+            onRetryScore: (take) => unawaited(controller.retryScore(take)),
+            onCreateMix: () => unawaited(controller.createMix()),
+            onPlayMix: (mix) => unawaited(controller.playMix(mix)),
+            onDeleteMix: (mix) => unawaited(controller.deleteMix(mix.id)));
         return compact
             ? Column(children: [lyric, Expanded(child: studio)])
             : Row(children: [
@@ -145,7 +148,10 @@ class _StudioPanel extends StatelessWidget {
       required this.onSelect,
       required this.onDelete,
       required this.onPlay,
-      required this.onRetryScore});
+      required this.onRetryScore,
+      required this.onCreateMix,
+      required this.onPlayMix,
+      required this.onDeleteMix});
   final SentenceDubbingState state;
   final VoidCallback onRecord;
   final VoidCallback onPrevious;
@@ -154,6 +160,9 @@ class _StudioPanel extends StatelessWidget {
   final ValueChanged<DubbingTake> onDelete;
   final ValueChanged<DubbingTake> onPlay;
   final ValueChanged<DubbingTake> onRetryScore;
+  final VoidCallback onCreateMix;
+  final ValueChanged<DubbingMix> onPlayMix;
+  final ValueChanged<DubbingMix> onDeleteMix;
   @override
   Widget build(BuildContext context) => Padding(
         padding: const EdgeInsets.all(AppSpacing.pageMargin),
@@ -221,6 +230,46 @@ class _StudioPanel extends StatelessWidget {
                   onPlay: () => onPlay(take),
                   onRetry: () => onRetryScore(take))
           ])),
+          FilledButton.icon(
+            key: const ValueKey('sentence-dubbing-create-work'),
+            onPressed: state.isBusy ? null : onCreateMix,
+            icon: const Icon(Icons.auto_awesome_rounded),
+            label: Text(state.phase == SentenceDubbingPhase.mixing
+                ? '正在生成作品…'
+                : state.original.backgroundPath == null
+                    ? '生成纯人声作品'
+                    : '生成背景版作品'),
+          ),
+          if (state.mixes.isNotEmpty)
+            ListTile(
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              leading: Icon(
+                state.mixes.first.variant == DubbingMixVariant.background
+                    ? Icons.music_note_rounded
+                    : Icons.record_voice_over_rounded,
+                color: AppColors.primary,
+              ),
+              title: Text(
+                  state.mixes.first.variant == DubbingMixVariant.background
+                      ? '最新背景版作品'
+                      : '最新纯人声作品'),
+              subtitle: Text(_clock(state.mixes.first.duration)),
+              trailing: Wrap(children: [
+                IconButton(
+                  tooltip: '回放作品',
+                  onPressed: () => onPlayMix(state.mixes.first),
+                  icon: const Icon(Icons.play_arrow),
+                ),
+                IconButton(
+                  tooltip: '删除作品',
+                  onPressed: state.isBusy
+                      ? null
+                      : () => onDeleteMix(state.mixes.first),
+                  icon: const Icon(Icons.delete_outline),
+                ),
+              ]),
+            ),
           Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
             OutlinedButton.icon(
                 onPressed: state.canGoPrevious ? onPrevious : null,

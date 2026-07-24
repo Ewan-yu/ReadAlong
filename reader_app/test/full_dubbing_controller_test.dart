@@ -126,6 +126,7 @@ final class _MemoryDubbingRepository implements DubbingRepository {
   final Directory directory;
   final projects = <DubbingProject>[];
   final takes = <DubbingTake>[];
+  final mixes = <DubbingMix>[];
   final statuses = <DubbingProjectStatus>[];
 
   @override
@@ -149,6 +150,8 @@ final class _MemoryDubbingRepository implements DubbingRepository {
   @override
   Future<void> deleteTake(String takeId) async {}
   @override
+  Future<void> deleteMix(String mixId) async {}
+  @override
   Future<DubbingProject?> findProject(String projectId) async =>
       projects.where((value) => value.id == projectId).firstOrNull;
   @override
@@ -158,8 +161,22 @@ final class _MemoryDubbingRepository implements DubbingRepository {
           {String? sentenceId}) async =>
       takes;
   @override
+  Future<List<DubbingMix>> listMixes(String projectId) async => mixes;
+  @override
+  Future<DubbingMixOutput> prepareMixOutput(String projectId,
+          {String extension = '.m4a'}) async =>
+      DubbingMixOutput(
+        id: 'mix-1',
+        projectId: projectId,
+        relativePath: 'dubbing/book/$projectId/mixes/mix-1$extension',
+        absolutePath: p.join(directory.path, 'mix-1$extension'),
+      );
+  @override
   String resolveAudioPath(DubbingTake take) =>
       p.join(directory.path, take.audioRelativePath);
+  @override
+  String resolveMixAudioPath(DubbingMix mix) =>
+      p.join(directory.path, mix.audioRelativePath);
   @override
   Future<DubbingTake> saveTake(
           {required String projectId,
@@ -167,6 +184,13 @@ final class _MemoryDubbingRepository implements DubbingRepository {
           required File sourceAudio,
           required Duration duration,
           String? sentenceId}) =>
+      throw UnimplementedError();
+  @override
+  Future<DubbingMix> saveMix(
+          {required DubbingMixOutput output,
+          required DubbingMixVariant variant,
+          required String sourceTakeFingerprint,
+          required Duration duration}) =>
       throw UnimplementedError();
   @override
   Future<void> selectTake(String takeId) async {}

@@ -204,6 +204,50 @@ class _FullDubbingView extends ConsumerWidget {
                   child: const Text('完成作品')),
             ),
           ]),
+          const SizedBox(height: AppSpacing.unit),
+          FilledButton.icon(
+            key: const ValueKey('full-dubbing-create-work'),
+            onPressed: state.isBusy || selected == null
+                ? null
+                : () => unawaited(controller.createMix()),
+            icon: const Icon(Icons.auto_awesome_rounded),
+            label: Text(state.phase == FullDubbingPhase.mixing
+                ? '正在生成作品…'
+                : state.original.backgroundPath == null
+                    ? '生成纯人声作品'
+                    : '生成背景版作品'),
+          ),
+          if (state.mixes.isNotEmpty)
+            ListTile(
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              leading: Icon(
+                state.mixes.first.variant == DubbingMixVariant.background
+                    ? Icons.music_note_rounded
+                    : Icons.record_voice_over_rounded,
+                color: AppColors.primary,
+              ),
+              title: Text(
+                  state.mixes.first.variant == DubbingMixVariant.background
+                      ? '最新背景版作品'
+                      : '最新纯人声作品'),
+              trailing: Wrap(children: [
+                IconButton(
+                  tooltip: '回放作品',
+                  onPressed: () =>
+                      unawaited(controller.playMix(state.mixes.first)),
+                  icon: const Icon(Icons.play_arrow),
+                ),
+                IconButton(
+                  tooltip: '删除作品',
+                  onPressed: state.isBusy
+                      ? null
+                      : () =>
+                          unawaited(controller.deleteMix(state.mixes.first.id)),
+                  icon: const Icon(Icons.delete_outline),
+                ),
+              ]),
+            ),
         ]),
       ),
     );

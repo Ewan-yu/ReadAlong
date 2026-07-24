@@ -41,6 +41,22 @@ final class DubbingFileStore {
             _rootName, libraryId, projectId, 'takes', 'full', '$takeId.wav');
   }
 
+  String mixRelativePath({
+    required String libraryId,
+    required String projectId,
+    required String mixId,
+    String extension = '.m4a',
+  }) {
+    _requireSegment(libraryId, 'libraryId');
+    _requireSegment(projectId, 'projectId');
+    _requireSegment(mixId, 'mixId');
+    if (extension != '.m4a' && extension != '.wav' && extension != '.ogg') {
+      throw ArgumentError.value(extension, 'extension', '不支持的作品格式');
+    }
+    return p.posix
+        .join(_rootName, libraryId, projectId, 'mixes', '$mixId$extension');
+  }
+
   /// Returns an absolute path only for a path produced by this store.
   String resolveRelativePath(String relativePath) {
     final normalized = p.posix.normalize(relativePath);

@@ -675,10 +675,121 @@ class ShelfIndex {
           whereArgs: [projectId],
         );
         await transaction.delete(
+          'dubbing_mix',
+          where: 'project_id = ?',
+          whereArgs: [projectId],
+        );
+        await transaction.delete(
           'dubbing_project',
           where: 'id = ?',
           whereArgs: [projectId],
         );
+      });
+    } finally {
+      await db.close();
+    }
+  }
+
+  Future<DubbingMix> createDubbingMix({
+    required String id,
+    required String projectId,
+    required String audioRelativePath,
+    required DubbingMixVariant variant,
+    required String sourceTakeFingerprint,
+    required Duration duration,
+  }) async {
+    _requireDubbingValue(id, 'id');
+    _requireDubbingValue(projectId, 'projectId');
+    _requireDubbingRelativePath(audioRelativePath);
+    _requireDubbingValue(sourceTakeFingerprint, 'sourceTakeFingerprint');
+    if (duration <= Duration.zero) {
+      throw ArgumentError.value(duration, 'duration', '必须大于零');
+    }
+    final db = await _open();
+    try {
+      final now = DateTime.now().toUtc();
+      final mix = DubbingMix(
+        id: id,
+        projectId: projectId,
+        audioRelativePath: audioRelativePath,
+        variant: variant,
+        sourceTakeFingerprint: sourceTakeFingerprint,
+        duration: duration,
+        createdAt: now,
+      );
+      await db.transaction((transaction) async {
+        final projects = await transaction.query(
+          'dubbing_project',
+          columns: const ['id'],
+          where: 'id = ?',
+          whereArgs: [projectId],
+          limit: 1,
+        );
+        if (projects.isEmpty) throw StateError('配音项目不存在');
+        await transaction.insert('dubbing_mix', {
+          'id': mix.id,
+          'project_id': mix.projectId,
+          'audio_path': mix.audioRelativePath,
+          'variant': mix.variant.name,
+          'source_take_fingerprint': mix.sourceTakeFingerprint,
+          'duration_ms': mix.duration.inMilliseconds,
+          'created_at': mix.createdAt.toIso8601String(),
+        });
+        await _touchDubbingProject(transaction, projectId, now);
+      });
+      return mix;
+    } finally {
+      await db.close();
+    }
+  }
+
+  Future<List<DubbingMix>> listDubbingMixes(String projectId) async {
+    final db = await _open();
+    try {
+      final rows = await db.query(
+        'dubbing_mix',
+        where: 'project_id = ?',
+        whereArgs: [projectId],
+        orderBy: 'created_at DESC, id ASC',
+      );
+      return rows.map(DubbingMix.fromMap).toList(growable: false);
+    } finally {
+      await db.close();
+    }
+  }
+
+  Future<DubbingMix?> findDubbingMix(String mixId) async {
+    final db = await _open();
+    try {
+      final rows = await db.query(
+        'dubbing_mix',
+        where: 'id = ?',
+        whereArgs: [mixId],
+        limit: 1,
+      );
+      return rows.isEmpty ? null : DubbingMix.fromMap(rows.single);
+    } finally {
+      await db.close();
+    }
+  }
+
+  Future<void> deleteDubbingMix(String mixId) async {
+    final db = await _open();
+    try {
+      await db.transaction((transaction) async {
+        final rows = await transaction.query(
+          'dubbing_mix',
+          columns: const ['project_id'],
+          where: 'id = ?',
+          whereArgs: [mixId],
+          limit: 1,
+        );
+        if (rows.isEmpty) return;
+        final projectId = rows.single['project_id']! as String;
+        await transaction
+            .delete('dubbing_mix', where: 'id = ?', whereArgs: [mixId]);
+        await _touchDubbingProject(
+            transaction, projectId, DateTime.now().toUtc());
       });
     } finally {
       await db.close();
@@ -690,7 +801,7 @@ class ShelfIndex {
     return databaseFactory.openDatabase(
       databasePath,
       options: OpenDatabaseOptions(
-        version: 4,
+        version: 5,
         onCreate: (db, _) async {
           await db.execute('''
           CREATE TABLE shelf_book (
@@ -706,6 +817,7 @@ class ShelfIndex {
         ''');
           await _createRuntimeTables(db);
           await _createDubbingTables(db);
+          await _createDubbingMixTable(db);
         },
         onUpgrade: (db, oldVersion, newVersion) async {
           if (oldVersion < 2) {
@@ -719,6 +831,7 @@ class ShelfIndex {
           }
           if (oldVersion < 3) await _createRuntimeTables(db);
           if (oldVersion < 4) await _createDubbingTables(db);
+          if (oldVersion < 5) await _createDubbingMixTable(db);
         },
       ),
     );
@@ -820,5 +933,23 @@ Future<void> _createDubbingTables(Database db) async {
   await db.execute('''
     CREATE INDEX IF NOT EXISTS idx_dubbing_take_project_sentence
     ON dubbing_take(project_id, sentence_id, created_at DESC, id ASC)
+  ''');
+}
+
+Future<void> _createDubbingMixTable(Database db) async {
+  await db.execute('''
+    CREATE TABLE IF NOT EXISTS dubbing_mix (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL,
+      audio_path TEXT NOT NULL,
+      variant TEXT NOT NULL,
+      source_take_fingerprint TEXT NOT NULL,
+      duration_ms INTEGER NOT NULL,
+      created_at TEXT NOT NULL
+    )
+  ''');
+  await db.execute('''
+    CREATE INDEX IF NOT EXISTS idx_dubbing_mix_project_created
+    ON dubbing_mix(project_id, created_at DESC, id ASC)
   ''');
 }
