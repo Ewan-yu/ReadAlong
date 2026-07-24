@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/theme/tokens.dart';
+import 'dubbing_repository.dart';
 import 'full_dubbing_controller.dart';
 
 /// One uninterrupted performance, kept separately from sentence practice.
@@ -86,7 +87,7 @@ class _FullDubbingView extends ConsumerWidget {
           Text(
               state.phase == FullDubbingPhase.countdown
                   ? '准备好了吗？'
-                  : '录音会连续保存成一条作品。未来可以按原音时间轴补上逐句评分。',
+                  : '录音会连续保存成一条作品，可按原音时间轴逐句评分。',
               textAlign: TextAlign.center,
               style: const TextStyle(color: AppColors.textSecondary)),
           const SizedBox(height: AppSpacing.pageMargin),
@@ -152,13 +153,26 @@ class _FullDubbingView extends ConsumerWidget {
                         title: Text(take.isSelected
                             ? '当前选用版本'
                             : '完整录音 ${_clock(take.duration)}'),
-                        subtitle: const Text('已保存，等待未来的逐句评分'),
+                        subtitle: Text(
+                          take.scoreStatus == DubbingTakeScoreStatus.scored
+                              ? '已评分，查看本次逐句表现'
+                              : take.scoreStatus ==
+                                      DubbingTakeScoreStatus.failed
+                                  ? '评分未完成，可重新评分'
+                                  : '已保存，尚未评分',
+                        ),
                         trailing: Wrap(spacing: 0, children: [
                           IconButton(
                               onPressed: () =>
                                   unawaited(controller.playTake(take)),
                               tooltip: '回放',
                               icon: const Icon(Icons.play_arrow)),
+                          IconButton(
+                              onPressed: state.isBusy
+                                  ? null
+                                  : () => unawaited(controller.scoreTake(take)),
+                              tooltip: '逐句评分',
+                              icon: const Icon(Icons.auto_graph_rounded)),
                           IconButton(
                               onPressed: () =>
                                   unawaited(controller.selectTake(take.id)),

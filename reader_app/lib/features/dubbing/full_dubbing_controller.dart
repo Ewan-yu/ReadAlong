@@ -1,19 +1,23 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../services/recording/recording_service.dart';
+import '../../services/scoring/scoring_provider.dart';
+import '../../services/scoring/xfyun_ise_provider.dart';
 import '../reader/original_audio_models.dart';
 import '../reader/original_audio_repository.dart';
 import '../reader/point_reading_models.dart';
 import '../reader/sentence_audio_player.dart';
 import 'dubbing_repository.dart';
+import 'full_take_scoring.dart';
 
 /// The continuous-recording surface deliberately stores a normal [DubbingTake]
 /// with a pending score.  M5.5 can later attach sentence-range scoring data to
 /// this take without moving a child's WAV or changing its project identity.
-enum FullDubbingPhase { ready, countdown, recording, saving, failed }
+enum FullDubbingPhase { ready, countdown, recording, saving, scoring, failed }
 
 final class FullDubbingState {
   const FullDubbingState({
@@ -40,7 +44,8 @@ final class FullDubbingState {
   bool get isBusy =>
       phase == FullDubbingPhase.countdown ||
       phase == FullDubbingPhase.recording ||
-      phase == FullDubbingPhase.saving;
+      phase == FullDubbingPhase.saving ||
+      phase == FullDubbingPhase.scoring;
   bool get canStart => !isBusy;
   bool get isComplete => project.status == DubbingProjectStatus.complete;
 
@@ -76,6 +81,7 @@ final class FullDubbingController
   late final AudioRecordingService _recorder;
   late final DubbingRepository _repository;
   late final SentenceAudioPlayer _player;
+  late final ScoringProvider _scorer;
   StreamSubscription<RecordingLevel>? _levels;
   Timer? _countdownTimer;
   Timer? _elapsedTimer;
@@ -90,6 +96,7 @@ final class FullDubbingController
     _repository = await ref.watch(dubbingRepositoryProvider.future);
     _recorder = await ref.watch(recordingServiceProvider.future);
     _player = ref.watch(sentenceAudioPlayerProvider);
+    _scorer = ref.watch(scoringProvider);
     final original =
         await ref.watch(originalAudioBookProvider(libraryId).future);
     if (original.sourceBookId.isEmpty ||
@@ -280,6 +287,39 @@ final class FullDubbingController
 
   Future<void> saveDraft() => _setStatus(DubbingProjectStatus.draft);
   Future<void> complete() => _setStatus(DubbingProjectStatus.complete);
+
+  /// Scores one full Take sequentially using in-memory PCM sentence slices.
+  /// Score failures are persisted in the report and never delete the Take.
+  Future<void> scoreTake(DubbingTake take) async {
+    final current = state.valueOrNull;
+    if (current == null ||
+        current.isBusy ||
+        take.takeKind != DubbingTakeKind.full) {
+      return;
+    }
+    final generation = ++_generation;
+    _set(current.copyWith(phase: FullDubbingPhase.scoring, failure: null));
+    try {
+      final report = await FullTakeScorer(_scorer).score(
+        audio: File(_repository.resolveAudioPath(take)),
+        sentences: current.original.sentences,
+      );
+      await _repository.updateTakeScore(
+        takeId: take.id,
+        status: DubbingTakeScoreStatus.scored,
+        scoreJson: jsonEncode(report.toJson()),
+      );
+      if (_isCurrent(generation)) await _refresh();
+    } on Object {
+      if (!_isCurrent(generation)) return;
+      await _repository.updateTakeScore(
+        takeId: take.id,
+        status: DubbingTakeScoreStatus.failed,
+        scoreError: '完整录音评分暂时不可用，录音已保留。',
+      );
+      await _refresh(phase: FullDubbingPhase.failed);
+    }
+  }
 
   Future<void> _setStatus(DubbingProjectStatus status) async {
     final current = state.valueOrNull;
