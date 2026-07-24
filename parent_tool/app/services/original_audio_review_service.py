@@ -159,6 +159,7 @@ class OriginalAudioReviewService:
                 model=report.get("model") if isinstance(report.get("model"), str) else None,
                 duration_ms=report.get("duration_ms") if isinstance(report.get("duration_ms"), int) else None,
                 assets=assets,
+                lyric_sentence_count=self._lyric_sentence_count(state),
             )
         except (OSError, ValueError, TypeError, json.JSONDecodeError):
             return OriginalAudioWorkspaceResponse(
@@ -167,6 +168,14 @@ class OriginalAudioReviewService:
                 status="failed",
                 message="分离候选缺少可试听的轨道，请重新分离。",
             )
+
+    @staticmethod
+    def _lyric_sentence_count(state) -> int | None:
+        timeline = state.steps[StepId.ORIGINAL_TIMELINE]
+        if timeline.status is not StepStatus.DONE or timeline.success is None:
+            return None
+        count = timeline.success.summary.get("sentence_count")
+        return count if isinstance(count, int) and count > 0 else None
 
     def source_asset(self, book_id: str) -> Path:
         state = self.states.load(book_id)

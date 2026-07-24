@@ -61,15 +61,18 @@ class OriginalTimeline(FrozenModel):
 
     @model_validator(mode="after")
     def has_continuous_sentences(self) -> "OriginalTimeline":
-        if [item.seq for item in self.sentences] != list(range(1, len(self.sentences) + 1)):
-            raise ValueError("timeline sentence sequence must be continuous")
-        if [item.sentence_id for item in self.sentences] != [
-            f"s{index:04d}" for index in range(1, len(self.sentences) + 1)
-        ]:
-            raise ValueError("timeline sentence identifiers must be continuous")
+        # Original narration can intentionally omit cover, copyright or word
+        # list text. `seq` remains the source sentence sequence, so it only
+        # needs to be unique and increasing within this lyric script.
+        if not self.sentences:
+            raise ValueError("timeline must contain at least one narrated sentence")
+        if len({item.sentence_id for item in self.sentences}) != len(self.sentences):
+            raise ValueError("timeline sentence identifiers must be unique")
         previous_end = 0
+        previous_seq = 0
         for sentence in self.sentences:
-            if sentence.start_ms < previous_end or sentence.end_ms > self.duration_ms:
+            if sentence.seq <= previous_seq or sentence.start_ms < previous_end or sentence.end_ms > self.duration_ms:
                 raise ValueError("timeline sentence timings must be monotonic")
             previous_end = sentence.end_ms
+            previous_seq = sentence.seq
         return self

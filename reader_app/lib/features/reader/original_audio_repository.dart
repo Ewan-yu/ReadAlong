@@ -99,15 +99,20 @@ final class LocalOriginalAudioRepository implements OriginalAudioRepository {
             'Timeline audio identity mismatch');
       }
       final sourceSentences = await _loadSourceSentences(shelfBook);
-      if (original['timeline_sentence_count'] != sourceSentences.length) {
+      if (original['timeline_sentence_count'] is! int ||
+          (original['timeline_sentence_count'] as int) <= 0) {
         throw const OriginalAudioDataException(
-            'Timeline sentence count mismatch');
+            'Timeline sentence count is invalid');
       }
       final sentences = _parseTimeline(
         timeline,
         sourceSentences,
         Duration(milliseconds: durationMs),
       );
+      if (sentences.length != original['timeline_sentence_count']) {
+        throw const OriginalAudioDataException(
+            'Timeline sentence count mismatch');
+      }
       final backgroundPath = await _loadConfirmedBackground(
         bookDirectory: shelfBook.bookDir,
         original: original,
@@ -232,19 +237,27 @@ List<OriginalAudioSentence> _parseTimeline(
   Duration duration,
 ) {
   final rawSentences = timeline['sentences'];
-  if (rawSentences is! List || rawSentences.length != sourceSentences.length) {
+  if (rawSentences is! List || rawSentences.isEmpty) {
     throw const OriginalAudioDataException('Timeline sentence count mismatch');
   }
+  final sourceById = {
+    for (final sentence in sourceSentences) sentence.id: sentence,
+  };
   final sentences = <OriginalAudioSentence>[];
   var previousEnd = Duration.zero;
-  for (var index = 0; index < rawSentences.length; index++) {
-    final raw = rawSentences[index];
-    final source = sourceSentences[index];
+  var previousSourceSequence = 0;
+  final seenIds = <String>{};
+  for (final raw in rawSentences) {
+    final rawId = raw is Map<String, dynamic> ? raw['sentence_id'] : null;
+    final source = rawId is String ? sourceById[rawId] : null;
     if (raw is! Map<String, dynamic> ||
+        source == null ||
+        !seenIds.add(source.id) ||
         raw['sentence_id'] != source.id ||
         raw['page_no'] != source.pageNumber ||
         raw['seq'] != source.sequence ||
-        raw['text'] != source.text) {
+        raw['text'] != source.text ||
+        source.sequence <= previousSourceSequence) {
       throw const OriginalAudioDataException(
         'Timeline sentence identity mismatch',
       );
@@ -265,6 +278,7 @@ List<OriginalAudioSentence> _parseTimeline(
       words: words,
     ));
     previousEnd = end;
+    previousSourceSequence = source.sequence;
   }
   return List.unmodifiable(sentences);
 }

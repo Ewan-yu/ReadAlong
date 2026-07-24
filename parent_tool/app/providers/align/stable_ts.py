@@ -16,6 +16,14 @@ class WordAligner(Protocol):
         self, wav_path: Path, language: str, cancellation: CancellationToken
     ) -> tuple[AudioWordTiming, ...]: ...
 
+    def align_script(
+        self,
+        wav_path: Path,
+        text: str,
+        language: str,
+        cancellation: CancellationToken,
+    ) -> tuple[AudioWordTiming, ...]: ...
+
 
 class StableTsWordAligner:
     """stable-ts wrapper that only loads Whisper when an audio job actually requests it."""
@@ -33,12 +41,7 @@ class StableTsWordAligner:
             self._ensure_ffmpeg_on_path()
             result = self._load_model().transcribe(str(wav_path), language=language)
             cancellation.raise_if_cancelled()
-            timings = tuple(
-                AudioWordTiming(word=word.word.strip(), t_start=float(word.start), t_end=float(word.end))
-                for segment in result.segments
-                for word in (getattr(segment, "words", None) or ())
-                if word.word.strip()
-            )
+            timings = self._timings_from_result(result)
             if not timings:
                 raise PipelineError(
                     "WORD_ALIGNMENT_EMPTY",
@@ -52,6 +55,42 @@ class StableTsWordAligner:
             raise PipelineError(
                 "WORD_ALIGNMENT_FAILED",
                 "词级对齐失败，将以整句字幕降级。",
+                status_code=422,
+            ) from exc
+
+    def align_script(
+        self,
+        wav_path: Path,
+        text: str,
+        language: str,
+        cancellation: CancellationToken,
+    ) -> tuple[AudioWordTiming, ...]:
+        """Force-align an already confirmed narration script.
+
+        Free transcription is useful only to discover which proofread lines are
+        actually narrated.  The exported lyric words must instead come from the
+        proofread script, otherwise an ASR spelling guess can leak into a book
+        package and make the reader reject it.
+        """
+        cancellation.raise_if_cancelled()
+        try:
+            self._ensure_ffmpeg_on_path()
+            result = self._load_model().align(str(wav_path), text, language=language)
+            cancellation.raise_if_cancelled()
+            timings = self._timings_from_result(result)
+            if not timings:
+                raise PipelineError(
+                    "WORD_ALIGNMENT_EMPTY",
+                    "未能将原音与朗读脚本对齐，请检查原音内容。",
+                    status_code=422,
+                )
+            return timings
+        except PipelineError:
+            raise
+        except Exception as exc:
+            raise PipelineError(
+                "WORD_ALIGNMENT_FAILED",
+                "原音朗读脚本对齐失败，请确认分离的人声轨清晰可听。",
                 status_code=422,
             ) from exc
 
@@ -69,6 +108,25 @@ class StableTsWordAligner:
                         status_code=500,
                     ) from exc
             return self._model
+
+    @staticmethod
+    def _timings_from_result(result: object) -> tuple[AudioWordTiming, ...]:
+        """Normalise zero-width stable-ts boundaries before later validation."""
+        timings: list[AudioWordTiming] = []
+        for segment in getattr(result, "segments", ()):
+            for word in getattr(segment, "words", None) or ():
+                text = word.word.strip()
+                if not text:
+                    continue
+                start = float(word.start)
+                end = float(word.end)
+                # Export still verifies every word and all final millisecond
+                # ranges; this only prevents a one-frame ASR boundary from
+                # aborting narration discovery before forced alignment.
+                timings.append(
+                    AudioWordTiming(word=text, t_start=start, t_end=max(end, start + .01))
+                )
+        return tuple(timings)
 
     @staticmethod
     def _ensure_ffmpeg_on_path() -> None:

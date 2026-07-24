@@ -26,10 +26,16 @@ function Waveform({ src, label, active }: { src: string; label: string; active: 
   const canvas = useRef<HTMLCanvasElement>(null);
   useEffect(() => {
     let cancelled = false;
-    void fetch(src).then((response) => response.json()).then((body: { peaks?: Array<[number, number]> }) => {
-      if (cancelled || !canvas.current) return;
+    let observer: ResizeObserver | undefined;
+    let frame = 0;
+    let schedule = () => undefined;
+    const draw = (body: { peaks?: Array<[number, number]> }) => {
       const node = canvas.current;
+      if (cancelled || !node) return;
       const rect = node.getBoundingClientRect();
+      // A closed <dialog> has a zero-width canvas. Wait for layout/resize
+      // rather than storing a permanently blank first render.
+      if (rect.width <= 0 || rect.height <= 0) return;
       const pixelRatio = window.devicePixelRatio || 1;
       node.width = Math.max(1, Math.round(rect.width * pixelRatio));
       node.height = Math.max(1, Math.round(rect.height * pixelRatio));
@@ -52,8 +58,21 @@ function Waveform({ src, label, active }: { src: string; label: string; active: 
         context.lineTo(x, height * (0.5 - min * 0.44));
       });
       context.stroke();
+    };
+    void fetch(src).then((response) => response.json()).then((body: { peaks?: Array<[number, number]> }) => {
+      if (cancelled || !canvas.current) return;
+       schedule = () => {
+         cancelAnimationFrame(frame);
+         frame = requestAnimationFrame(() => draw(body));
+       };
+       schedule();
+       window.addEventListener("resize", schedule);
+       if (typeof ResizeObserver !== "undefined") {
+         observer = new ResizeObserver(schedule);
+         observer.observe(canvas.current);
+       }
     }).catch(() => undefined);
-    return () => { cancelled = true; };
+    return () => { cancelled = true; cancelAnimationFrame(frame); observer?.disconnect(); window.removeEventListener("resize", schedule); };
   }, [active, src]);
   return <div className={styles.wave}><span>{label}</span><canvas ref={canvas} aria-label={`${label}波形`} role="img" /></div>;
 }
@@ -134,17 +153,17 @@ export function OriginalAudioReviewCard({ bookId }: { bookId: string }) {
 
   return <section className={styles.card} data-state={workspace.status}>
     <div className={styles.cardHeading}><span><Waves /></span><div><strong>原音处理</strong><small>{workspace.source_filename ?? "已上传原音"} · {clock(workspace.duration_ms)}</small></div><b>{status}</b></div>
-    <p>{workspace.message ?? (workspace.status === "confirmed" ? "背景轨已保存；生成逐词字幕后，儿童端才会开放原音欣赏。" : ready ? "请比较人声与背景轨后，再确认保存。" : "原音只用于欣赏；孩子配音不会叠加完整原音。")}</p>
+    <p>{workspace.message ?? (workspace.lyric_sentence_count ? `已纳入原音歌词 ${workspace.lyric_sentence_count} 句；未朗读的封面、版权和词表文字不会显示。` : workspace.status === "confirmed" ? "背景轨已保存；将只把实际朗读的句子生成逐词歌词，儿童端才会开放原音欣赏。" : ready ? "请比较人声与背景轨后，再确认保存。" : "原音只用于欣赏；孩子配音不会叠加完整原音。")}</p>
     {separate.error && <div className={styles.error}><CircleAlert />{separate.error.message}</div>}
     {buildTimeline.error && <div className={styles.error}><CircleAlert />{buildTimeline.error.message}</div>}
     <div className={styles.actions}>
       {ready && <button type="button" className={styles.review} onClick={() => setOpen(true)}><Headphones />试听分离结果</button>}
-      {workspace.status === "confirmed" && <button type="button" className={styles.review} disabled={isBusy} onClick={() => buildTimeline.mutate()}><Waves className={buildTimeline.isPending ? styles.spin : undefined} />{buildTimeline.isPending ? "正在生成歌词" : "生成逐词字幕"}</button>}
+      {workspace.status === "confirmed" && <button type="button" className={styles.review} disabled={isBusy} onClick={() => buildTimeline.mutate()}><Waves className={buildTimeline.isPending ? styles.spin : undefined} />{buildTimeline.isPending ? "正在生成歌词" : workspace.lyric_sentence_count ? "重新生成逐词歌词" : "生成逐词歌词"}</button>}
       <button type="button" disabled={isBusy} onClick={() => separate.mutate()}><RefreshCw className={isBusy ? styles.spin : undefined} />{workspace.status === "not_processed" ? "开始分离" : "重新分离"}</button>
     </div>
     <dialog ref={dialog} className={styles.dialog} onCancel={(event) => { event.preventDefault(); setOpen(false); }} onClick={(event) => { if (event.target === dialog.current) setOpen(false); }}>
       <header><div><small>原音处理 / {workspace.source_filename}</small><h2>试听分离结果</h2><p>{workspace.model ?? "htdemucs"} · {clock(workspace.duration_ms)} · 只确认你愿意用于孩子作品的背景轨</p></div><button type="button" aria-label="关闭试听窗口" onClick={() => setOpen(false)}><X /></button></header>
-      {ready && <main>
+      {open && ready && <main>
         <div className={styles.trackTabs} role="tablist" aria-label="试听轨道">
           {(["original", "vocals", "background"] as Track[]).map((item) => <button key={item} type="button" role="tab" aria-selected={track === item} onClick={() => selectTrack(item)}>{item === "original" ? "原音对照" : item === "vocals" ? "人声" : "背景与音效"}</button>)}
         </div>

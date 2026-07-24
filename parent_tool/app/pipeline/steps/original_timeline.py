@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import json
+from difflib import SequenceMatcher
 
 from app.models.audio import AudioWordTiming
 from app.models.errors import PipelineError
-from app.models.ocr import OcrSentences
+from app.models.ocr import OcrSentence, OcrSentences
 from app.models.original_timeline import (
     OriginalTimeline,
     OriginalTimelineParams,
@@ -25,7 +26,7 @@ class OriginalTimelineStep:
     """Align final proofread text against the *confirmed* separated vocal stem."""
 
     step_id = StepId.ORIGINAL_TIMELINE
-    implementation_version = "original-timeline-v1"
+    implementation_version = "original-timeline-v2"
     params_model = OriginalTimelineParams
 
     def __init__(self, aligner: WordAligner, media_probe) -> None:
@@ -70,10 +71,29 @@ class OriginalTimelineStep:
         duration_ms = self._media_probe.duration_ms(original_source, context.cancellation)
 
         context.progress(0.05, "正在对齐已确认的人声轨与校对文本…")
+        # First use local ASR only as a conservative discovery pass.  A book can
+        # contain cover credits, word lists and other visual text that the
+        # narrator never reads, so it is deliberately not required to cover the
+        # whole OCR result.
         recognized = self._aligner.align(vocal_path, params.language, context.cancellation)
+        narration = self._select_narrated_sentences(sentences, recognized)
+        if not narration:
+            raise PipelineError(
+                "ORIGINAL_TIMELINE_WORD_MISMATCH",
+                "原音朗读与校对文本没有可确认的共同句子。",
+                details={"recognized_word_count": len(recognized)},
+                status_code=422,
+            )
+        context.progress(0.45, "已识别原音朗读内容，正在进行逐词强制对齐…")
+        aligned = self._aligner.align_script(
+            vocal_path,
+            "\n".join(sentence.text for sentence in narration),
+            params.language,
+            context.cancellation,
+        )
         timeline = self._build_timeline(
-            sentences,
-            recognized,
+            narration,
+            aligned,
             proofread_revision=context.dependency_outputs[StepId.PROOFREAD].name,
             original_audio_revision=confirmed_root.name,
             original_audio_sha256=context.source_original_audio_sha256,
@@ -101,8 +121,8 @@ class OriginalTimelineStep:
 
     @staticmethod
     def _build_timeline(
-        sentences: OcrSentences,
-        recognized: tuple[AudioWordTiming, ...],
+        sentences: tuple[OcrSentence, ...],
+        aligned: tuple[AudioWordTiming, ...],
         *,
         proofread_revision: str,
         original_audio_revision: str,
@@ -110,36 +130,30 @@ class OriginalTimelineStep:
         vocal_sha256: str,
         duration_ms: int,
     ) -> OriginalTimeline:
-        expected_words = tuple(word for sentence in sentences.sentences for word in normalized_words(sentence.text))
-        actual_words = tuple(word for item in recognized for word in normalized_words(item.word))
-        # A timeline is child-facing correctness data, not a best-effort TTS
-        # convenience.  Do not synthesize estimated positions or silently drop
-        # an unmatched line: leave a failed job for the parent correction gate.
-        if not expected_words or actual_words != expected_words or any(len(normalized_words(item.word)) != 1 for item in recognized):
-            raise PipelineError(
-                "ORIGINAL_TIMELINE_WORD_MISMATCH",
-                "原音识别词序与校对文本不一致，请先校正文本或重新分离后再试。",
-                details={"expected_word_count": len(expected_words), "recognized_word_count": len(actual_words)},
-                status_code=422,
-            )
+        actual_words = OriginalTimelineStep._flatten_words(aligned)
+        if not actual_words:
+            raise PipelineError("ORIGINAL_TIMELINE_WORD_MISMATCH", "原音中没有可识别的朗读文本。", status_code=422)
         cursor = 0
         output: list[OriginalTimelineSentence] = []
-        previous_end = 0.0
-        for sentence in sentences.sentences:
-            count = len(normalized_words(sentence.text))
-            words = tuple(
-                OriginalTimelineWord(
-                    seq=index + 1,
-                    text=expected_words[cursor + index],
-                    start_ms=round(item.t_start * 1000),
-                    end_ms=round(item.t_end * 1000),
-                )
-                for index, item in enumerate(recognized[cursor : cursor + count])
-            )
-            if not words or words[0].start_ms < previous_end:
+        previous_end = 0
+        for sentence in sentences:
+            expected_words = normalized_words(sentence.text)
+            if not expected_words:
+                continue
+            found = OriginalTimelineStep._find_exact_phrase(actual_words, expected_words, cursor)
+            if found is None:
                 raise PipelineError(
-                    "ORIGINAL_TIMELINE_TIMING_INVALID",
-                    "原音时间戳不是连续递增的，请重新生成。",
+                    "ORIGINAL_TIMELINE_WORD_MISMATCH",
+                    "原音朗读脚本的逐词对齐结果不完整，请重新生成。",
+                    details={"sentence_id": sentence.id},
+                    status_code=422,
+                )
+            matched = actual_words[found:found + len(expected_words)]
+            words = OriginalTimelineStep._timeline_words(expected_words, matched, previous_end)
+            if not words:
+                raise PipelineError(
+                    "ORIGINAL_TIMELINE_WORD_MISMATCH",
+                    "原音朗读脚本的逐词时间无效，请重新生成。",
                     details={"sentence_id": sentence.id},
                     status_code=422,
                 )
@@ -155,7 +169,14 @@ class OriginalTimelineStep:
                 )
             )
             previous_end = words[-1].end_ms
-            cursor += count
+            cursor = found + len(expected_words)
+        if not output:
+            raise PipelineError(
+                "ORIGINAL_TIMELINE_WORD_MISMATCH",
+                "原音朗读与校对文本没有可确认的共同句子。",
+                details={"recognized_word_count": len(actual_words)},
+                status_code=422,
+            )
         return OriginalTimeline(
             source=OriginalTimelineSource(
                 proofread_revision=proofread_revision,
@@ -167,3 +188,95 @@ class OriginalTimelineStep:
             duration_ms=duration_ms,
             sentences=tuple(output),
         )
+
+    @staticmethod
+    def _select_narrated_sentences(
+        source: OcrSentences,
+        recognized: tuple[AudioWordTiming, ...],
+    ) -> tuple[OcrSentence, ...]:
+        """Select the ordered proofread subset that is demonstrably narrated.
+
+        Tiny local Whisper regularly makes a small spelling error (``ruler`` /
+        ``rule``), therefore discovery accepts a high word-sequence similarity.
+        The following forced-alignment pass remains authoritative and only emits
+        the exact proofread words.
+        """
+        actual = OriginalTimelineStep._flatten_words(recognized)
+        selected: list[OcrSentence] = []
+        cursor = 0
+        for sentence in source.sentences:
+            expected = normalized_words(sentence.text)
+            found = OriginalTimelineStep._find_similar_phrase(actual, expected, cursor)
+            if found is None:
+                continue
+            index, length = found
+            selected.append(sentence)
+            cursor = index + length
+        return tuple(selected)
+
+    @staticmethod
+    def _flatten_words(timings: tuple[AudioWordTiming, ...]) -> tuple[tuple[str, AudioWordTiming], ...]:
+        return tuple((word, item) for item in timings for word in normalized_words(item.word))
+
+    @staticmethod
+    def _find_exact_phrase(
+        actual: tuple[tuple[str, AudioWordTiming], ...], expected: tuple[str, ...], cursor: int) -> int | None:
+        for index in range(cursor, len(actual) - len(expected) + 1):
+            if tuple(word for word, _ in actual[index:index + len(expected)]) == expected:
+                return index
+        return None
+
+    @staticmethod
+    def _find_similar_phrase(
+        actual: tuple[tuple[str, AudioWordTiming], ...], expected: tuple[str, ...], cursor: int
+    ) -> tuple[int, int] | None:
+        if not expected:
+            return None
+        if len(expected) == 1:
+            for index in range(cursor, len(actual)):
+                if actual[index][0] == expected[0]:
+                    return index, 1
+            return None
+        best: tuple[float, int, int] | None = None
+        lower = max(1, len(expected) - 2)
+        upper = min(len(actual) - cursor, len(expected) + 2)
+        for index in range(cursor, len(actual)):
+            for length in range(lower, upper + 1):
+                candidate = tuple(word for word, _ in actual[index:index + length])
+                if len(candidate) != length:
+                    continue
+                matcher = SequenceMatcher(a=expected, b=candidate, autojunk=False)
+                ratio = matcher.ratio()
+                exact = sum(block.size for block in matcher.get_matching_blocks())
+                # Two-word labels (for example a publisher name) need an exact
+                # recognition. Longer spoken sentences tolerate one ASR typo.
+                accepted = (len(expected) == 2 and ratio == 1) or (
+                    len(expected) >= 3 and ratio >= .7 and exact >= max(2, round(len(expected) * .6))
+                )
+                if accepted and (best is None or ratio > best[0]):
+                    best = (ratio, index, length)
+            # Prefer the first qualified occurrence when scores are equal: it
+            # preserves chronological narration and avoids jumping to a repeat.
+            if best is not None and best[1] == index:
+                return best[1], best[2]
+        return None
+
+    @staticmethod
+    def _timeline_words(
+        expected: tuple[str, ...],
+        matched: tuple[tuple[str, AudioWordTiming], ...],
+        previous_end: int,
+    ) -> tuple[OriginalTimelineWord, ...]:
+        words: list[OriginalTimelineWord] = []
+        last_end = previous_end
+        for index, (text, (_, timing)) in enumerate(zip(expected, matched), start=1):
+            start = max(round(timing.t_start * 1000), last_end)
+            end = round(timing.t_end * 1000)
+            if end <= start:
+                # Stable-ts can expose two boundaries in the same millisecond.
+                # Give the displayed word a minimal positive span; later words
+                # are shifted forward too, keeping the timeline monotonic.
+                end = start + 10
+            words.append(OriginalTimelineWord(seq=index, text=text, start_ms=start, end_ms=end))
+            last_end = end
+        return tuple(words)

@@ -163,7 +163,7 @@ def test_builder_emits_reader_ms_contract_and_refuses_recognition_drift() -> Non
         AudioWordTiming(word="night", t_start=1.4, t_end=1.8),
     )
     timeline = OriginalTimelineStep._build_timeline(
-        _sentences(),
+        _sentences().sentences,
         recognized,
         proofread_revision="r-proofread-12345678",
         original_audio_revision="r-original-12345678",
@@ -177,7 +177,7 @@ def test_builder_emits_reader_ms_contract_and_refuses_recognition_drift() -> Non
 
     with pytest.raises(PipelineError) as caught:
         OriginalTimelineStep._build_timeline(
-            _sentences(),
+            _sentences().sentences,
             recognized[:-1],
             proofread_revision="r-proofread-12345678",
             original_audio_revision="r-original-12345678",
@@ -186,3 +186,60 @@ def test_builder_emits_reader_ms_contract_and_refuses_recognition_drift() -> Non
             duration_ms=2_000,
         )
     assert caught.value.code == "ORIGINAL_TIMELINE_WORD_MISMATCH"
+
+
+def test_timeline_allows_a_narrated_subset_but_rejects_source_identity_drift(tmp_path: Path) -> None:
+    source = _sentences()
+    timeline = _timeline().model_copy(update={"sentences": (_timeline().sentences[1],)})
+    path = tmp_path / "original_timeline.json"
+    write_timeline(path, timeline)
+
+    loaded = load_and_validate_timeline(
+        path,
+        sentences=source,
+        proofread_revision="r-proofread-12345678",
+        original_audio_revision="r-original-12345678",
+        original_audio_sha256="a" * 64,
+        vocal_sha256="b" * 64,
+        duration_ms=2_000,
+    )
+    assert [item.sentence_id for item in loaded.sentences] == ["s0002"]
+
+    raw = timeline.model_dump(mode="json")
+    raw["sentences"][0]["text"] = "Changed text."
+    path.write_text(json.dumps(raw), encoding="utf-8")
+    with pytest.raises(PipelineError) as caught:
+        load_and_validate_timeline(
+            path,
+            sentences=source,
+            proofread_revision="r-proofread-12345678",
+            original_audio_revision="r-original-12345678",
+            original_audio_sha256="a" * 64,
+            vocal_sha256="b" * 64,
+            duration_ms=2_000,
+        )
+    assert caught.value.code == "ORIGINAL_TIMELINE_MISMATCH"
+
+
+def test_discovery_selects_only_ordered_narrated_lines_and_tolerates_one_asr_typo() -> None:
+    source = _sentences()
+    recognized = (
+        AudioWordTiming(word="Hello", t_start=0, t_end=.2),
+        AudioWordTiming(word="world", t_start=.2, t_end=.4),
+    )
+    selected = OriginalTimelineStep._select_narrated_sentences(source, recognized)
+    assert [item.id for item in selected] == ["s0001"]
+
+
+def test_discovery_tolerates_a_fragmented_asr_word_without_changing_export_text() -> None:
+    timing = AudioWordTiming(word="my", t_start=0, t_end=.1)
+    actual = tuple(
+        (word, timing)
+        for word in ("my", "grand", "possed", "chopsticks", "are", "long")
+    )
+    found = OriginalTimelineStep._find_similar_phrase(
+        actual,
+        ("my", "grandpa's", "chopsticks", "are", "long"),
+        0,
+    )
+    assert found == (0, 6)

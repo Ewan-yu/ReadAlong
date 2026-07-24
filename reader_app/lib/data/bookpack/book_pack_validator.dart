@@ -152,18 +152,31 @@ class BookPackValidator {
             orderBy: 'seq ASC',
           );
           final sentences = timeline['sentences'] as List;
-          if (rows.length != sentences.length) throw const FormatException();
-          for (var index = 0; index < rows.length; index++) {
-            final row = rows[index];
-            final sentence = sentences[index];
+          final rowsById = {
+            for (final row in rows) row['id']: row,
+          };
+          final seenIds = <Object?>{};
+          var previousSequence = 0;
+          for (final sentence in sentences) {
+            final sentenceId = sentence is Map<String, dynamic>
+                ? sentence['sentence_id']
+                : null;
+            final row = rowsById[sentenceId];
             if (sentence is! Map<String, dynamic> ||
+                row == null ||
+                !seenIds.add(sentenceId) ||
                 sentence['sentence_id'] != row['id'] ||
                 sentence['page_no'] != row['page_no'] ||
                 sentence['seq'] != row['seq'] ||
                 sentence['text'] != row['text'] ||
-                !_hasMatchingWords(sentence['text'] as String, sentence['words'])) {
+                sentence['seq'] is! int ||
+                (sentence['seq'] as int) <= previousSequence ||
+                sentence['text'] is! String ||
+                !_hasMatchingWords(
+                    sentence['text'] as String, sentence['words'])) {
               throw const FormatException();
             }
+            previousSequence = sentence['seq'] as int;
           }
         } finally {
           await database.close();
@@ -397,10 +410,14 @@ class BookPackValidator {
         throw const FormatException();
       }
       var previousEnd = 0;
-      for (var index = 0; index < sentences.length; index++) {
-        final sentence = sentences[index];
+      var previousSourceSequence = 0;
+      final sentenceIds = <String>{};
+      for (final sentence in sentences) {
         if (sentence is! Map<String, dynamic> ||
-            sentence['seq'] != index + 1 ||
+            sentence['sentence_id'] is! String ||
+            !sentenceIds.add(sentence['sentence_id'] as String) ||
+            sentence['seq'] is! int ||
+            (sentence['seq'] as int) <= previousSourceSequence ||
             sentence['start_ms'] is! int ||
             sentence['end_ms'] is! int ||
             (sentence['start_ms'] as int) < previousEnd ||
@@ -434,6 +451,7 @@ class BookPackValidator {
           throw const FormatException();
         }
         previousEnd = sentence['end_ms'] as int;
+        previousSourceSequence = sentence['seq'] as int;
       }
     } on Object {
       errors.add('原音逐词时间线内容非法');

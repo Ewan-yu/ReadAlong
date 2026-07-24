@@ -49,9 +49,11 @@ def load_and_validate_timeline(
             "原音逐词时间线基于旧校对文本或旧人声轨，请重新生成。",
             status_code=409,
         )
-    if len(timeline.sentences) != len(sentences.sentences):
-        raise PipelineError("ORIGINAL_TIMELINE_MISMATCH", "原音字幕句数与校对文本不一致。", status_code=409)
-    for expected, actual in zip(sentences.sentences, timeline.sentences, strict=True):
+    source_by_id = {sentence.id: sentence for sentence in sentences.sentences}
+    for actual in timeline.sentences:
+        expected = source_by_id.get(actual.sentence_id)
+        if expected is None:
+            raise PipelineError("ORIGINAL_TIMELINE_MISMATCH", "原音字幕引用了不存在的绘本句子。", status_code=409)
         if (
             actual.sentence_id != expected.id
             or actual.page_no != expected.page_no
@@ -101,8 +103,9 @@ def validate_timeline_against_alignment_db(
             connection.close()
         except UnboundLocalError:
             pass
+    indexed = {row[0]: row for row in rows}
     expected = [(item.sentence_id, item.page_no, item.seq, item.text) for item in timeline.sentences]
-    if rows != expected:
+    if any(indexed.get(item[0]) != item for item in expected):
         raise PipelineError(
             "ORIGINAL_TIMELINE_ALIGNMENT_INVALID",
             "原音字幕与点读句子索引不一致，不能导出。",

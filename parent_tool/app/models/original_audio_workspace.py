@@ -31,4 +31,5 @@ class OriginalAudioWorkspaceResponse(FrozenModel):
     model: str | None = None
     duration_ms: int | None = None
     assets: OriginalAudioCandidateAssets | None = None
+    lyric_sentence_count: int | None = None
     message: str | None = None

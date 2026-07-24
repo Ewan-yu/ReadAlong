@@ -89,6 +89,7 @@ export type OriginalAudioWorkspace = {
     waveform_vocals: string;
     waveform_background: string;
   } | null;
+  lyric_sentence_count?: number | null;
   message?: string | null;
 };
 export type ExportWorkspace = {

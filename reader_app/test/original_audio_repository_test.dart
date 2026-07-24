@@ -79,22 +79,46 @@ void main() {
       throwsA(isA<OriginalAudioDataException>()),
     );
   });
+
+  test('只朗读部分绘本文本时，仅将已朗读句作为独立歌词加载', () async {
+    await _writeAlignment(bookDir, includeVisualOnlyLine: true);
+    await _writeReadyPackage(bookDir, narratedSentenceSequence: 2);
+
+    final book = await repository.loadBook('copy-1');
+
+    expect(book.sentences, hasLength(1));
+    expect(book.sentences.single.id, 's0002');
+    expect(book.sentences.single.text, 'Good night.');
+  });
 }
 
-Future<void> _writeAlignment(Directory bookDir) async {
+Future<void> _writeAlignment(
+  Directory bookDir, {
+  bool includeVisualOnlyLine = false,
+}) async {
   final file = File(p.join(bookDir.path, 'align', 'alignment.db'));
   await file.parent.create(recursive: true);
   final db = await databaseFactoryFfi.openDatabase(file.path);
   try {
-    await db.execute('CREATE TABLE book (id TEXT NOT NULL)');
+    await db.execute('CREATE TABLE IF NOT EXISTS book (id TEXT NOT NULL)');
     await db.execute(
-      'CREATE TABLE sentence (id TEXT, page_no INTEGER, seq INTEGER, text TEXT)',
+      'CREATE TABLE IF NOT EXISTS sentence (id TEXT, page_no INTEGER, seq INTEGER, text TEXT)',
     );
+    await db.execute('DELETE FROM book');
+    await db.execute('DELETE FROM sentence');
     await db.insert('book', {'id': 'story-1'});
+    if (includeVisualOnlyLine) {
+      await db.insert('sentence', {
+        'id': 's0001',
+        'page_no': 1,
+        'seq': 1,
+        'text': 'Written by Someone.',
+      });
+    }
     await db.insert('sentence', {
-      'id': 's0001',
+      'id': includeVisualOnlyLine ? 's0002' : 's0001',
       'page_no': 1,
-      'seq': 1,
+      'seq': includeVisualOnlyLine ? 2 : 1,
       'text': 'Good night.',
     });
   } finally {
@@ -105,6 +129,7 @@ Future<void> _writeAlignment(Directory bookDir) async {
 Future<void> _writeReadyPackage(
   Directory bookDir, {
   String? timelineHash,
+  int narratedSentenceSequence = 1,
 }) async {
   final audio = File(p.join(bookDir.path, 'original', 'source.mp3'));
   await audio.parent.create(recursive: true);
@@ -122,9 +147,9 @@ Future<void> _writeReadyPackage(
     },
     'sentences': [
       {
-        'sentence_id': 's0001',
+        'sentence_id': narratedSentenceSequence == 2 ? 's0002' : 's0001',
         'page_no': 1,
-        'seq': 1,
+        'seq': narratedSentenceSequence,
         'text': 'Good night.',
         'start_ms': 200,
         'end_ms': 2000,
