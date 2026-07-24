@@ -16,6 +16,12 @@ from app.pipeline.definitions import CancellationToken, ProgressReporter
 from app.pipeline.hashing import file_sha256
 
 
+_HTDEMUCS_CHECKPOINT = "955717e8-8726e21a.th"
+# Demucs filenames are `<model signature>-<checkpoint sha prefix>.th`; the
+# first part identifies the model configuration, not the downloaded bytes.
+_HTDEMUCS_SHA256_PREFIX = "8726e21a"
+
+
 @dataclass(frozen=True)
 class SeparationOutput:
     background_ogg: Path
@@ -61,8 +67,8 @@ class DemucsSeparationProvider:
             ) from exc
 
         cache = self._cache_dir()
-        checkpoint = cache / "hub" / "checkpoints" / "955717e8-8726e21a.th"
-        if not checkpoint.is_file() or not file_sha256(checkpoint).startswith("955717e8"):
+        checkpoint = cache / "hub" / "checkpoints" / _HTDEMUCS_CHECKPOINT
+        if not checkpoint.is_file() or not file_sha256(checkpoint).startswith(_HTDEMUCS_SHA256_PREFIX):
             raise PipelineError(
                 "DEMUCS_MODEL_MISSING",
                 "htdemucs 权重尚未准备好；请用 PoC 下载器（支持国内镜像和续传）下载后重试。",
@@ -129,7 +135,19 @@ class DemucsSeparationProvider:
 
     def _cache_dir(self) -> Path:
         raw = os.environ.get("READALONG_DEMUCS_CACHE")
-        return (Path(raw) if raw else user_cache_path("ReadAlong") / "Demucs").expanduser().resolve()
+        if raw:
+            return Path(raw).expanduser().resolve()
+
+        # Development checkouts keep the large, non-versioned weights beside
+        # the repository.  A worktree is nested below that checkout, so walk
+        # upwards instead of requiring every worktree to copy 400+ MB.  An
+        # installed application has no such directory and continues to use
+        # its normal per-user cache (or the explicit environment override).
+        for root in Path(__file__).resolve().parents:
+            bundled = root / "pretrained_models" / "Demucs"
+            if bundled.is_dir():
+                return bundled.resolve()
+        return (user_cache_path("ReadAlong") / "Demucs").expanduser().resolve()
 
     def _resolve_ffmpeg(self) -> Path:
         candidates = (
