@@ -194,11 +194,9 @@ class ExportStep:
             return
         source = assembly / "original" / "source.mp3"
         target = assembly / "original" / "playback.ogg"
-        self._playback_transcoder.transcode(
+        self._playback_transcoder.transcode_original_playback(
             source,
             target,
-            bitrate_kbps=96,
-            tempo=1,
             cancellation=context.cancellation,
         )
         if not target.is_file() or target.stat().st_size <= 0:

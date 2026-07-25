@@ -191,22 +191,17 @@ class FakePlaybackTranscoder:
     def __init__(self) -> None:
         self.calls: list[tuple[Path, Path]] = []
 
-    def transcode(
+    def transcode_original_playback(
         self,
         source: Path,
         target: Path,
         *,
-        bitrate_kbps: int,
-        tempo: float,
         cancellation: CancellationToken,
-    ) -> float:
+    ) -> None:
         self.calls.append((source, target))
-        assert bitrate_kbps == 96
-        assert tempo == 1
         cancellation.raise_if_cancelled()
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(b"OggS synthetic original playback")
-        return 12.345
 
 
 def _run(

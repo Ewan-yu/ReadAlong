@@ -76,6 +76,60 @@ class FfmpegOpusTranscoder:
             ) from exc
         return float(duration)
 
+    def transcode_original_playback(
+        self,
+        source_path: Path,
+        ogg_path: Path,
+        cancellation: CancellationToken,
+    ) -> None:
+        """Create a high-quality playback copy of a parent-uploaded original.
+
+        Unlike sentence TTS, story originals may include stereo music. Keep
+        two channels here; this asset is for listening only, never a dubbing
+        mix input.
+        """
+        ffmpeg = self._resolve_executable()
+        cancellation.raise_if_cancelled()
+        ogg_path.parent.mkdir(parents=True, exist_ok=True)
+        process = subprocess.Popen(
+            [
+                str(ffmpeg),
+                "-y",
+                "-i",
+                str(source_path),
+                "-ar",
+                "48000",
+                "-ac",
+                "2",
+                "-af",
+                "alimiter=limit=0.891:level=disabled",
+                "-c:a",
+                "libopus",
+                "-b:a",
+                "128k",
+                str(ogg_path),
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        while process.poll() is None:
+            if cancellation.requested:
+                process.terminate()
+                process.wait(timeout=5)
+                cancellation.raise_if_cancelled()
+            time.sleep(0.1)
+        _stdout, stderr = process.communicate()
+        if process.returncode != 0 or not ogg_path.is_file() or ogg_path.stat().st_size <= 0:
+            raise PipelineError(
+                "ORIGINAL_AUDIO_TRANSCODE_FAILED",
+                "无法生成设备兼容的原音播放音频。",
+                details={"ffmpeg_error": stderr[-500:]},
+                status_code=500,
+            )
+
     def normalize_reference(
         self,
         source_path: Path,
