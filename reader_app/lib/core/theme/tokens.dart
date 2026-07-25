@@ -56,6 +56,7 @@ abstract final class AppSizes {
   static const originalAudioCurrentLyric = 44.0;
   static const originalAudioNeighbourLyric = 26.0;
   static const originalAudioSkipIcon = 36.0;
+  static const originalAudioSkipButton = 56.0;
   static const originalAudioPlayIcon = 42.0;
   static const originalAudioErrorTitle = 20.0;
   static const originalAudioErrorBody = 16.0;

@@ -167,11 +167,19 @@ class _OriginalAudioPlaybackViewState
   String? _playbackError;
 
   late final OriginalAudioPlayer _player;
+  late final ProviderSubscription<OriginalAudioPlayer> _playerLease;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    // Reading an auto-dispose provider in initState alone can release its
+    // native player before the first platform decoder call completes. Keep a
+    // manual lease for this route, then release it explicitly in dispose.
+    _playerLease = ref.listenManual(
+      originalAudioPlayerProvider,
+      (_, __) {},
+    );
     _player = ref.read(originalAudioPlayerProvider);
     _positionSubscription = _player.positionStream.listen(_onPosition);
     _playingSubscription = _player.playingStream.listen(_onPlayingChanged);
@@ -186,6 +194,7 @@ class _OriginalAudioPlaybackViewState
     // Providers dispose the native player once this page leaves the tree.
     // Stop eagerly as well so an in-flight route transition cannot keep audio.
     unawaited(_player.stop());
+    _playerLease.close();
     super.dispose();
   }
 
@@ -299,8 +308,6 @@ class _OriginalAudioPlaybackViewState
 
   @override
   Widget build(BuildContext context) {
-    // Keep the auto-dispose player alive for the complete visible route.
-    ref.watch(originalAudioPlayerProvider);
     final sentenceIndex = _currentSentenceIndex;
     final activeWord = _activeWordIndex(
       widget.original.sentences[sentenceIndex],
@@ -702,16 +709,28 @@ class _OriginalAudioControls extends StatelessWidget {
                 Text(_formatTime(position),
                     style: const TextStyle(color: AppColors.textSecondary)),
                 Expanded(
-                  child: Slider(
-                    key: const ValueKey('original-audio-seek'),
-                    value: position.inMilliseconds.toDouble().clamp(
-                          0,
-                          duration.inMilliseconds.toDouble(),
-                        ),
-                    max: duration.inMilliseconds.toDouble(),
-                    onChangeStart: enabled ? (_) => onSeekStart() : null,
-                    onChanged: enabled ? onSeekChanged : null,
-                    onChangeEnd: enabled ? onSeekEnd : null,
+                  child: SliderTheme(
+                    data: SliderTheme.of(context).copyWith(
+                      activeTrackColor: AppColors.primary,
+                      inactiveTrackColor: AppColors.primaryContainer,
+                      trackHeight: AppSpacing.unit / 2,
+                      thumbColor: AppColors.primary,
+                      overlayColor: AppColors.primaryContainer,
+                      thumbShape: const RoundSliderThumbShape(
+                        enabledThumbRadius: AppSpacing.unit,
+                      ),
+                    ),
+                    child: Slider(
+                      key: const ValueKey('original-audio-seek'),
+                      value: position.inMilliseconds.toDouble().clamp(
+                            0,
+                            duration.inMilliseconds.toDouble(),
+                          ),
+                      max: duration.inMilliseconds.toDouble(),
+                      onChangeStart: enabled ? (_) => onSeekStart() : null,
+                      onChanged: enabled ? onSeekChanged : null,
+                      onChangeEnd: enabled ? onSeekEnd : null,
+                    ),
                   ),
                 ),
                 Text(_formatTime(duration),
@@ -721,11 +740,10 @@ class _OriginalAudioControls extends StatelessWidget {
             Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                IconButton(
+                _SentenceSkipButton(
                   onPressed: enabled && hasPrevious ? onPrevious : null,
-                  icon: const Icon(Icons.skip_previous_rounded),
+                  icon: Icons.skip_previous_rounded,
                   tooltip: '上一句',
-                  iconSize: AppSizes.originalAudioSkipIcon,
                 ),
                 const SizedBox(width: AppSpacing.cardPadding),
                 SizedBox(
@@ -742,15 +760,42 @@ class _OriginalAudioControls extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(width: AppSpacing.cardPadding),
-                IconButton(
+                _SentenceSkipButton(
                   onPressed: enabled && hasNext ? onNext : null,
-                  icon: const Icon(Icons.skip_next_rounded),
+                  icon: Icons.skip_next_rounded,
                   tooltip: '下一句',
-                  iconSize: AppSizes.originalAudioSkipIcon,
                 ),
               ],
             ),
           ],
+        ),
+      );
+}
+
+class _SentenceSkipButton extends StatelessWidget {
+  const _SentenceSkipButton({
+    required this.onPressed,
+    required this.icon,
+    required this.tooltip,
+  });
+
+  final VoidCallback? onPressed;
+  final IconData icon;
+  final String tooltip;
+
+  @override
+  Widget build(BuildContext context) => IconButton.filledTonal(
+        onPressed: onPressed,
+        tooltip: tooltip,
+        icon: Icon(icon, size: AppSizes.originalAudioSkipIcon),
+        style: IconButton.styleFrom(
+          foregroundColor: AppColors.primaryDark,
+          backgroundColor: AppColors.primaryContainer,
+          disabledBackgroundColor: AppColors.border,
+          minimumSize: const Size(
+            AppSizes.originalAudioSkipButton,
+            AppSizes.originalAudioSkipButton,
+          ),
         ),
       );
 }
