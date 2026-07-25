@@ -16,12 +16,15 @@ from app.models.pages import PagePlan
 from app.models.pipeline import StepId, StepStatus, StepSuccess
 from app.pipeline.artifacts import ArtifactStore
 from app.pipeline.hashing import file_sha256
+from app.pipeline.original_timeline import TIMELINE_PATH
 from app.pipeline.paths import WorkspacePaths, ensure_within
 from app.pipeline.state_repository import StateRepository
 
 
 class ExportWorkspaceService:
-    def __init__(self, paths: WorkspacePaths, states: StateRepository, artifacts: ArtifactStore) -> None:
+    def __init__(
+        self, paths: WorkspacePaths, states: StateRepository, artifacts: ArtifactStore
+    ) -> None:
         self.paths = paths
         self.states = states
         self.artifacts = artifacts
@@ -30,39 +33,87 @@ class ExportWorkspaceService:
     def load(self, book_id: str) -> ExportWorkspaceResponse:
         state = self.states.load(book_id)
         checks: list[ExportCheck] = []
-        pages = self._load_pages(book_id, state.steps[StepId.PAGES].status, state.steps[StepId.PAGES].success, checks)
-        sentences = self._load_sentences(book_id, state.steps[StepId.PROOFREAD].status, state.steps[StepId.PROOFREAD].success, checks)
-        audio = self._load_audio(book_id, state.steps[StepId.AUDIO].status, state.steps[StepId.AUDIO].success, checks)
+        pages = self._load_pages(
+            book_id, state.steps[StepId.PAGES].status, state.steps[StepId.PAGES].success, checks
+        )
+        sentences = self._load_sentences(
+            book_id,
+            state.steps[StepId.PROOFREAD].status,
+            state.steps[StepId.PROOFREAD].success,
+            checks,
+        )
+        audio = self._load_audio(
+            book_id, state.steps[StepId.AUDIO].status, state.steps[StepId.AUDIO].success, checks
+        )
         original_audio = self._load_original_audio(
             book_id,
             state.source.original_audio_path,
             state.source.original_audio_sha256,
             checks,
         )
-        page_count = len(tuple(output for entry in pages.pages for output in entry.outputs)) if pages else 0
+        timeline_ready = self._original_timeline_ready(
+            book_id, state, checks, original_audio is not None
+        )
+        page_count = (
+            len(tuple(output for entry in pages.pages for output in entry.outputs)) if pages else 0
+        )
         sentence_count = len(sentences.sentences) if sentences else 0
         timing_count = sum(item.word_timing is not None for item in audio.sentences) if audio else 0
         provider_counts: dict[str, int] = {}
         if audio:
             for item in audio.sentences:
                 if item.provider:
-                    provider_counts[item.provider.value] = provider_counts.get(item.provider.value, 0) + 1
+                    provider_counts[item.provider.value] = (
+                        provider_counts.get(item.provider.value, 0) + 1
+                    )
             missing = [item.sentence_id for item in audio.sentences if not item.audio_path]
             if missing:
-                checks.append(ExportCheck(id="audio", label="TTS 音频", status="error", detail=f"{len(missing)} 句缺少音频，不能导出。"))
+                checks.append(
+                    ExportCheck(
+                        id="audio",
+                        label="TTS 音频",
+                        status="error",
+                        detail=f"{len(missing)} 句缺少音频，不能导出。",
+                    )
+                )
             else:
-                checks.append(ExportCheck(id="audio", label="TTS 音频", status="pass", detail=f"{len(audio.sentences)} 句 Ogg 音频完整。"))
+                checks.append(
+                    ExportCheck(
+                        id="audio",
+                        label="TTS 音频",
+                        status="pass",
+                        detail=f"{len(audio.sentences)} 句 Ogg 音频完整。",
+                    )
+                )
             no_timing = len(audio.sentences) - timing_count
-            checks.append(ExportCheck(id="timing", label="词级时间戳", status="warning" if no_timing else "pass", detail=f"{timing_count} 句具备词级时间；{no_timing} 句将使用整句字幕。"))
+            checks.append(
+                ExportCheck(
+                    id="timing",
+                    label="词级时间戳",
+                    status="warning" if no_timing else "pass",
+                    detail=f"{timing_count} 句具备词级时间；{no_timing} 句将使用整句字幕。",
+                )
+            )
             proofread = state.steps[StepId.PROOFREAD].success
             if proofread and audio.source_proofread_revision != Path(proofread.output_root).name:
-                checks.append(ExportCheck(id="audio-source", label="语音来源", status="error", detail="音频基于旧校对结果，请重新生成全书语音。"))
+                checks.append(
+                    ExportCheck(
+                        id="audio-source",
+                        label="语音来源",
+                        status="error",
+                        detail="音频基于旧校对结果，请重新生成全书语音。",
+                    )
+                )
         filename = f"{book_id}.readalongbook"
         export_revision_id: str | None = None
         size_bytes: int | None = None
         sha256: str | None = None
         exported = state.steps[StepId.EXPORT]
-        if exported.status is StepStatus.DONE and exported.success is not None and self._verify(book_id, StepId.EXPORT, exported.success):
+        if (
+            exported.status is StepStatus.DONE
+            and exported.success is not None
+            and self._verify(book_id, StepId.EXPORT, exported.success)
+        ):
             export_revision_id = exported.success.revision_id
             root = self.paths.book(book_id) / exported.success.output_root
             try:
@@ -70,7 +121,11 @@ class ExportWorkspaceService:
                 size_bytes, sha256 = int(report["size_bytes"]), str(report["sha256"])
                 packaged_original = report.get("original_audio")
                 if original_audio is not None:
-                    if not self._matches_original_audio(packaged_original, original_audio):
+                    if not self._matches_original_audio(
+                        packaged_original,
+                        original_audio,
+                        timeline_ready=timeline_ready,
+                    ):
                         checks.append(
                             ExportCheck(
                                 id="bundle",
@@ -86,28 +141,68 @@ class ExportWorkspaceService:
                         original_audio = original_audio.model_copy(
                             update={"duration_ms": int(packaged_original["duration_ms"])}
                         )
-                        checks.append(ExportCheck(id="bundle", label="资源包校验", status="pass", detail="已生成并通过 manifest、页面、音频、原音与 alignment 校验。"))
+                        checks.append(
+                            ExportCheck(
+                                id="bundle",
+                                label="资源包校验",
+                                status="pass",
+                                detail="已生成并通过 manifest、页面、音频、原音与 alignment 校验。",
+                            )
+                        )
                 else:
-                    checks.append(ExportCheck(id="bundle", label="资源包校验", status="pass", detail="已生成并通过 manifest、页面、音频与 alignment 校验。"))
+                    checks.append(
+                        ExportCheck(
+                            id="bundle",
+                            label="资源包校验",
+                            status="pass",
+                            detail="已生成并通过 manifest、页面、音频与 alignment 校验。",
+                        )
+                    )
             except (OSError, ValueError, KeyError, TypeError):
-                checks.append(ExportCheck(id="bundle", label="资源包校验", status="error", detail="导出报告已损坏，请重新生成资源包。"))
+                checks.append(
+                    ExportCheck(
+                        id="bundle",
+                        label="资源包校验",
+                        status="error",
+                        detail="导出报告已损坏，请重新生成资源包。",
+                    )
+                )
                 export_revision_id = None
-        ready = bool(pages and sentences and audio and not any(item.status == "error" for item in checks))
+        ready = bool(
+            pages and sentences and audio and not any(item.status == "error" for item in checks)
+        )
         return ExportWorkspaceResponse(
             ready=ready,
             suggested_title=book_id.replace("-", " ").title(),
             checks=tuple(checks),
-            package=ExportPackageInfo(filename=filename, page_count=page_count, sentence_count=sentence_count, word_timing_sentence_count=timing_count, audio_provider_counts=provider_counts, original_audio=original_audio, size_bytes=size_bytes, sha256=sha256),
+            package=ExportPackageInfo(
+                filename=filename,
+                page_count=page_count,
+                sentence_count=sentence_count,
+                word_timing_sentence_count=timing_count,
+                audio_provider_counts=provider_counts,
+                original_audio=original_audio,
+                size_bytes=size_bytes,
+                sha256=sha256,
+            ),
             export_revision_id=export_revision_id,
         )
 
     def bundle(self, book_id: str, revision_id: str) -> Path:
         state = self.states.load(book_id)
         exported = state.steps[StepId.EXPORT]
-        if exported.status is not StepStatus.DONE or exported.success is None or exported.success.revision_id != revision_id:
-            raise PipelineError("EXPORT_REVISION_STALE", "资源包已经更新，请刷新后下载。", status_code=409)
+        if (
+            exported.status is not StepStatus.DONE
+            or exported.success is None
+            or exported.success.revision_id != revision_id
+        ):
+            raise PipelineError(
+                "EXPORT_REVISION_STALE", "资源包已经更新，请刷新后下载。", status_code=409
+            )
         success = self._require(book_id, StepId.EXPORT, exported.success, "资源包")
-        bundle = next((item.path for item in success.outputs if item.path.endswith(".readalongbook")), None)
+        bundle = next(
+            (item.path for item in success.outputs if item.path.endswith(".readalongbook")), None
+        )
         if not bundle:
             raise PipelineError("EXPORT_BUNDLE_NOT_FOUND", "资源包文件不存在。", status_code=404)
         root = self.paths.book(book_id) / success.output_root
@@ -116,41 +211,127 @@ class ExportWorkspaceService:
             raise PipelineError("EXPORT_BUNDLE_NOT_FOUND", "资源包文件不存在。", status_code=404)
         return path
 
-    def _load_pages(self, book_id: str, status: StepStatus, success: StepSuccess | None, checks: list[ExportCheck]) -> PagePlan | None:
+    def _load_pages(
+        self,
+        book_id: str,
+        status: StepStatus,
+        success: StepSuccess | None,
+        checks: list[ExportCheck],
+    ) -> PagePlan | None:
         if status is not StepStatus.DONE or success is None:
-            checks.append(ExportCheck(id="pages", label="页面与缩略图", status="error", detail="页面处理尚未完成或已失效。"))
+            checks.append(
+                ExportCheck(
+                    id="pages",
+                    label="页面与缩略图",
+                    status="error",
+                    detail="页面处理尚未完成或已失效。",
+                )
+            )
             return None
         try:
             checked = self._require(book_id, StepId.PAGES, success, "页面结果")
-            plan = PagePlan.model_validate_json((self.paths.book(book_id) / checked.output_root / "page_plan.json").read_text(encoding="utf-8"))
-            checks.append(ExportCheck(id="pages", label="页面与缩略图", status="pass", detail=f"{sum(len(item.outputs) for item in plan.pages)} 张阅读页已准备好。"))
+            plan = PagePlan.model_validate_json(
+                (self.paths.book(book_id) / checked.output_root / "page_plan.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            checks.append(
+                ExportCheck(
+                    id="pages",
+                    label="页面与缩略图",
+                    status="pass",
+                    detail=f"{sum(len(item.outputs) for item in plan.pages)} 张阅读页已准备好。",
+                )
+            )
             return plan
         except (OSError, ValueError, PipelineError):
-            checks.append(ExportCheck(id="pages", label="页面与缩略图", status="error", detail="页面产物不可用，请重新处理页面。"))
+            checks.append(
+                ExportCheck(
+                    id="pages",
+                    label="页面与缩略图",
+                    status="error",
+                    detail="页面产物不可用，请重新处理页面。",
+                )
+            )
             return None
 
-    def _load_sentences(self, book_id: str, status: StepStatus, success: StepSuccess | None, checks: list[ExportCheck]) -> OcrSentences | None:
+    def _load_sentences(
+        self,
+        book_id: str,
+        status: StepStatus,
+        success: StepSuccess | None,
+        checks: list[ExportCheck],
+    ) -> OcrSentences | None:
         if status is not StepStatus.DONE or success is None:
-            checks.append(ExportCheck(id="sentences", label="校对句子", status="error", detail="尚未发布校对结果或结果已失效。"))
+            checks.append(
+                ExportCheck(
+                    id="sentences",
+                    label="校对句子",
+                    status="error",
+                    detail="尚未发布校对结果或结果已失效。",
+                )
+            )
             return None
         try:
             checked = self._require(book_id, StepId.PROOFREAD, success, "校对结果")
-            document = OcrSentences.model_validate_json((self.paths.book(book_id) / checked.output_root / "sentences_final.json").read_text(encoding="utf-8"))
-            checks.append(ExportCheck(id="sentences", label="校对句子", status="pass", detail=f"{len(document.sentences)} 句已确认。"))
+            document = OcrSentences.model_validate_json(
+                (self.paths.book(book_id) / checked.output_root / "sentences_final.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            checks.append(
+                ExportCheck(
+                    id="sentences",
+                    label="校对句子",
+                    status="pass",
+                    detail=f"{len(document.sentences)} 句已确认。",
+                )
+            )
             return document
         except (OSError, ValueError, PipelineError):
-            checks.append(ExportCheck(id="sentences", label="校对句子", status="error", detail="校对产物不可用，请重新校对。"))
+            checks.append(
+                ExportCheck(
+                    id="sentences",
+                    label="校对句子",
+                    status="error",
+                    detail="校对产物不可用，请重新校对。",
+                )
+            )
             return None
 
-    def _load_audio(self, book_id: str, status: StepStatus, success: StepSuccess | None, checks: list[ExportCheck]) -> AudioGenerationReport | None:
+    def _load_audio(
+        self,
+        book_id: str,
+        status: StepStatus,
+        success: StepSuccess | None,
+        checks: list[ExportCheck],
+    ) -> AudioGenerationReport | None:
         if status is not StepStatus.DONE or success is None:
-            checks.append(ExportCheck(id="audio-source", label="语音生成", status="error", detail="全书语音尚未生成或结果已失效。"))
+            checks.append(
+                ExportCheck(
+                    id="audio-source",
+                    label="语音生成",
+                    status="error",
+                    detail="全书语音尚未生成或结果已失效。",
+                )
+            )
             return None
         try:
             checked = self._require(book_id, StepId.AUDIO, success, "音频结果")
-            return AudioGenerationReport.model_validate_json((self.paths.book(book_id) / checked.output_root / "tts_report.json").read_text(encoding="utf-8"))
+            return AudioGenerationReport.model_validate_json(
+                (self.paths.book(book_id) / checked.output_root / "tts_report.json").read_text(
+                    encoding="utf-8"
+                )
+            )
         except (OSError, ValueError, PipelineError):
-            checks.append(ExportCheck(id="audio-source", label="语音生成", status="error", detail="音频产物不可用，请重新生成语音。"))
+            checks.append(
+                ExportCheck(
+                    id="audio-source",
+                    label="语音生成",
+                    status="error",
+                    detail="音频产物不可用，请重新生成语音。",
+                )
+            )
             return None
 
     def _load_original_audio(
@@ -188,10 +369,7 @@ class ExportWorkspaceService:
                     )
                 )
                 return None
-            info = ExportOriginalAudioInfo(
-                size_bytes=source.stat().st_size,
-                sha256=actual_sha256,
-            )
+            info = ExportOriginalAudioInfo(size_bytes=source.stat().st_size, sha256=actual_sha256)
             checks.append(
                 ExportCheck(
                     id="original-audio",
@@ -212,10 +390,94 @@ class ExportWorkspaceService:
             )
             return None
 
+    def _original_timeline_ready(
+        self,
+        book_id: str,
+        state,
+        checks: list[ExportCheck],
+        has_original_audio: bool,
+    ) -> bool:
+        """Expose the optional lyric capability without blocking a raw-MP3 export."""
+        if not has_original_audio:
+            return False
+        step = state.steps[StepId.ORIGINAL_TIMELINE]
+        if step.status is StepStatus.DONE and step.success is not None:
+            if self._verify(book_id, StepId.ORIGINAL_TIMELINE, step.success):
+                try:
+                    timeline = json.loads(
+                        (
+                            self.paths.book(book_id) / step.success.output_root / TIMELINE_PATH
+                        ).read_text(encoding="utf-8")
+                    )
+                    count = len(timeline["sentences"])
+                    if not count:
+                        raise ValueError
+                except (OSError, ValueError, KeyError, TypeError):
+                    checks.append(
+                        ExportCheck(
+                            id="original-timeline",
+                            label="原音逐词歌词",
+                            status="warning",
+                            detail="歌词产物不可用；本次导出只保留原音 MP3。",
+                        )
+                    )
+                    return False
+                detail = (
+                    f"已生成 {count} 句逐词歌词，阅读端会开放原音欣赏与配音。"
+                    if isinstance(count, int)
+                    else "逐词歌词已生成，阅读端会开放原音欣赏与配音。"
+                )
+                checks.append(
+                    ExportCheck(
+                        id="original-timeline", label="原音逐词歌词", status="pass", detail=detail
+                    )
+                )
+                return True
+            checks.append(
+                ExportCheck(
+                    id="original-timeline",
+                    label="原音逐词歌词",
+                    status="warning",
+                    detail="歌词产物不可用；本次导出只保留原音 MP3。",
+                )
+            )
+            return False
+        if step.status is StepStatus.RUNNING:
+            checks.append(
+                ExportCheck(
+                    id="original-timeline",
+                    label="原音逐词歌词",
+                    status="warning",
+                    detail="歌词正在生成；完成后刷新本页再导出即可开放原音欣赏。",
+                )
+            )
+            return False
+        if step.status is StepStatus.FAILED:
+            checks.append(
+                ExportCheck(
+                    id="original-timeline",
+                    label="原音逐词歌词",
+                    status="warning",
+                    detail="歌词尚未生成成功；资源包仍会保留原音 MP3，但阅读端不会开放原音歌词。",
+                )
+            )
+            return False
+        checks.append(
+            ExportCheck(
+                id="original-timeline",
+                label="原音逐词歌词",
+                status="warning",
+                detail="尚未生成歌词；资源包仍会保留原音 MP3。",
+            )
+        )
+        return False
+
     @staticmethod
     def _matches_original_audio(
         packaged: object,
         source: ExportOriginalAudioInfo,
+        *,
+        timeline_ready: bool,
     ) -> bool:
         if not isinstance(packaged, dict):
             return False
@@ -226,14 +488,16 @@ class ExportWorkspaceService:
                 and int(packaged["size_bytes"]) == source.size_bytes
                 and packaged["sha256"] == source.sha256
                 and int(packaged["duration_ms"]) > 0
-                and packaged["alignment_status"] == "raw"
+                and packaged["alignment_status"] == ("ready" if timeline_ready else "raw")
             )
         except (KeyError, TypeError, ValueError):
             return False
 
     def _require(self, book_id: str, step: StepId, success: StepSuccess, label: str) -> StepSuccess:
         if not self._verify(book_id, step, success):
-            raise PipelineError("EXPORT_INPUT_INVALID", f"{label}不完整，请重新生成。", status_code=409)
+            raise PipelineError(
+                "EXPORT_INPUT_INVALID", f"{label}不完整，请重新生成。", status_code=409
+            )
         return success
 
     def _verify(self, book_id: str, step: StepId, success: StepSuccess) -> bool:

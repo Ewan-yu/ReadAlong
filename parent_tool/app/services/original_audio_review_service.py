@@ -8,8 +8,16 @@ from app.models.original_audio_workspace import (
     OriginalAudioCandidateAssets,
     OriginalAudioWorkspaceResponse,
 )
-from app.models.pipeline import InvalidationReason, StepId, StepState, StepStatus, StepSuccess, utc_now
+from app.models.pipeline import (
+    InvalidationReason,
+    StepId,
+    StepState,
+    StepStatus,
+    StepSuccess,
+    utc_now,
+)
 from app.pipeline.artifacts import ArtifactStore
+from app.pipeline.original_timeline import TIMELINE_PATH
 from app.pipeline.state_repository import StateRepository
 
 
@@ -25,16 +33,26 @@ class OriginalAudioReviewService:
         candidate_state = state.steps[StepId.ORIGINAL_AUDIO]
         candidate = candidate_state.success
         if candidate_state.status is not StepStatus.DONE or candidate is None:
-            raise PipelineError("ORIGINAL_AUDIO_CANDIDATE_NOT_READY", "没有可确认的原音分离候选。", status_code=409)
+            raise PipelineError(
+                "ORIGINAL_AUDIO_CANDIDATE_NOT_READY", "没有可确认的原音分离候选。", status_code=409
+            )
         if not self.artifacts.verify(book_id, StepId.ORIGINAL_AUDIO, candidate):
-            raise PipelineError("ORIGINAL_AUDIO_CANDIDATE_INVALID", "原音分离候选已损坏，请重新分离。", status_code=409)
+            raise PipelineError(
+                "ORIGINAL_AUDIO_CANDIDATE_INVALID",
+                "原音分离候选已损坏，请重新分离。",
+                status_code=409,
+            )
         published = self.artifacts.promote_candidate(book_id, candidate.revision_id, candidate)
         now = utc_now()
 
         def mutate(updated) -> None:
             latest = updated.steps[StepId.ORIGINAL_AUDIO].success
             if latest is None or latest.revision_id != candidate.revision_id:
-                raise PipelineError("PIPELINE_STATE_CHANGED", "候选已被新的分离任务替换，请重新试听。", status_code=409)
+                raise PipelineError(
+                    "PIPELINE_STATE_CHANGED",
+                    "候选已被新的分离任务替换，请重新试听。",
+                    status_code=409,
+                )
             updated.original_audio_review = updated.original_audio_review.model_copy(
                 update={
                     "confirmed": published,
@@ -65,7 +83,9 @@ class OriginalAudioReviewService:
 
         def mutate(updated) -> None:
             if not updated.source.original_audio_path:
-                raise PipelineError("ORIGINAL_AUDIO_NOT_UPLOADED", "没有原音项目无需设置背景轨。", status_code=409)
+                raise PipelineError(
+                    "ORIGINAL_AUDIO_NOT_UPLOADED", "没有原音项目无需设置背景轨。", status_code=409
+                )
             updated.original_audio_review = updated.original_audio_review.model_copy(
                 update={"background_disabled": True}
             )
@@ -119,7 +139,9 @@ class OriginalAudioReviewService:
                 available=True,
                 source_filename=Path(state.source.original_audio_path).name,
                 status="failed",
-                message=step.last_attempt.error.message if step.last_attempt and step.last_attempt.error else "分离任务未完成。",
+                message=step.last_attempt.error.message
+                if step.last_attempt and step.last_attempt.error
+                else "分离任务未完成。",
             )
         if step.status is StepStatus.STALE:
             return OriginalAudioWorkspaceResponse(
@@ -129,7 +151,9 @@ class OriginalAudioReviewService:
                 message="校对或原音已变化，请重新分离后再试听。",
             )
         candidate = step.success
-        if candidate is None or not self.artifacts.verify(book_id, StepId.ORIGINAL_AUDIO, candidate):
+        if candidate is None or not self.artifacts.verify(
+            book_id, StepId.ORIGINAL_AUDIO, candidate
+        ):
             return OriginalAudioWorkspaceResponse(
                 available=True,
                 source_filename=Path(state.source.original_audio_path).name,
@@ -153,11 +177,15 @@ class OriginalAudioReviewService:
             return OriginalAudioWorkspaceResponse(
                 available=True,
                 source_filename=Path(state.source.original_audio_path).name,
-                status="confirmed" if confirmed and confirmed.revision_id == candidate.revision_id else "ready_for_review",
+                status="confirmed"
+                if confirmed and confirmed.revision_id == candidate.revision_id
+                else "ready_for_review",
                 candidate_revision_id=candidate.revision_id,
                 confirmed_revision_id=confirmed.revision_id if confirmed else None,
                 model=report.get("model") if isinstance(report.get("model"), str) else None,
-                duration_ms=report.get("duration_ms") if isinstance(report.get("duration_ms"), int) else None,
+                duration_ms=report.get("duration_ms")
+                if isinstance(report.get("duration_ms"), int)
+                else None,
                 assets=assets,
                 lyric_sentence_count=self._lyric_sentence_count(state),
             )
@@ -169,18 +197,31 @@ class OriginalAudioReviewService:
                 message="分离候选缺少可试听的轨道，请重新分离。",
             )
 
-    @staticmethod
-    def _lyric_sentence_count(state) -> int | None:
+    def _lyric_sentence_count(self, state) -> int | None:
         timeline = state.steps[StepId.ORIGINAL_TIMELINE]
         if timeline.status is not StepStatus.DONE or timeline.success is None:
             return None
-        count = timeline.success.summary.get("sentence_count")
-        return count if isinstance(count, int) and count > 0 else None
+        try:
+            payload = json.loads(
+                (
+                    self.artifacts.paths.book(state.book_id)
+                    / timeline.success.output_root
+                    / TIMELINE_PATH
+                ).read_text(encoding="utf-8")
+            )
+            sentences = payload["sentences"]
+            if not isinstance(sentences, list) or not sentences:
+                return None
+            return len(sentences)
+        except (OSError, ValueError, KeyError, TypeError):
+            return None
 
     def source_asset(self, book_id: str) -> Path:
         state = self.states.load(book_id)
         if not state.source.original_audio_path or not state.source.original_audio_sha256:
-            raise PipelineError("ORIGINAL_AUDIO_NOT_UPLOADED", "没有可试听的原音文件。", status_code=404)
+            raise PipelineError(
+                "ORIGINAL_AUDIO_NOT_UPLOADED", "没有可试听的原音文件。", status_code=404
+            )
         root = self.artifacts.paths.book(book_id)
         path = (root / state.source.original_audio_path).resolve(strict=False)
         if not path.is_relative_to(root) or not path.is_file():
@@ -188,20 +229,38 @@ class OriginalAudioReviewService:
         from app.pipeline.hashing import file_sha256
 
         if file_sha256(path) != state.source.original_audio_sha256:
-            raise PipelineError("ORIGINAL_AUDIO_HASH_MISMATCH", "原音文件已变化，请重新导入。", status_code=409)
+            raise PipelineError(
+                "ORIGINAL_AUDIO_HASH_MISMATCH", "原音文件已变化，请重新导入。", status_code=409
+            )
         return path
 
     def candidate_asset(self, book_id: str, candidate_id: str, asset_path: str) -> Path:
         state = self.states.load(book_id)
         candidate = state.steps[StepId.ORIGINAL_AUDIO].success
-        if candidate is None or candidate.revision_id != candidate_id or not self.artifacts.verify(book_id, StepId.ORIGINAL_AUDIO, candidate):
-            raise PipelineError("ORIGINAL_AUDIO_CANDIDATE_STALE", "分离候选已经更新，请刷新后继续试听。", status_code=409)
+        if (
+            candidate is None
+            or candidate.revision_id != candidate_id
+            or not self.artifacts.verify(book_id, StepId.ORIGINAL_AUDIO, candidate)
+        ):
+            raise PipelineError(
+                "ORIGINAL_AUDIO_CANDIDATE_STALE",
+                "分离候选已经更新，请刷新后继续试听。",
+                status_code=409,
+            )
         normalized = PurePosixPath(asset_path).as_posix()
-        allowed = {item.path for item in candidate.outputs if item.path.startswith(("preview/", "waveform/"))}
+        allowed = {
+            item.path
+            for item in candidate.outputs
+            if item.path.startswith(("preview/", "waveform/"))
+        }
         if normalized not in allowed:
-            raise PipelineError("ORIGINAL_AUDIO_ASSET_NOT_FOUND", "候选试听资源不存在。", status_code=404)
+            raise PipelineError(
+                "ORIGINAL_AUDIO_ASSET_NOT_FOUND", "候选试听资源不存在。", status_code=404
+            )
         root = self.artifacts.paths.book(book_id) / candidate.output_root
         path = (root / Path(*PurePosixPath(normalized).parts)).resolve(strict=False)
         if not path.is_relative_to(root) or not path.is_file():
-            raise PipelineError("ORIGINAL_AUDIO_ASSET_NOT_FOUND", "候选试听资源不存在。", status_code=404)
+            raise PipelineError(
+                "ORIGINAL_AUDIO_ASSET_NOT_FOUND", "候选试听资源不存在。", status_code=404
+            )
         return path

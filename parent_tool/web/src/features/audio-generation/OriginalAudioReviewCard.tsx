@@ -9,6 +9,7 @@ import {
   originalAudioCandidateAssetUrl,
   originalAudioSourceUrl,
   separateOriginalAudio,
+  type JobSnapshot,
 } from "../../api/client";
 import { waitForJob } from "../../api/jobs";
 import { bookStateQuery, originalAudioWorkspaceQuery } from "../../api/queries";
@@ -80,10 +81,14 @@ function Waveform({ src, label, active }: { src: string; label: string; active: 
 export function OriginalAudioReviewCard({ bookId }: { bookId: string }) {
   const client = useQueryClient();
   const query = useQuery(originalAudioWorkspaceQuery(bookId));
+  const stateQuery = useQuery(bookStateQuery(bookId));
   const [open, setOpen] = useState(false);
   const [track, setTrack] = useState<Track>("background");
   const [playing, setPlaying] = useState(false);
   const [resumeAt, setResumeAt] = useState(0);
+  const [timelineJob, setTimelineJob] = useState<JobSnapshot>();
+  const [resumedTimelineJobId, setResumedTimelineJobId] = useState<string>();
+  const resumedTimelineJobs = useRef(new Set<string>());
   const audio = useRef<HTMLAudioElement>(null);
   const dialog = useRef<HTMLDialogElement>(null);
   const workspace = query.data;
@@ -105,11 +110,25 @@ export function OriginalAudioReviewCard({ bookId }: { bookId: string }) {
   const disableBackground = useMutation({ mutationFn: () => disableOriginalAudioBackground(bookId), onSuccess: async () => { await refresh(); setOpen(false); } });
   const buildTimeline = useMutation({
     mutationFn: async () => {
+      setTimelineJob(undefined);
       const run = await buildOriginalAudioTimeline(bookId);
-      if (run.jobId) await waitForJob(run.jobId, () => undefined);
+      if (run.jobId) await waitForJob(run.jobId, setTimelineJob);
     },
     onSuccess: refresh,
   });
+
+  const activeTimelineJobId = stateQuery.data?.steps.original_timeline.active_attempt?.job_id;
+  const timelineAttempt = stateQuery.data?.steps.original_timeline.last_attempt;
+  useEffect(() => {
+    if (!activeTimelineJobId || resumedTimelineJobs.current.has(activeTimelineJobId)) return;
+    resumedTimelineJobs.current.add(activeTimelineJobId);
+    setResumedTimelineJobId(activeTimelineJobId);
+    setTimelineJob(undefined);
+    void waitForJob(activeTimelineJobId, setTimelineJob)
+      .then(refresh)
+      .catch(() => undefined)
+      .finally(() => setResumedTimelineJobId(undefined));
+  }, [activeTimelineJobId]); // The active attempt id is the resume boundary.
 
   useEffect(() => {
     const node = dialog.current;
@@ -147,18 +166,21 @@ export function OriginalAudioReviewCard({ bookId }: { bookId: string }) {
   };
   if (query.isPending || !workspace) return null;
   if (!workspace.available) return null;
-  const isBusy = separate.isPending || buildTimeline.isPending || workspace.status === "processing";
+  const isTimelineRunning = buildTimeline.isPending || Boolean(activeTimelineJobId) || Boolean(resumedTimelineJobId);
+  const isBusy = separate.isPending || isTimelineRunning || workspace.status === "processing";
+  const timelineFailure = !isTimelineRunning && timelineAttempt?.status === "failed" ? timelineAttempt.error?.message : undefined;
   const ready = Boolean(candidate && assets && (workspace.status === "ready_for_review" || workspace.status === "confirmed"));
   const status = workspace.status === "confirmed" ? "已确认背景轨" : workspace.status === "voice_only" ? "纯人声路线" : workspace.status === "ready_for_review" ? "等待试听确认" : workspace.status === "processing" ? "正在分离" : workspace.status === "failed" ? "分离失败" : workspace.status === "stale" ? "需要重新分离" : "尚未处理";
 
   return <section className={styles.card} data-state={workspace.status}>
     <div className={styles.cardHeading}><span><Waves /></span><div><strong>原音处理</strong><small>{workspace.source_filename ?? "已上传原音"} · {clock(workspace.duration_ms)}</small></div><b>{status}</b></div>
-    <p>{workspace.message ?? (workspace.lyric_sentence_count ? `已纳入原音歌词 ${workspace.lyric_sentence_count} 句；未朗读的封面、版权和词表文字不会显示。` : workspace.status === "confirmed" ? "背景轨已保存；将只把实际朗读的句子生成逐词歌词，儿童端才会开放原音欣赏。" : ready ? "请比较人声与背景轨后，再确认保存。" : "原音只用于欣赏；孩子配音不会叠加完整原音。")}</p>
+    <p>{workspace.message ?? (workspace.lyric_sentence_count ? `已纳入原音歌词 ${workspace.lyric_sentence_count} 句；未朗读的封面、版权和词表文字不会显示。` : workspace.status === "confirmed" ? "背景轨已保存；点击后自动识别实际朗读句并强制对齐，无需逐句编辑核对。" : ready ? "请比较人声与背景轨后，再确认保存。" : "原音只用于欣赏；孩子配音不会叠加完整原音。")}</p>
     {separate.error && <div className={styles.error}><CircleAlert />{separate.error.message}</div>}
-    {buildTimeline.error && <div className={styles.error}><CircleAlert />{buildTimeline.error.message}</div>}
+    {(buildTimeline.error || timelineFailure) && <div className={styles.error} role="alert"><CircleAlert />{buildTimeline.error?.message ?? timelineFailure}</div>}
+    {isTimelineRunning && <div className={styles.progress} role="status" aria-live="polite"><LoaderCircle className={styles.spin} /><div><strong>{timelineJob?.message ?? "正在提交原音歌词任务…"}</strong><span>自动识别实际朗读句，再生成逐词时间线；可以留在当前页等待。</span><i><em style={{ transform: `scaleX(${timelineJob?.progress ?? 0})` }} /></i></div><b>{Math.round((timelineJob?.progress ?? 0) * 100)}%</b></div>}
     <div className={styles.actions}>
       {ready && <button type="button" className={styles.review} onClick={() => setOpen(true)}><Headphones />试听分离结果</button>}
-      {workspace.status === "confirmed" && <button type="button" className={styles.review} disabled={isBusy} onClick={() => buildTimeline.mutate()}><Waves className={buildTimeline.isPending ? styles.spin : undefined} />{buildTimeline.isPending ? "正在生成歌词" : workspace.lyric_sentence_count ? "重新生成逐词歌词" : "生成逐词歌词"}</button>}
+      {workspace.status === "confirmed" && <button type="button" className={styles.review} disabled={isBusy} onClick={() => buildTimeline.mutate()}><Waves className={isTimelineRunning ? styles.spin : undefined} />{isTimelineRunning ? "正在生成歌词" : workspace.lyric_sentence_count ? "重新生成逐词歌词" : "生成逐词歌词"}</button>}
       <button type="button" disabled={isBusy} onClick={() => separate.mutate()}><RefreshCw className={isBusy ? styles.spin : undefined} />{workspace.status === "not_processed" ? "开始分离" : "重新分离"}</button>
     </div>
     <dialog ref={dialog} className={styles.dialog} onCancel={(event) => { event.preventDefault(); setOpen(false); }} onClick={(event) => { if (event.target === dialog.current) setOpen(false); }}>
