@@ -178,5 +178,7 @@ final class PointReadingDataException extends PointReadingException {
 }
 
 final class PointReadingLoadException extends PointReadingException {
-  const PointReadingLoadException(super.message);
+  const PointReadingLoadException(super.message, {this.cause});
+
+  final Object? cause;
 }

@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:developer' as developer;
 import 'dart:io';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -25,7 +26,7 @@ final pointReadingRepositoryProvider =
 });
 
 final pointReadingBookProvider =
-    FutureProvider.family<PointReadingBook, String>(
+    FutureProvider.autoDispose.family<PointReadingBook, String>(
   (ref, libraryId) async {
     final repository = await ref.watch(pointReadingRepositoryProvider.future);
     return repository.loadBook(libraryId);
@@ -57,7 +58,14 @@ final class LocalPointReadingRepository implements PointReadingRepository {
     try {
       database = await databaseFactory.openDatabase(
         alignmentPath,
-        options: OpenDatabaseOptions(readOnly: true),
+        // Point reading and original-audio playback can load the same package
+        // at the same time. Android sqflite otherwise returns one shared
+        // handle for the path, so closing either repository can invalidate the
+        // other's in-flight query.
+        options: OpenDatabaseOptions(
+          readOnly: true,
+          singleInstance: false,
+        ),
       );
       final bookRows = await database.query('book', columns: ['id']);
       if (bookRows.length != 1 ||
@@ -101,11 +109,21 @@ final class LocalPointReadingRepository implements PointReadingRepository {
       );
     } on PointReadingLoadException {
       rethrow;
-    } on Object {
+    } on Object catch (error, stackTrace) {
       // The page deliberately presents a child-friendly recovery message
       // rather than exposing a local SQLite/path detail to a child.
-      throw const PointReadingLoadException(
+      developer.log(
         'Point reading alignment could not be loaded',
+        name: 'readalong.point_reading',
+        error: error,
+        stackTrace: stackTrace,
+      );
+      Error.throwWithStackTrace(
+        PointReadingLoadException(
+          'Point reading alignment could not be loaded',
+          cause: error,
+        ),
+        stackTrace,
       );
     } finally {
       try {

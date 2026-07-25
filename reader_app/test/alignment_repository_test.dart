@@ -204,6 +204,23 @@ void main() {
     expect(first.audio.wholeFile, isTrue);
   });
 
+  test('点读使用独立 SQLite 句柄，不会关闭同资源的其他读取者', () async {
+    await writeAlignment();
+    final peer = await databaseFactoryFfi.openDatabase(
+      alignmentFile.path,
+      options: OpenDatabaseOptions(readOnly: true),
+    );
+    addTearDown(() async {
+      if (peer.isOpen) await peer.close();
+    });
+
+    final book = await repository.loadBook(shelfBook.libraryId);
+    final rows = await peer.query('sentence', columns: const ['id']);
+
+    expect(book.sentencesByPage[1]!.single.id, 's0001');
+    expect(rows.single['id'], 's0001');
+  });
+
   test('alignment book.id 与 sourceBookId 不一致时拒绝加载', () async {
     await writeAlignment(sourceBookId: 'different-source', sentences: const []);
 

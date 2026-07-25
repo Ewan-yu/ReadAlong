@@ -176,10 +176,13 @@ final class JustAudioSentencePlayer implements SentenceAudioPlayer {
 }
 
 final class _JustAudioSentenceAudioEngine implements SentenceAudioEngine {
-  final just_audio.AudioPlayer _player = just_audio.AudioPlayer();
+  just_audio.AudioPlayer? _player;
+
+  just_audio.AudioPlayer get _activePlayer =>
+      _player ??= just_audio.AudioPlayer();
 
   @override
-  Stream<Duration> get positionStream => _player.createPositionStream(
+  Stream<Duration> get positionStream => _activePlayer.createPositionStream(
         minPeriod: const Duration(milliseconds: 100),
         maxPeriod: const Duration(milliseconds: 100),
       );
@@ -192,10 +195,10 @@ final class _JustAudioSentenceAudioEngine implements SentenceAudioEngine {
     required bool wholeFile,
   }) async {
     if (wholeFile) {
-      await _player.setAudioSource(just_audio.AudioSource.file(path));
+      await _activePlayer.setAudioSource(just_audio.AudioSource.file(path));
       return;
     }
-    await _player.setAudioSource(
+    await _activePlayer.setAudioSource(
       just_audio.ClippingAudioSource(
         child: just_audio.AudioSource.file(path),
         start: start,
@@ -205,15 +208,21 @@ final class _JustAudioSentenceAudioEngine implements SentenceAudioEngine {
   }
 
   @override
-  Future<void> play() => _player.play();
+  Future<void> play() => _activePlayer.play();
 
   @override
   // just_audio.stop() releases Android decoders. Point reading frequently
   // changes source, so pause here and reserve dispose() for page teardown.
-  Future<void> pause() => _player.pause();
+  Future<void> pause() async {
+    await _player?.pause();
+  }
 
   @override
-  Future<void> dispose() => _player.dispose();
+  Future<void> dispose() async {
+    final player = _player;
+    _player = null;
+    await player?.dispose();
+  }
 }
 
 Duration _clampPosition(Duration position, Duration clipDuration) {

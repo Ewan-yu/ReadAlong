@@ -228,7 +228,13 @@ final class LocalOriginalAudioRepository implements OriginalAudioRepository {
     try {
       database = await databaseFactory.openDatabase(
         path,
-        options: OpenDatabaseOptions(readOnly: true),
+        // Keep this handle independent from point reading. Android sqflite's
+        // default single-instance cache otherwise lets one repository close
+        // the other repository's connection to the same immutable package.
+        options: OpenDatabaseOptions(
+          readOnly: true,
+          singleInstance: false,
+        ),
       );
       final books = await database.query('book', columns: const ['id']);
       if (books.length != 1 || books.single['id'] != shelfBook.sourceBookId) {
