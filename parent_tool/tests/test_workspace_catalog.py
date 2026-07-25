@@ -92,6 +92,40 @@ def test_catalog_isolates_corrupt_workspace(tmp_path: Path) -> None:
     assert summary.error.code == "WORKSPACE_STATE_CORRUPT"
 
 
+def test_catalog_ignores_internal_original_audio_steps_in_progress(tmp_path: Path) -> None:
+    paths = WorkspacePaths(tmp_path / "workspace")
+    states = StateRepository(paths)
+    WorkspaceService(paths, states).create_from_pdf(_pdf(tmp_path / "Story.pdf"), "story")
+    completed_at = datetime.now(timezone.utc)
+
+    def done(step_id: StepId) -> StepState:
+        return StepState(
+            status=StepStatus.DONE,
+            success=StepSuccess(
+                revision_id=f"r-{step_id.value}",
+                output_root=f"{step_id.value}/revisions/r-{step_id.value}",
+                params_hash="a" * 64,
+                input_fingerprint="b" * 64,
+                output_fingerprint="c" * 64,
+                outputs=(),
+                completed_at=completed_at,
+            ),
+        )
+
+    states.update(
+        "story",
+        lambda state: [
+            state.steps.__setitem__(step_id, done(step_id))
+            for step_id in StepId
+        ],
+    )
+
+    summary = _catalog(paths, states).summary("story")
+
+    assert summary.completed_steps == 5
+    assert summary.lifecycle_status.value == "completed"
+
+
 def test_catalog_moves_workspace_to_trash_before_purge(tmp_path: Path) -> None:
     paths = WorkspacePaths(tmp_path / "workspace")
     states = StateRepository(paths)

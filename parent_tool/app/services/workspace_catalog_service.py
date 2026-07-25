@@ -26,6 +26,17 @@ from app.pipeline.state_repository import StateRepository
 
 
 class WorkspaceCatalogService:
+    # The shelf retains the established five-step authoring journey.  These
+    # internal audio-processing steps must not make a finished book appear to
+    # have more than five completed steps (or invalidate WorkspaceSummary).
+    _VISIBLE_PROGRESS_STEPS = (
+        StepId.PAGES,
+        StepId.OCR,
+        StepId.PROOFREAD,
+        StepId.AUDIO,
+        StepId.EXPORT,
+    )
+
     def __init__(
         self,
         paths: WorkspacePaths,
@@ -85,7 +96,8 @@ class WorkspaceCatalogService:
             current_step=current_step,
             step_status=current.status,
             completed_steps=sum(
-                step.status is StepStatus.DONE for step in state.steps.values()
+                state.steps[step_id].status is StepStatus.DONE
+                for step_id in self._VISIBLE_PROGRESS_STEPS
             ),
             continue_path=f"/books/{book_id}/{self._route_segment(current_step)}",
             page_count=self._page_count(state),
