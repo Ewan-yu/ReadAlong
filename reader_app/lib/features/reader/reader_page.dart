@@ -283,8 +283,8 @@ class _ReaderViewState extends ConsumerState<_ReaderView> {
       ),
     );
     final pointReading = ref.watch(pointReadingProvider);
-    final originalAudio = ref.watch(
-      originalAudioBookProvider(widget.book.libraryId),
+    final originalAudioReady = ref.watch(
+      originalAudioReadyProvider(widget.book.libraryId),
     );
     final followReadingProvider =
         followReadingControllerProvider(widget.book.libraryId);
@@ -399,7 +399,7 @@ class _ReaderViewState extends ConsumerState<_ReaderView> {
           overflow: TextOverflow.ellipsis,
         ),
         actions: [
-          if (originalAudio.hasValue)
+          if (originalAudioReady.valueOrNull == true)
             IconButton(
               onPressed: () => context.push(
                 '/reader/${widget.book.libraryId}/original',

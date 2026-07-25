@@ -31,6 +31,29 @@ final originalAudioBookProvider =
   return repository.loadBook(libraryId);
 });
 
+/// Keeps the reader entry discoverable while the stricter playback loader is
+/// still hashing and opening the imported resources. The playback page still
+/// uses [originalAudioBookProvider] and performs every identity check before
+/// it can play anything.
+final originalAudioReadyProvider = FutureProvider.family<bool, String>(
+  (ref, libraryId) async {
+    final shelfIndex = await ref.watch(shelfIndexProvider.future);
+    final shelfBook = await shelfIndex.findByLibraryId(libraryId);
+    if (shelfBook == null) return false;
+    try {
+      final manifest = await _readObject(
+        p.join(shelfBook.bookDir, 'manifest.json'),
+      );
+      final original = manifest['original_audio'];
+      return original is Map<String, dynamic> &&
+          original['alignment_status'] ==
+              BookPackSchema.originalAudioReadyStatus;
+    } on Object {
+      return false;
+    }
+  },
+);
+
 /// 将 manifest、时间轴、原音文件和 alignment.db 交叉校验后才交给页面。
 /// 这让旧 App 已导入的包、落盘被篡改的包，都不会错误地露出原音入口。
 final class LocalOriginalAudioRepository implements OriginalAudioRepository {
