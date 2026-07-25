@@ -160,6 +160,25 @@ void main() {
     expect(await index.listBooks(), [newer, older]);
   });
 
+  test('每次书架操作拥有独立 app.db 句柄，不会关闭并发读取者', () async {
+    final entry = book(libraryId: 'library', sourceBookId: 'source');
+    await index.add(entry);
+    final peer = await databaseFactoryFfi.openDatabase(index.databasePath);
+    addTearDown(() async {
+      if (peer.isOpen) await peer.close();
+    });
+
+    expect(await index.findByLibraryId('library'), entry);
+    final rows = await peer.query(
+      'shelf_book',
+      columns: const ['book_id'],
+      where: 'book_id = ?',
+      whereArgs: const ['library'],
+    );
+
+    expect(rows.single['book_id'], 'library');
+  });
+
   test('运行时进度和评分记录按 libraryId 隔离保存', () async {
     await index.saveProgress(libraryId: 'library-a', currentPage: 3);
     expect((await index.loadProgress('library-a'))?.currentPage, 3);

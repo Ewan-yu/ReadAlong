@@ -801,6 +801,11 @@ class ShelfIndex {
     return databaseFactory.openDatabase(
       databasePath,
       options: OpenDatabaseOptions(
+        // Every public operation owns and closes the handle returned here.
+        // Android sqflite caches a single handle per path by default; parallel
+        // reader startup queries (book, point reading, original-audio entry,
+        // progress) would therefore close each other's shared app.db handle.
+        singleInstance: false,
         version: 5,
         onCreate: (db, _) async {
           await db.execute('''
