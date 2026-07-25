@@ -102,11 +102,18 @@ final class LocalPointReadingRepository implements PointReadingRepository {
     } on PointReadingLoadException {
       rethrow;
     } on Object {
+      // The page deliberately presents a child-friendly recovery message
+      // rather than exposing a local SQLite/path detail to a child.
       throw const PointReadingLoadException(
         'Point reading alignment could not be loaded',
       );
     } finally {
-      await database?.close();
+      try {
+        await database?.close();
+      } on Object {
+        // A successfully read immutable package must remain usable even when
+        // Android reports a late close error for its read-only SQLite handle.
+      }
     }
   }
 }

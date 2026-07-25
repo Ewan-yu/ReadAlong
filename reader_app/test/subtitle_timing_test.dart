@@ -150,6 +150,25 @@ void main() {
     );
   });
 
+  test('空格与标点始终没有词索引，不能被当作高亮词', () {
+    const text = "My grandpa's chopsticks are long.";
+    final segments = buildSubtitleSegments(text, [
+      _word(1, 'My', 0, 300),
+      _word(2, "grandpa's", 300, 600),
+      _word(3, 'chopsticks', 600, 900),
+      _word(4, 'are', 900, 1200),
+      _word(5, 'long', 1200, 1500),
+    ]);
+
+    expect(segments.map((segment) => segment.text).join(), text);
+    expect(
+      segments.where((segment) => segment.wordIndex == null).map(
+            (segment) => segment.text,
+          ),
+      [' ', ' ', ' ', ' ', '.'],
+    );
+  });
+
   test('timing 词序与原文不一致时整句降级', () {
     final segments = buildSubtitleSegments(
       'Good night.',

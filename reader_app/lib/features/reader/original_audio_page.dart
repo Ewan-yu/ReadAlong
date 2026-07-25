@@ -608,7 +608,11 @@ class _CurrentLyric extends StatelessWidget {
                 for (final segment in segments)
                   TextSpan(
                     text: segment.text,
-                    style: segment.wordIndex == activeWordIndex
+                    // A non-word segment (spaces and punctuation) uses a
+                    // null index. Never compare two nulls here: that used to
+                    // paint every gap as if it were the active word.
+                    style: activeWordIndex != null &&
+                            segment.wordIndex == activeWordIndex
                         ? const TextStyle(
                             color: AppColors.primaryDark,
                             backgroundColor: AppColors.highlight,
@@ -706,8 +710,13 @@ class _OriginalAudioControls extends StatelessWidget {
           children: [
             Row(
               children: [
-                Text(_formatTime(position),
-                    style: const TextStyle(color: AppColors.textSecondary)),
+                SizedBox(
+                  width: AppSizes.originalAudioTimeLabel,
+                  child: Text(
+                    _formatTime(position),
+                    style: const TextStyle(color: AppColors.textSecondary),
+                  ),
+                ),
                 Expanded(
                   child: SliderTheme(
                     data: SliderTheme.of(context).copyWith(
@@ -733,8 +742,14 @@ class _OriginalAudioControls extends StatelessWidget {
                     ),
                   ),
                 ),
-                Text(_formatTime(duration),
-                    style: const TextStyle(color: AppColors.textSecondary)),
+                SizedBox(
+                  width: AppSizes.originalAudioTimeLabel,
+                  child: Text(
+                    _formatTime(duration),
+                    textAlign: TextAlign.end,
+                    style: const TextStyle(color: AppColors.textSecondary),
+                  ),
+                ),
               ],
             ),
             Row(
@@ -752,7 +767,14 @@ class _OriginalAudioControls extends StatelessWidget {
                   child: FilledButton(
                     key: const ValueKey('original-audio-play-toggle'),
                     onPressed: enabled ? onPlayPause : null,
-                    style: FilledButton.styleFrom(shape: const CircleBorder()),
+                    style: FilledButton.styleFrom(
+                      shape: const CircleBorder(),
+                      padding: EdgeInsets.zero,
+                      alignment: Alignment.center,
+                      minimumSize: const Size.square(AppSizes.primaryButton),
+                      maximumSize: const Size.square(AppSizes.primaryButton),
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
                     child: Icon(
                       playing ? Icons.pause_rounded : Icons.play_arrow_rounded,
                       size: AppSizes.originalAudioPlayIcon,
@@ -792,10 +814,13 @@ class _SentenceSkipButton extends StatelessWidget {
           foregroundColor: AppColors.primaryDark,
           backgroundColor: AppColors.primaryContainer,
           disabledBackgroundColor: AppColors.border,
-          minimumSize: const Size(
-            AppSizes.originalAudioSkipButton,
+          padding: EdgeInsets.zero,
+          alignment: Alignment.center,
+          minimumSize: const Size.square(
             AppSizes.originalAudioSkipButton,
           ),
+          maximumSize: const Size.square(AppSizes.originalAudioSkipButton),
+          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
         ),
       );
 }
