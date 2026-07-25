@@ -58,6 +58,18 @@
         "timeline_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
         "timeline_sentence_count": { "type": "integer", "minimum": 1 },
         "vocal_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "playback": {
+          "type": "object",
+          "description": "由原始 MP3 转码得到的兼容播放副本；仅供阅读端原音欣赏，不能用于儿童配音混音。",
+          "additionalProperties": false,
+          "required": ["path", "mime_type", "size_bytes", "sha256"],
+          "properties": {
+            "path": { "type": "string", "const": "original/playback.ogg" },
+            "mime_type": { "type": "string", "const": "audio/ogg" },
+            "size_bytes": { "type": "integer", "minimum": 1 },
+            "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+          }
+        },
         "background": {
           "type": "object",
           "additionalProperties": false,

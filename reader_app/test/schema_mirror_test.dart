@@ -61,6 +61,16 @@ void main() {
       (originalProperties['timeline_path'] as Map<String, dynamic>)['const'],
       BookPackSchema.originalAudioTimelinePath,
     );
+    final playback = originalProperties['playback'] as Map<String, dynamic>;
+    final playbackProperties = playback['properties'] as Map<String, dynamic>;
+    expect(
+      (playbackProperties['path'] as Map<String, dynamic>)['const'],
+      BookPackSchema.originalAudioPlaybackPath,
+    );
+    expect(
+      (playbackProperties['mime_type'] as Map<String, dynamic>)['const'],
+      BookPackSchema.originalAudioPlaybackMimeType,
+    );
   });
 
   test('alignment 表集合与 alignment.sql 一致', () {

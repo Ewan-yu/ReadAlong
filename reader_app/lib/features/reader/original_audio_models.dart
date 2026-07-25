@@ -10,6 +10,7 @@ final class OriginalAudioBook {
     required this.audioPath,
     required this.duration,
     required List<OriginalAudioSentence> sentences,
+    this.playbackPath,
     this.sourceBookId = '',
     this.resourceSha256 = '',
     this.timelineSha256 = '',
@@ -18,6 +19,11 @@ final class OriginalAudioBook {
 
   final String libraryId;
   final String audioPath;
+
+  /// A package-generated Opus copy used when the original MP3 is not
+  /// supported by the child's device. The source MP3 remains immutable proof
+  /// of the parent-uploaded original and is never used in dubbing mixes.
+  final String? playbackPath;
   final Duration duration;
   final UnmodifiableListView<OriginalAudioSentence> sentences;
 

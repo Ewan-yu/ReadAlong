@@ -213,7 +213,7 @@ class _OriginalAudioPlaybackViewState
       setState(() => _isPrepared = true);
     } on Object {
       if (!mounted) return;
-      setState(() => _playbackError = '原音暂时无法播放，请重新导入绘本');
+      setState(() => _playbackError = '原音暂时无法播放，请让家长重新导出资源包后再导入');
     }
   }
 
@@ -259,7 +259,7 @@ class _OriginalAudioPlaybackViewState
       }
     } on Object {
       if (mounted) {
-        setState(() => _playbackError = '原音暂时无法播放，请重新导入绘本');
+        setState(() => _playbackError = '原音暂时无法播放，请让家长重新导出资源包后再导入');
       }
     }
   }
@@ -281,7 +281,7 @@ class _OriginalAudioPlaybackViewState
       if (_resumeAfterSeek) await _player.play();
     } on Object {
       if (mounted) {
-        setState(() => _playbackError = '原音暂时无法播放，请重新导入绘本');
+        setState(() => _playbackError = '原音暂时无法播放，请让家长重新导出资源包后再导入');
       }
     } finally {
       if (mounted) setState(() => _isSeeking = false);
@@ -296,7 +296,7 @@ class _OriginalAudioPlaybackViewState
       if (mounted) setState(() => _position = target);
     } on Object {
       if (mounted) {
-        setState(() => _playbackError = '原音暂时无法播放，请重新导入绘本');
+        setState(() => _playbackError = '原音暂时无法播放，请让家长重新导出资源包后再导入');
       }
     }
   }

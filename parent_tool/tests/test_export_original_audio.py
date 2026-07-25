@@ -187,6 +187,28 @@ class FakeMediaProbe:
         return self.value
 
 
+class FakePlaybackTranscoder:
+    def __init__(self) -> None:
+        self.calls: list[tuple[Path, Path]] = []
+
+    def transcode(
+        self,
+        source: Path,
+        target: Path,
+        *,
+        bitrate_kbps: int,
+        tempo: float,
+        cancellation: CancellationToken,
+    ) -> float:
+        self.calls.append((source, target))
+        assert bitrate_kbps == 96
+        assert tempo == 1
+        cancellation.raise_if_cancelled()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"OggS synthetic original playback")
+        return 12.345
+
+
 def _run(
     engine: PipelineEngine,
     step_id: StepId,
@@ -237,7 +259,7 @@ def _ready_engine(
                 FakeOcrStep(),
                 FakeProofreadStep(),
                 FakeAudioStep(),
-                ExportStep(probe),
+                ExportStep(probe, playback_transcoder=FakePlaybackTranscoder()),
             )
         ),
     )
@@ -273,6 +295,12 @@ def test_export_packages_original_audio_bytes_and_metadata(tmp_path: Path) -> No
         "sha256": file_sha256(paths.book("book-1") / "original_audio.mp3"),
         "duration_ms": 12_345,
         "alignment_status": "raw",
+        "playback": {
+            "path": "original/playback.ogg",
+            "mime_type": "audio/ogg",
+            "size_bytes": len(b"OggS synthetic original playback"),
+            "sha256": "839d67a2f261c1b77630e70e9f31e3cb1c8b0f5a224fccc256416fac1b6f6784",
+        },
     }
     report = json.loads((root / "validation_report.json").read_text(encoding="utf-8"))
     assert report["original_audio"] == original

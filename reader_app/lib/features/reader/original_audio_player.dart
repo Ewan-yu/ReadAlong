@@ -55,6 +55,9 @@ final class OriginalAudioPlaybackException implements Exception {
       [this.message = 'Original audio cannot be played']);
 
   final String message;
+
+  @override
+  String toString() => '$runtimeType: $message';
 }
 
 final class JustAudioOriginalAudioPlayer implements OriginalAudioPlayer {
@@ -77,12 +80,13 @@ final class JustAudioOriginalAudioPlayer implements OriginalAudioPlayer {
   @override
   Future<void> load(String path) async {
     _ensureActive();
-    if (!await File(path).exists())
-      throw const OriginalAudioPlaybackException();
+    if (!await File(path).exists()) {
+      throw OriginalAudioPlaybackException('Playback file is missing: $path');
+    }
     try {
       await _engine.setFile(path);
-    } on Object {
-      throw const OriginalAudioPlaybackException();
+    } on Object catch (error) {
+      throw OriginalAudioPlaybackException('Audio decoder failed: $error');
     }
   }
 
@@ -91,8 +95,8 @@ final class JustAudioOriginalAudioPlayer implements OriginalAudioPlayer {
     _ensureActive();
     try {
       await _engine.pause();
-    } on Object {
-      throw const OriginalAudioPlaybackException();
+    } on Object catch (error) {
+      throw OriginalAudioPlaybackException('Pause failed: $error');
     }
   }
 
@@ -101,8 +105,8 @@ final class JustAudioOriginalAudioPlayer implements OriginalAudioPlayer {
     _ensureActive();
     try {
       await _engine.play();
-    } on Object {
-      throw const OriginalAudioPlaybackException();
+    } on Object catch (error) {
+      throw OriginalAudioPlaybackException('Play failed: $error');
     }
   }
 
@@ -111,8 +115,8 @@ final class JustAudioOriginalAudioPlayer implements OriginalAudioPlayer {
     _ensureActive();
     try {
       await _engine.seek(position);
-    } on Object {
-      throw const OriginalAudioPlaybackException();
+    } on Object catch (error) {
+      throw OriginalAudioPlaybackException('Seek failed: $error');
     }
   }
 
@@ -121,8 +125,8 @@ final class JustAudioOriginalAudioPlayer implements OriginalAudioPlayer {
     if (_disposed) return;
     try {
       await _engine.stop();
-    } on Object {
-      throw const OriginalAudioPlaybackException();
+    } on Object catch (error) {
+      throw OriginalAudioPlaybackException('Stop failed: $error');
     }
   }
 
@@ -132,8 +136,8 @@ final class JustAudioOriginalAudioPlayer implements OriginalAudioPlayer {
     _disposed = true;
     try {
       await _engine.dispose();
-    } on Object {
-      throw const OriginalAudioPlaybackException();
+    } on Object catch (error) {
+      throw OriginalAudioPlaybackException('Dispose failed: $error');
     }
   }
 }

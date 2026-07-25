@@ -140,14 +140,19 @@ final class LocalOriginalAudioRepository implements OriginalAudioRepository {
         bookDirectory: shelfBook.bookDir,
         original: original,
       );
+      final playbackPath = await _loadOptionalPlaybackPath(
+        bookDirectory: shelfBook.bookDir,
+        original: original,
+      );
       return OriginalAudioBook(
         libraryId: shelfBook.libraryId,
-        audioPath: sourcePath,
+        audioPath: playbackPath ?? sourcePath,
         duration: Duration(milliseconds: durationMs),
         sentences: sentences,
         sourceBookId: shelfBook.sourceBookId,
         resourceSha256: audioHash,
         timelineSha256: original['timeline_sha256']! as String,
+        playbackPath: playbackPath,
         backgroundPath: backgroundPath,
       );
     } on OriginalAudioLoadException {
@@ -155,6 +160,37 @@ final class LocalOriginalAudioRepository implements OriginalAudioRepository {
     } on Object {
       throw const OriginalAudioDataException();
     }
+  }
+
+  /// New packages contain a device-compatible Opus playback copy. Existing
+  /// packages keep working with their verified MP3 until they are re-exported.
+  Future<String?> _loadOptionalPlaybackPath({
+    required String bookDirectory,
+    required Map<String, dynamic> original,
+  }) async {
+    final playback = original['playback'];
+    if (playback == null) return null;
+    if (playback is! Map<String, dynamic> ||
+        playback['path'] != BookPackSchema.originalAudioPlaybackPath ||
+        playback['mime_type'] != BookPackSchema.originalAudioPlaybackMimeType ||
+        playback['size_bytes'] is! int ||
+        (playback['size_bytes'] as int) <= 0 ||
+        playback['sha256'] is! String ||
+        !BookPackSchema.sha256Pattern.hasMatch(playback['sha256'] as String)) {
+      throw const OriginalAudioDataException(
+        'Playback audio declaration is invalid',
+      );
+    }
+    final path = _resolveInside(bookDirectory, playback['path']);
+    final file = File(path);
+    if (!await file.exists() || await file.length() != playback['size_bytes']) {
+      throw const OriginalAudioDataException('Playback audio is missing');
+    }
+    final hash = (await sha256.bind(file.openRead()).first).toString();
+    if (hash != playback['sha256']) {
+      throw const OriginalAudioDataException('Playback audio hash mismatch');
+    }
+    return path;
   }
 
   Future<String?> _loadConfirmedBackground({

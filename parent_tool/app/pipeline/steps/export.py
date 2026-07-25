@@ -25,15 +25,21 @@ from app.pipeline.original_timeline import (
 )
 from app.pipeline.paths import ensure_within
 from app.providers.media import FfprobeMediaProbe
+from app.providers.tts.ffmpeg import FfmpegOpusTranscoder
 
 
 class ExportStep:
     step_id = StepId.EXPORT
-    implementation_version = "export-v1"
+    implementation_version = "export-v2"
     params_model = ExportParams
 
-    def __init__(self, media_probe: FfprobeMediaProbe | None = None) -> None:
+    def __init__(
+        self,
+        media_probe: FfprobeMediaProbe | None = None,
+        playback_transcoder: FfmpegOpusTranscoder | None = None,
+    ) -> None:
         self._media_probe = media_probe or FfprobeMediaProbe()
+        self._playback_transcoder = playback_transcoder or FfmpegOpusTranscoder()
 
     def run(self, context: StepRunContext, params: ExportParams) -> StepResult:
         try:
@@ -60,6 +66,7 @@ class ExportStep:
         with tempfile.TemporaryDirectory(prefix=".export-", dir=context.staging_dir) as temporary:
             assembly = Path(temporary)
             original_audio = self._copy_original_audio(assembly, context)
+            self._create_original_playback(assembly, context, original_audio)
             manifest = self._manifest(context.book_id, title, plan, original_audio)
             self._copy_confirmed_background(assembly, context, original_audio)
             self._copy_pages(assembly, pages_root, outputs)
@@ -169,6 +176,42 @@ class ExportStep:
             "sha256": packaged_sha256,
             "duration_ms": duration_ms,
             "alignment_status": "raw",
+        }
+
+    def _create_original_playback(
+        self,
+        assembly: Path,
+        context: StepRunContext,
+        original_audio: dict | None,
+    ) -> None:
+        """Create a local, broadly supported original-audio playback asset.
+
+        The MP3 remains the immutable parent-uploaded source and the timeline
+        identity anchor.  This Opus copy exists only for playback, preventing
+        device-specific MP3 decoder failures from blocking the child reader.
+        """
+        if original_audio is None:
+            return
+        source = assembly / "original" / "source.mp3"
+        target = assembly / "original" / "playback.ogg"
+        self._playback_transcoder.transcode(
+            source,
+            target,
+            bitrate_kbps=96,
+            tempo=1,
+            cancellation=context.cancellation,
+        )
+        if not target.is_file() or target.stat().st_size <= 0:
+            raise PipelineError(
+                "ORIGINAL_AUDIO_TRANSCODE_FAILED",
+                "无法生成设备兼容的原音播放音频。",
+                status_code=500,
+            )
+        original_audio["playback"] = {
+            "path": "original/playback.ogg",
+            "mime_type": "audio/ogg",
+            "size_bytes": target.stat().st_size,
+            "sha256": file_sha256(target),
         }
 
     @staticmethod

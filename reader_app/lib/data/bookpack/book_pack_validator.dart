@@ -291,6 +291,36 @@ class BookPackValidator {
     }
 
     final background = raw['background'];
+    final playback = raw['playback'];
+    String? playbackPath;
+    if (playback != null) {
+      if (playback is! Map<String, dynamic>) {
+        errors.add('原音兼容播放轨必须是对象');
+      } else {
+        playbackPath = playback['path'] as String?;
+        final size = playback['size_bytes'];
+        final hash = playback['sha256'];
+        if (playbackPath != BookPackSchema.originalAudioPlaybackPath ||
+            playback['mime_type'] !=
+                BookPackSchema.originalAudioPlaybackMimeType) {
+          errors.add('原音兼容播放轨声明非法');
+        }
+        final playbackFile = playbackPath == null ? null : byName[playbackPath];
+        if (playbackFile == null || !playbackFile.isFile) {
+          errors.add('缺少原音兼容播放轨: $playbackPath');
+        } else {
+          final content = List<int>.from(playbackFile.content as List<int>);
+          if (size is! int || size <= 0 || content.length != size) {
+            errors.add('原音兼容播放轨大小不一致');
+          }
+          if (hash is! String ||
+              !BookPackSchema.sha256Pattern.hasMatch(hash) ||
+              sha256.convert(content).toString() != hash) {
+            errors.add('原音兼容播放轨 sha256 不一致');
+          }
+        }
+      }
+    }
     String? backgroundPath;
     if (background != null) {
       if (background is! Map<String, dynamic>) {
@@ -347,8 +377,10 @@ class BookPackValidator {
         raw.containsKey('vocal_sha256')) {
       errors.add('raw 原音不应声明逐词时间线');
     }
-    for (final extraPath in originalFiles
-        .where((entry) => entry != declaredPath && entry != backgroundPath)) {
+    for (final extraPath in originalFiles.where((entry) =>
+        entry != declaredPath &&
+        entry != playbackPath &&
+        entry != backgroundPath)) {
       errors.add('存在未声明的原音资源: $extraPath');
     }
   }

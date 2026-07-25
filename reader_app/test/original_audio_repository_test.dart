@@ -80,6 +80,15 @@ void main() {
     );
   });
 
+  test('优先使用已校验的兼容 Ogg 播放轨', () async {
+    await _writeReadyPackage(bookDir, includePlayback: true);
+
+    final book = await repository.loadBook('copy-1');
+
+    expect(book.audioPath, p.join(bookDir.path, 'original', 'playback.ogg'));
+    expect(book.playbackPath, book.audioPath);
+  });
+
   test('只朗读部分绘本文本时，仅将已朗读句作为独立歌词加载', () async {
     await _writeAlignment(bookDir, includeVisualOnlyLine: true);
     await _writeReadyPackage(bookDir, narratedSentenceSequence: 2);
@@ -130,6 +139,7 @@ Future<void> _writeReadyPackage(
   Directory bookDir, {
   String? timelineHash,
   int narratedSentenceSequence = 1,
+  bool includePlayback = false,
 }) async {
   final audio = File(p.join(bookDir.path, 'original', 'source.mp3'));
   await audio.parent.create(recursive: true);
@@ -165,7 +175,11 @@ Future<void> _writeReadyPackage(
       File(p.join(bookDir.path, 'timeline', 'original_timeline.json'));
   await timelineFile.parent.create(recursive: true);
   await timelineFile.writeAsBytes(timelineBytes);
-  await File(p.join(bookDir.path, 'manifest.json')).writeAsString(jsonEncode({
+  final playback = File(p.join(bookDir.path, 'original', 'playback.ogg'));
+  if (includePlayback) {
+    await playback.writeAsBytes([5, 6, 7, 8]);
+  }
+  final manifest = {
     'book_id': 'story-1',
     'original_audio': {
       'path': 'original/source.mp3',
@@ -178,5 +192,16 @@ Future<void> _writeReadyPackage(
       'timeline_sentence_count': 1,
       'vocal_sha256': '1' * 64,
     },
-  }));
+  };
+  if (includePlayback) {
+    final bytes = await playback.readAsBytes();
+    (manifest['original_audio'] as Map<String, dynamic>)['playback'] = {
+      'path': 'original/playback.ogg',
+      'mime_type': 'audio/ogg',
+      'size_bytes': bytes.length,
+      'sha256': sha256.convert(bytes).toString(),
+    };
+  }
+  await File(p.join(bookDir.path, 'manifest.json'))
+      .writeAsString(jsonEncode(manifest));
 }

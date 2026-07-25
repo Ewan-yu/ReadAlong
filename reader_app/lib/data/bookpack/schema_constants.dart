@@ -38,6 +38,8 @@ abstract final class BookPackSchema {
     originalAudioReadyStatus,
   };
   static const originalAudioTimelinePath = 'timeline/original_timeline.json';
+  static const originalAudioPlaybackPath = 'original/playback.ogg';
+  static const originalAudioPlaybackMimeType = 'audio/ogg';
   static const originalAudioBackgroundPath = 'original/background.ogg';
   static const originalAudioBackgroundMimeType = 'audio/ogg';
   static const originalAudioBackgroundMethod = 'source_separation';
