@@ -22,16 +22,34 @@ class SentenceDubbingPage extends ConsumerStatefulWidget {
 
 class _SentenceDubbingPageState extends ConsumerState<SentenceDubbingPage>
     with WidgetsBindingObserver {
+  Timer? _slowLoadingTimer;
+  var _slowLoading = false;
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _armSlowLoadingNotice();
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _slowLoadingTimer?.cancel();
     super.dispose();
+  }
+
+  void _armSlowLoadingNotice() {
+    _slowLoadingTimer?.cancel();
+    _slowLoadingTimer = Timer(const Duration(seconds: 6), () {
+      if (mounted) setState(() => _slowLoading = true);
+    });
+  }
+
+  void _retryLoading() {
+    ref.invalidate(sentenceDubbingControllerProvider(widget.libraryId));
+    setState(() => _slowLoading = false);
+    _armSlowLoadingNotice();
   }
 
   @override
@@ -48,6 +66,10 @@ class _SentenceDubbingPageState extends ConsumerState<SentenceDubbingPage>
   Widget build(BuildContext context) {
     final libraryId = widget.libraryId;
     final state = ref.watch(sentenceDubbingControllerProvider(libraryId));
+    if (!state.isLoading) {
+      _slowLoadingTimer?.cancel();
+      _slowLoadingTimer = null;
+    }
     return Scaffold(
       appBar: AppBar(
         leading: IconButton(
@@ -66,12 +88,49 @@ class _SentenceDubbingPageState extends ConsumerState<SentenceDubbingPage>
         ],
       ),
       body: state.when(
-        loading: () => const Center(child: CircularProgressIndicator()),
+        loading: () => _DubbingLoading(
+          slow: _slowLoading,
+          onRetry: _retryLoading,
+        ),
         error: (_, __) => const _DubbingUnavailable(),
         data: (value) => _DubbingView(libraryId: libraryId, state: value),
       ),
     );
   }
+}
+
+class _DubbingLoading extends StatelessWidget {
+  const _DubbingLoading({required this.slow, required this.onRetry});
+
+  final bool slow;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) => Center(
+        child: Padding(
+          padding: const EdgeInsets.all(AppSpacing.pageMargin),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const CircularProgressIndicator(),
+              const SizedBox(height: AppSpacing.cardPadding),
+              Text(
+                slow ? '打开得有点久，录音和进度都不会丢失' : '正在打开配音…',
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: AppColors.textSecondary),
+              ),
+              if (slow) ...[
+                const SizedBox(height: AppSpacing.cardPadding),
+                OutlinedButton.icon(
+                  onPressed: onRetry,
+                  icon: const Icon(Icons.refresh_rounded),
+                  label: const Text('重新加载'),
+                ),
+              ],
+            ],
+          ),
+        ),
+      );
 }
 
 class _DubbingUnavailable extends StatelessWidget {
@@ -128,12 +187,10 @@ class _DubbingView extends ConsumerWidget {
             onPrevious: () => unawaited(controller.previousSentence()),
             onNext: () => unawaited(controller.nextSentence()),
             onSelect: (take) => unawaited(controller.selectTake(take.id)),
-            onDelete: (take) => unawaited(controller.deleteTake(take.id)),
             onPlay: (take) => unawaited(controller.playTake(take)),
             onRetryScore: (take) => unawaited(controller.retryScore(take)),
             onCreateMix: () => unawaited(controller.createMix()),
             onPlayMix: (mix) => unawaited(controller.playMix(mix)),
-            onDeleteMix: (mix) => unawaited(controller.deleteMix(mix.id)),
           );
           if (compact) {
             final lyricHeight =
@@ -243,12 +300,10 @@ class _GuidedControls extends StatelessWidget {
     required this.onPrevious,
     required this.onNext,
     required this.onSelect,
-    required this.onDelete,
     required this.onPlay,
     required this.onRetryScore,
     required this.onCreateMix,
     required this.onPlayMix,
-    required this.onDeleteMix,
   });
 
   final SentenceDubbingState state;
@@ -260,12 +315,10 @@ class _GuidedControls extends StatelessWidget {
   final VoidCallback onPrevious;
   final VoidCallback onNext;
   final ValueChanged<DubbingTake> onSelect;
-  final ValueChanged<DubbingTake> onDelete;
   final ValueChanged<DubbingTake> onPlay;
   final ValueChanged<DubbingTake> onRetryScore;
   final VoidCallback onCreateMix;
   final ValueChanged<DubbingMix> onPlayMix;
-  final ValueChanged<DubbingMix> onDeleteMix;
 
   @override
   Widget build(BuildContext context) {
@@ -286,7 +339,7 @@ class _GuidedControls extends StatelessWidget {
         childrenPadding: EdgeInsets.zero,
         leading: const Icon(Icons.library_music_outlined),
         title: Text('我的录音（${state.takes.length}）'),
-        subtitle: const Text('需要重录或改选时再打开'),
+        subtitle: const Text('需要试听或改选时再打开；删除由家长统一管理'),
         children: [
           if (state.takes.isEmpty)
             const Padding(
@@ -300,7 +353,6 @@ class _GuidedControls extends StatelessWidget {
             _TakeRow(
               take: take,
               onSelect: () => onSelect(take),
-              onDelete: () => onDelete(take),
               onPlay: () => onPlay(take),
               onRetry: () => onRetryScore(take),
             ),
@@ -324,9 +376,7 @@ class _GuidedControls extends StatelessWidget {
       if (state.mixes.isNotEmpty)
         _LatestMix(
           mix: state.mixes.first,
-          busy: state.isBusy,
           onPlay: () => onPlayMix(state.mixes.first),
-          onDelete: () => onDeleteMix(state.mixes.first),
         ),
     ];
     final navigation = _SentenceNavigation(
@@ -593,14 +643,12 @@ class _TakeRow extends StatelessWidget {
   const _TakeRow({
     required this.take,
     required this.onSelect,
-    required this.onDelete,
     required this.onPlay,
     required this.onRetry,
   });
 
   final DubbingTake take;
   final VoidCallback onSelect;
-  final VoidCallback onDelete;
   final VoidCallback onPlay;
   final VoidCallback onRetry;
 
@@ -634,14 +682,12 @@ class _TakeRow extends StatelessWidget {
             onSelected: (value) {
               if (value == 'select') onSelect();
               if (value == 'retry') onRetry();
-              if (value == 'delete') onDelete();
             },
             itemBuilder: (_) => [
               if (!take.isSelected)
                 const PopupMenuItem(value: 'select', child: Text('使用这一版')),
               if (take.scoreStatus == DubbingTakeScoreStatus.failed)
                 const PopupMenuItem(value: 'retry', child: Text('重新评分')),
-              const PopupMenuItem(value: 'delete', child: Text('删除这条录音')),
             ],
           ),
         ],
@@ -653,15 +699,11 @@ class _TakeRow extends StatelessWidget {
 class _LatestMix extends StatelessWidget {
   const _LatestMix({
     required this.mix,
-    required this.busy,
     required this.onPlay,
-    required this.onDelete,
   });
 
   final DubbingMix mix;
-  final bool busy;
   final VoidCallback onPlay;
-  final VoidCallback onDelete;
 
   @override
   Widget build(BuildContext context) => ListTile(
@@ -683,11 +725,6 @@ class _LatestMix extends StatelessWidget {
               tooltip: '播放故事',
               onPressed: onPlay,
               icon: const Icon(Icons.play_arrow_rounded),
-            ),
-            IconButton(
-              tooltip: '删除故事',
-              onPressed: busy ? null : onDelete,
-              icon: const Icon(Icons.delete_outline_rounded),
             ),
           ],
         ),

@@ -11,6 +11,7 @@ import '../../services/scoring/score_models.dart';
 import '../../services/scoring/scoring_provider.dart';
 import '../../services/scoring/xfyun_ise_provider.dart';
 import '../reader/original_audio_models.dart';
+import '../reader/original_audio_player.dart';
 import '../reader/original_audio_repository.dart';
 import '../reader/point_reading_models.dart';
 import '../reader/sentence_audio_player.dart';
@@ -18,6 +19,15 @@ import '../reader/timeline_lyrics.dart';
 import 'dubbing_repository.dart';
 
 const sentenceDubbingMaximumTakes = 3;
+const sentenceDubbingMaximumDemonstrationPreroll = Duration(milliseconds: 900);
+const sentenceDubbingDemonstrationTail = Duration(milliseconds: 650);
+const sentenceDubbingMinimumGapPadding = Duration(milliseconds: 350);
+
+/// Microphone capture can briefly reroute Android audio. Tests override this
+/// to zero; production waits before play so the first spoken sound is audible.
+final sentenceDubbingPlaybackSettleProvider = Provider<Duration>(
+  (_) => const Duration(milliseconds: 350),
+);
 
 enum SentenceDubbingPhase {
   ready,
@@ -132,17 +142,25 @@ final sentenceDubbingControllerProvider =
 /// costs the child a take.
 final class SentenceDubbingController
     extends AutoDisposeFamilyAsyncNotifier<SentenceDubbingState, String> {
-  late final AudioRecordingService _recorder;
+  late final Future<AudioRecordingService> _recorderFuture;
+  AudioRecordingService? _recorder;
   late final DubbingRepository _repository;
   late final ScoringProvider _scorer;
   late final SentenceAudioPlayer _player;
+  late final OriginalAudioPlayer _demonstrationPlayer;
   late final DubbingMixService _mixService;
   late final RecordingPreparationProtocol _preparation;
+  late final Duration _playbackSettle;
   StreamSubscription<RecordingLevel>? _levels;
+  StreamSubscription<Duration>? _demonstrationPositions;
+  StreamSubscription<bool>? _demonstrationPlaying;
+  Completer<void>? _demonstrationCompletion;
+  Timer? _demonstrationTimeout;
   Timer? _elapsedTimer;
   Timer? _limitTimer;
   Stopwatch? _stopwatch;
   Duration _contentOffset = Duration.zero;
+  String? _loadedDemonstrationPath;
   var _generation = 0;
   var _starting = false;
   var _stopping = false;
@@ -151,11 +169,16 @@ final class SentenceDubbingController
   @override
   Future<SentenceDubbingState> build(String libraryId) async {
     _repository = await ref.watch(dubbingRepositoryProvider.future);
-    _recorder = await ref.watch(recordingServiceProvider.future);
+    // Microphone cleanup and native plug-in initialization can take noticeable
+    // time on the first Android entry. Keep the provider alive, but do not
+    // block the whole page behind it; the first record action awaits it.
+    _recorderFuture = ref.watch(recordingServiceProvider.future);
     _scorer = ref.watch(scoringProvider);
     _player = ref.watch(sentenceAudioPlayerProvider);
+    _demonstrationPlayer = ref.watch(originalAudioPlayerProvider);
     _mixService = ref.watch(dubbingMixServiceProvider);
     _preparation = ref.watch(sentenceDubbingPreparationProtocolProvider);
+    _playbackSettle = ref.watch(sentenceDubbingPlaybackSettleProvider);
     final original =
         await ref.watch(originalAudioBookProvider(libraryId).future);
     if (original.sourceBookId.isEmpty ||
@@ -242,57 +265,44 @@ final class SentenceDubbingController
     var recorderStarted = false;
     try {
       await _player.stop();
+      await _cancelDemonstration();
       if (!_isCurrent(generation)) return;
-      // V3 timelines locate the first narrated word directly. Starting before
-      // it can pull unaligned laughter or character effects from the sentence
-      // gap into the next demonstration, so clip to the narrated bounds.
-      final demoStart = current.sentence.start;
+      final demonstration = _demonstrationBounds(current);
+      await _prepareDemonstration(
+        current.original.audioPath,
+        demonstration.start,
+      );
+      if (!_isCurrent(generation)) return;
       _set(current.copyWith(
         phase: SentenceDubbingPhase.demonstrating,
         playbackPosition: Duration.zero,
-        activeWordIndex: timelineActiveWordIndex(
-          current.sentence,
-          current.sentence.start,
-        ),
+        activeWordIndex: null,
         result: null,
         failure: null,
       ));
       // Capture begins before the demonstration. The discarded demonstration
       // period doubles as Android microphone warm-up, removing the repeated
       // 650ms + 3-2-1 wait without keeping a global microphone open.
-      final session = await _recorder.start(
+      final recorder = _recorder ??= await _recorderFuture;
+      if (!_isCurrent(generation)) return;
+      final session = await recorder.start(
         libraryId: arg,
         sentenceId: current.sentence.id,
       );
       recorderStarted = true;
       final captureClock = Stopwatch()..start();
       if (!_isCurrent(generation)) {
-        await _recorder.cancel();
+        await recorder.cancel();
         return;
       }
-      await _player.play(
-        SentenceAudioClip(
-          path: current.original.audioPath,
-          start: demoStart,
-          end: current.sentence.end,
-        ),
-        onPosition: (elapsed) {
-          final latest = state.valueOrNull;
-          if (!_isCurrent(generation) ||
-              latest?.phase != SentenceDubbingPhase.demonstrating) {
-            return;
-          }
-          final absolutePosition = demoStart + elapsed;
-          final sentenceElapsed = absolutePosition > current.sentence.start
-              ? absolutePosition - current.sentence.start
-              : Duration.zero;
-          _set(latest!.copyWith(
-            playbackPosition: sentenceElapsed,
-            activeWordIndex:
-                timelineActiveWordIndex(current.sentence, absolutePosition),
-          ));
-        },
-      );
+      if (_playbackSettle > Duration.zero) {
+        await Future<void>.delayed(_playbackSettle);
+        if (!_isCurrent(generation)) {
+          await recorder.cancel();
+          return;
+        }
+      }
+      await _playDemonstration(current, generation, demonstration);
       if (!_isCurrent(generation)) return;
       _set(current.copyWith(
         phase: SentenceDubbingPhase.preparing,
@@ -316,7 +326,7 @@ final class SentenceDubbingController
         },
       );
       if (!_isCurrent(generation)) {
-        await _recorder.cancel();
+        await recorder.cancel();
         return;
       }
       captureClock.stop();
@@ -352,19 +362,19 @@ final class SentenceDubbingController
           failure: null));
     } on RecordingPreparationCancelled {
       try {
-        await _recorder.cancel();
+        await _recorder?.cancel();
       } on Object {}
     } on RecordingException catch (error) {
       if (recorderStarted) {
         try {
-          await _recorder.cancel();
+          await _recorder?.cancel();
         } on Object {}
       }
       if (_isCurrent(generation)) _fail(error.message);
     } on Object {
       if (recorderStarted) {
         try {
-          await _recorder.cancel();
+          await _recorder?.cancel();
         } on Object {}
       }
       if (_isCurrent(generation)) _fail('录音没有开始，请稍后重试');
@@ -381,7 +391,7 @@ final class SentenceDubbingController
       return;
     }
     ++_generation;
-    await _recorder.cancel();
+    await _recorder?.cancel();
     _set(current.copyWith(
       phase: _restingPhase(current.takes),
       countdown: 0,
@@ -411,11 +421,9 @@ final class SentenceDubbingController
     }
     if (current.phase == SentenceDubbingPhase.demonstrating) {
       ++_generation;
+      await _cancelDemonstration();
       try {
-        await _player.stop();
-      } on Object {}
-      try {
-        await _recorder.cancel();
+        await _recorder?.cancel();
       } on Object {}
       _set(current.copyWith(
         phase: _restingPhase(current.takes),
@@ -438,7 +446,11 @@ final class SentenceDubbingController
           level: 0,
           elapsed: _stopwatch?.elapsed ?? current.elapsed));
       await _stopActivity();
-      final path = await _recorder.stop();
+      final recorder = _recorder;
+      if (recorder == null) {
+        throw const RecordingException('录音服务尚未准备好，请再试一次');
+      }
+      final path = await recorder.stop();
       if (!_isCurrent(generation)) return;
       final duration = _stopwatch?.elapsed ?? current.elapsed;
       final take = await _repository.saveTake(
@@ -710,8 +722,9 @@ final class SentenceDubbingController
 
   Future<void> _cancelAndStop() async {
     await _stopActivity();
+    await _cancelDemonstration();
     try {
-      await _recorder.cancel();
+      await _recorder?.cancel();
     } on Object {}
     try {
       await _player.stop();
@@ -727,10 +740,200 @@ final class SentenceDubbingController
     _levels = null;
   }
 
+  /// Plays a sentence from the full original track and drives highlighting
+  /// with that player's absolute position. This is deliberately the same
+  /// clock used by the accurate whole-story preview; a clipped source reports
+  /// a relative Android position whose output timing can drift ahead of sound.
+  Future<void> _playDemonstration(
+    SentenceDubbingState current,
+    int generation,
+    _DemonstrationBounds bounds,
+  ) async {
+    final sentenceStart = current.sentence.start;
+    final sentenceEnd = current.sentence.end;
+    if (sentenceEnd <= sentenceStart || bounds.end <= bounds.start) {
+      throw const _SentenceDemonstrationException('示范音时间范围无效');
+    }
+    if (!_isCurrent(generation)) return;
+
+    final completion = Completer<void>();
+    _demonstrationCompletion = completion;
+    var heardPlaying = false;
+    var lastPosition = bounds.start;
+
+    void complete() {
+      if (!completion.isCompleted) completion.complete();
+    }
+
+    void fail(Object error, StackTrace stackTrace) {
+      if (!completion.isCompleted) completion.completeError(error, stackTrace);
+    }
+
+    _demonstrationPositions = _demonstrationPlayer.positionStream.listen(
+      (absolutePosition) {
+        lastPosition = absolutePosition;
+        if (!_isCurrent(generation)) {
+          complete();
+          return;
+        }
+        if (absolutePosition >= bounds.end) {
+          final latest = state.valueOrNull;
+          if (latest?.phase == SentenceDubbingPhase.demonstrating) {
+            _set(latest!.copyWith(
+              playbackPosition: sentenceEnd - sentenceStart,
+              activeWordIndex: null,
+            ));
+          }
+          complete();
+          return;
+        }
+        if (absolutePosition < sentenceStart) {
+          final latest = state.valueOrNull;
+          if (latest?.phase == SentenceDubbingPhase.demonstrating) {
+            _set(latest!.copyWith(
+              playbackPosition: Duration.zero,
+              activeWordIndex: null,
+            ));
+          }
+          return;
+        }
+        final latest = state.valueOrNull;
+        if (latest?.phase != SentenceDubbingPhase.demonstrating) return;
+        final sentencePosition =
+            absolutePosition > sentenceEnd ? sentenceEnd : absolutePosition;
+        _set(latest!.copyWith(
+          playbackPosition: sentencePosition - sentenceStart,
+          activeWordIndex:
+              timelineActiveWordIndex(current.sentence, absolutePosition),
+        ));
+      },
+      onError: fail,
+    );
+    _demonstrationPlaying = _demonstrationPlayer.playingStream.listen(
+      (playing) {
+        if (playing) {
+          heardPlaying = true;
+        } else if (heardPlaying) {
+          if (lastPosition >= bounds.end - const Duration(milliseconds: 120)) {
+            complete();
+          } else {
+            fail(
+              const _SentenceDemonstrationException('示范音播放被中断'),
+              StackTrace.current,
+            );
+          }
+        }
+      },
+      onError: fail,
+    );
+    final maximumWait = bounds.end - bounds.start + const Duration(seconds: 3);
+    _demonstrationTimeout = Timer(maximumWait, () {
+      if (!completion.isCompleted) {
+        completion.completeError(
+          const _SentenceDemonstrationException('示范音播放超时'),
+        );
+      }
+    });
+    unawaited(
+      _demonstrationPlayer.play().then<void>(
+            (_) => complete(),
+            onError: (Object error, StackTrace stackTrace) =>
+                fail(error, stackTrace),
+          ),
+    );
+    try {
+      await completion.future;
+    } finally {
+      await _clearDemonstrationListeners();
+      try {
+        await _demonstrationPlayer.pause();
+      } on Object {
+        // Decoder cleanup below or the next command can still recover.
+      }
+    }
+  }
+
+  Future<void> _prepareDemonstration(String path, Duration start) async {
+    if (_loadedDemonstrationPath != path) {
+      await _demonstrationPlayer.load(path);
+      _loadedDemonstrationPath = path;
+    }
+    await _demonstrationPlayer.setVolume(1);
+    await _demonstrationPlayer.seek(start);
+  }
+
+  _DemonstrationBounds _demonstrationBounds(SentenceDubbingState current) {
+    final index = current.sentenceIndex;
+    final sentence = current.sentence;
+    var start = sentence.start;
+    if (index > 0) {
+      final previousEnd = current.original.sentences[index - 1].end;
+      final availableGap = sentence.start - previousEnd;
+      if (availableGap >= sentenceDubbingMinimumGapPadding) {
+        final preroll =
+            availableGap < sentenceDubbingMaximumDemonstrationPreroll
+                ? availableGap
+                : sentenceDubbingMaximumDemonstrationPreroll;
+        start = sentence.start - preroll;
+      }
+    }
+
+    final availableAfter = current.original.duration - sentence.end;
+    var tail = availableAfter < sentenceDubbingDemonstrationTail
+        ? availableAfter
+        : sentenceDubbingDemonstrationTail;
+    if (index + 1 < current.original.sentences.length) {
+      final gapToNext =
+          current.original.sentences[index + 1].start - sentence.end;
+      if (gapToNext > Duration.zero && gapToNext < tail) {
+        tail = gapToNext;
+      } else if (gapToNext <= Duration.zero &&
+          sentenceDubbingMinimumGapPadding < tail) {
+        tail = sentenceDubbingMinimumGapPadding;
+      }
+    }
+    if (tail < Duration.zero) tail = Duration.zero;
+    return _DemonstrationBounds(start: start, end: sentence.end + tail);
+  }
+
+  Future<void> _cancelDemonstration() async {
+    final completion = _demonstrationCompletion;
+    if (completion != null && !completion.isCompleted) completion.complete();
+    await _clearDemonstrationListeners();
+    try {
+      await _demonstrationPlayer.stop();
+    } on Object {
+      // A stale demonstration must never block recording or route teardown.
+    }
+  }
+
+  Future<void> _clearDemonstrationListeners() async {
+    _demonstrationTimeout?.cancel();
+    _demonstrationTimeout = null;
+    await _demonstrationPositions?.cancel();
+    _demonstrationPositions = null;
+    await _demonstrationPlaying?.cancel();
+    _demonstrationPlaying = null;
+    _demonstrationCompletion = null;
+  }
+
   bool _isCurrent(int generation) => !_disposed && generation == _generation;
   void _set(SentenceDubbingState value) {
     if (!_disposed) state = AsyncData(value);
   }
+}
+
+final class _SentenceDemonstrationException implements Exception {
+  const _SentenceDemonstrationException(this.message);
+
+  final String message;
+}
+
+final class _DemonstrationBounds {
+  const _DemonstrationBounds({required this.start, required this.end});
+
+  final Duration start;
+  final Duration end;
 }
 
 Set<String> _completedSentenceIds(List<DubbingTake> takes) => {

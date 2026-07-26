@@ -82,7 +82,11 @@ void main() {
     var completed = false;
 
     final playing = player.play(clip()).then((_) => completed = true);
-    await pumpEventQueue();
+    for (var attempt = 0;
+        attempt < 10 && engine.configured.isEmpty;
+        attempt++) {
+      await pumpEventQueue();
+    }
 
     expect(
       engine.configured,
@@ -107,7 +111,9 @@ void main() {
     final reported = <Duration>[];
 
     final playing = player.play(clip(), onPosition: reported.add);
-    await pumpEventQueue();
+    for (var attempt = 0; attempt < 10 && reported.isEmpty; attempt++) {
+      await pumpEventQueue();
+    }
     expect(reported, [Duration.zero]);
 
     engine.positions

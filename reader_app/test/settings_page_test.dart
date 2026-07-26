@@ -72,6 +72,10 @@ void main() {
     final probe = _FakeProbe();
     await _pumpSettings(tester, store, probe);
 
+    expect(
+      find.byKey(const ValueKey('settings-recording-management')),
+      findsOneWidget,
+    );
     expect(find.text('讯飞跟读评分'), findsOneWidget);
     expect(find.text('old-app'), findsOneWidget);
     expect(find.text('old-key'), findsOneWidget);

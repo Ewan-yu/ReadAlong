@@ -156,6 +156,8 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
+                            const _RecordingManagementCard(),
+                            const SizedBox(height: AppSpacing.pageMargin),
                             _buildIseCard(context),
                             const SizedBox(height: AppSpacing.pageMargin),
                             _AboutCard(),
@@ -361,6 +363,37 @@ class _AboutCard extends StatelessWidget {
               ),
             ],
           ),
+        ),
+      );
+}
+
+class _RecordingManagementCard extends StatelessWidget {
+  const _RecordingManagementCard();
+
+  @override
+  Widget build(BuildContext context) => Card(
+        child: ListTile(
+          key: const ValueKey('settings-recording-management'),
+          minVerticalPadding: AppSpacing.cardPadding,
+          leading: const SizedBox(
+            width: 48,
+            height: 48,
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: AppColors.accentContainer,
+                shape: BoxShape.circle,
+              ),
+              child:
+                  Icon(Icons.library_music_outlined, color: AppColors.accent),
+            ),
+          ),
+          title: const Text(
+            '录音与作品',
+            style: TextStyle(fontWeight: FontWeight.w700),
+          ),
+          subtitle: const Text('查看并批量删除逐句录音、完整录音和已生成作品'),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: () => context.push('/settings/recordings'),
         ),
       );
 }

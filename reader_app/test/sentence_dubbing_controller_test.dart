@@ -11,6 +11,7 @@ import 'package:reader_app/features/dubbing/dubbing_repository.dart';
 import 'package:reader_app/features/dubbing/sentence_dubbing_controller.dart';
 import 'package:reader_app/features/dubbing/sentence_dubbing_page.dart';
 import 'package:reader_app/features/reader/original_audio_models.dart';
+import 'package:reader_app/features/reader/original_audio_player.dart';
 import 'package:reader_app/features/reader/original_audio_repository.dart';
 import 'package:reader_app/features/reader/point_reading_models.dart';
 import 'package:reader_app/features/reader/sentence_audio_player.dart';
@@ -24,6 +25,7 @@ void main() {
   late Directory temporary;
   late _Repository repository;
   late _Player player;
+  late _OriginalPlayer originalPlayer;
   late _Recorder recorder;
   late List<String> events;
   late ProviderContainer container;
@@ -34,13 +36,16 @@ void main() {
     repository = _Repository(temporary);
     events = [];
     player = _Player(events);
+    originalPlayer = _OriginalPlayer(events);
     recorder = _Recorder(temporary, events);
     container = ProviderContainer(overrides: [
       dubbingRepositoryProvider.overrideWith((_) async => repository),
       recordingServiceProvider.overrideWith((_) async => recorder),
       sentenceDubbingPreparationProtocolProvider
           .overrideWithValue(_ImmediatePreparation()),
+      sentenceDubbingPlaybackSettleProvider.overrideWithValue(Duration.zero),
       sentenceAudioPlayerProvider.overrideWithValue(player),
+      originalAudioPlayerProvider.overrideWithValue(originalPlayer),
       scoringProvider.overrideWithValue(_Scorer()),
       originalAudioBookProvider('book-copy').overrideWith((_) async => _book()),
     ]);
@@ -50,6 +55,7 @@ void main() {
     subscription?.close();
     container.dispose();
     await pumpEventQueue();
+    await originalPlayer.close();
     if (await temporary.exists()) await temporary.delete(recursive: true);
   });
 
@@ -73,9 +79,9 @@ void main() {
 
     await controller.startRecording();
     expect(current().phase, SentenceDubbingPhase.recording);
-    expect(player.played.single.path, 'original.ogg');
-    expect(player.played.single.start, Duration.zero);
-    expect(events.take(2), ['recorder.start', 'player.play']);
+    expect(originalPlayer.loadedPaths.single, 'original.ogg');
+    expect(originalPlayer.seeked.single, Duration.zero);
+    expect(events.take(2), ['recorder.start', 'original.play']);
 
     await controller.stopRecording();
 
@@ -100,16 +106,140 @@ void main() {
     expect(current().failure, contains('安全保存'));
   });
 
-  test('非首句示范从首词准确起播，不把句间笑声带入下一句', () async {
+  test('示范播放期间切后台会停止整轨并取消预热录音', () async {
+    final controller = await ready();
+    originalPlayer.holdPlayback = true;
+
+    final starting = controller.startRecording();
+    for (var attempt = 0;
+        attempt < 10 && !originalPlayer.playbackStarted;
+        attempt++) {
+      await pumpEventQueue();
+    }
+    expect(current().phase, SentenceDubbingPhase.demonstrating);
+
+    await controller.handleAppBackgrounded();
+    await starting;
+
+    expect(current().phase, SentenceDubbingPhase.ready);
+    expect(current().activeWordIndex, isNull);
+    expect(originalPlayer.stopCalls, greaterThanOrEqualTo(2));
+    expect(recorder.cancelCalls, 1);
+  });
+
+  test('句末时间到达后继续播放安全尾音，不会立刻进入录音', () async {
+    final controller = await ready();
+    originalPlayer.holdPlayback = true;
+
+    final starting = controller.startRecording();
+    for (var attempt = 0;
+        attempt < 10 && !originalPlayer.playbackStarted;
+        attempt++) {
+      await pumpEventQueue();
+    }
+    originalPlayer.emit(const Duration(milliseconds: 800));
+    await pumpEventQueue();
+    expect(current().phase, SentenceDubbingPhase.demonstrating);
+    expect(current().activeWordIndex, isNull);
+
+    originalPlayer.emit(const Duration(milliseconds: 1450));
+    await starting;
+    expect(current().phase, SentenceDubbingPhase.recording);
+    await controller.stopRecording();
+  });
+
+  test('示范音焦点提前中断时不会误导孩子直接开始录音', () async {
+    final controller = await ready();
+    originalPlayer.holdPlayback = true;
+
+    final starting = controller.startRecording();
+    for (var attempt = 0;
+        attempt < 10 && !originalPlayer.playbackStarted;
+        attempt++) {
+      await pumpEventQueue();
+    }
+    originalPlayer.emit(const Duration(milliseconds: 300));
+    await pumpEventQueue();
+    originalPlayer.interrupt();
+    await starting;
+
+    expect(current().phase, SentenceDubbingPhase.failed);
+    expect(current().isRecording, isFalse);
+    expect(recorder.cancelCalls, 1);
+  });
+
+  test('非首句利用句间空档预滚并保留尾音，避免首尾被截断', () async {
     final controller = await ready();
     await controller.nextSentence();
 
     await controller.startRecording();
 
-    expect(player.played.single.start, const Duration(seconds: 1));
-    expect(player.played.single.end, const Duration(seconds: 2));
-    expect(current().sentence.start, const Duration(seconds: 1));
+    expect(
+      originalPlayer.seeked.single,
+      const Duration(milliseconds: 1100),
+    );
+    expect(originalPlayer.pauseCalls, 1);
+    expect(current().sentence.start, const Duration(seconds: 2));
     await controller.stopRecording();
+  });
+
+  test('逐句示范复用整首绝对时钟，不再叠加固定视觉延迟', () async {
+    final controller = await ready();
+    await controller.nextSentence();
+    originalPlayer.holdPlayback = true;
+
+    final starting = controller.startRecording();
+    await pumpEventQueue();
+    expect(current().phase, SentenceDubbingPhase.demonstrating);
+    for (var attempt = 0;
+        attempt < 10 && !originalPlayer.playbackStarted;
+        attempt++) {
+      await pumpEventQueue();
+    }
+    expect(originalPlayer.playbackStarted, isTrue);
+
+    originalPlayer.emit(const Duration(milliseconds: 1900));
+    await pumpEventQueue();
+    expect(current().activeWordIndex, isNull);
+    originalPlayer.emit(const Duration(seconds: 2));
+    await pumpEventQueue();
+    expect(current().activeWordIndex, 0);
+
+    originalPlayer.emit(const Duration(milliseconds: 3650));
+    await starting;
+    await controller.stopRecording();
+  });
+
+  test('首次打开逐句页面不等待耗时的麦克风清理', () async {
+    final delayedRecorder = Completer<AudioRecordingService>();
+    final isolated = ProviderContainer(overrides: [
+      dubbingRepositoryProvider.overrideWith((_) async => repository),
+      recordingServiceProvider.overrideWith((_) => delayedRecorder.future),
+      sentenceDubbingPreparationProtocolProvider
+          .overrideWithValue(_ImmediatePreparation()),
+      sentenceDubbingPlaybackSettleProvider.overrideWithValue(Duration.zero),
+      sentenceAudioPlayerProvider.overrideWithValue(player),
+      originalAudioPlayerProvider.overrideWithValue(originalPlayer),
+      scoringProvider.overrideWithValue(_Scorer()),
+      originalAudioBookProvider('book-copy').overrideWith((_) async => _book()),
+    ]);
+    final lease = isolated.listen(
+      sentenceDubbingControllerProvider('book-copy'),
+      (_, __) {},
+      fireImmediately: true,
+    );
+    try {
+      final value = await isolated
+          .read(sentenceDubbingControllerProvider('book-copy').future)
+          .timeout(const Duration(seconds: 1));
+      expect(value.phase, SentenceDubbingPhase.ready);
+      expect(delayedRecorder.isCompleted, isFalse);
+    } finally {
+      delayedRecorder.complete(recorder);
+      lease.close();
+      isolated.dispose();
+      await pumpEventQueue();
+    }
   });
 
   test('删除录音时有剩余就保留结果操作，删空后才显示开始', () async {
@@ -146,7 +276,7 @@ void main() {
 
     expect(current().sentence.id, 's2');
     expect(current().phase, SentenceDubbingPhase.recording);
-    expect(player.played, hasLength(2));
+    expect(originalPlayer.seeked, hasLength(2));
     await controller.stopRecording();
   });
 
@@ -182,7 +312,7 @@ void main() {
 OriginalAudioBook _book() => OriginalAudioBook(
       libraryId: 'book-copy',
       audioPath: 'original.ogg',
-      duration: const Duration(seconds: 2),
+      duration: const Duration(seconds: 4),
       sourceBookId: 'source-book',
       resourceSha256: 'a' * 64,
       timelineSha256: 'b' * 64,
@@ -206,14 +336,14 @@ OriginalAudioBook _book() => OriginalAudioBook(
           id: 's2',
           sequence: 2,
           text: 'Goodbye.',
-          start: const Duration(seconds: 1),
-          end: const Duration(seconds: 2),
+          start: const Duration(seconds: 2),
+          end: const Duration(seconds: 3),
           words: const [
             OriginalAudioWord(
               sequence: 1,
               text: 'Goodbye',
-              start: Duration(seconds: 1),
-              end: Duration(seconds: 2),
+              start: Duration(seconds: 2),
+              end: Duration(seconds: 3),
             ),
           ],
         ),
@@ -237,6 +367,7 @@ final class _Recorder implements AudioRecordingService {
   final Directory directory;
   final List<String> events;
   late String path;
+  var cancelCalls = 0;
 
   @override
   Future<RecordingSession> start({
@@ -252,7 +383,7 @@ final class _Recorder implements AudioRecordingService {
   @override
   Future<String> stop() async => path;
   @override
-  Future<void> cancel() async {}
+  Future<void> cancel() async => cancelCalls++;
   @override
   Future<void> dispose() async {}
 }
@@ -262,6 +393,10 @@ final class _Player implements SentenceAudioPlayer {
 
   final List<String> events;
   final played = <SentenceAudioClip>[];
+  var holdPlayback = false;
+  void Function(Duration elapsed)? _onPosition;
+  Completer<void>? _playback;
+  bool get playbackStarted => _playback != null;
 
   @override
   Future<void> play(
@@ -271,13 +406,103 @@ final class _Player implements SentenceAudioPlayer {
     events.add('player.play');
     played.add(clip);
     onPosition?.call(Duration.zero);
+    if (holdPlayback) {
+      _onPosition = onPosition;
+      _playback = Completer<void>();
+      await _playback!.future;
+      return;
+    }
     onPosition?.call(clip.end - clip.start);
   }
 
+  void emit(Duration elapsed) => _onPosition?.call(elapsed);
+
+  void finish() {
+    final playback = _playback;
+    if (playback != null && !playback.isCompleted) playback.complete();
+    _playback = null;
+    _onPosition = null;
+  }
+
   @override
-  Future<void> stop() async {}
+  Future<void> stop() async => finish();
   @override
   Future<void> dispose() async {}
+}
+
+final class _OriginalPlayer implements OriginalAudioPlayer {
+  _OriginalPlayer(this.events);
+
+  final List<String> events;
+  final loadedPaths = <String>[];
+  final seeked = <Duration>[];
+  final _positions = StreamController<Duration>.broadcast();
+  final _playing = StreamController<bool>.broadcast();
+  var holdPlayback = false;
+  var pauseCalls = 0;
+  var stopCalls = 0;
+  Completer<void>? _playback;
+
+  bool get playbackStarted => _playback != null;
+
+  @override
+  Stream<Duration> get positionStream => _positions.stream;
+
+  @override
+  Stream<bool> get playingStream => _playing.stream;
+
+  @override
+  Future<void> load(String path) async => loadedPaths.add(path);
+
+  @override
+  Future<void> play() async {
+    events.add('original.play');
+    _playback = Completer<void>();
+    _playing.add(true);
+    if (holdPlayback) return _playback!.future;
+    _positions.add(seeked.last);
+    await pumpEventQueue();
+    _positions.add(const Duration(seconds: 10));
+    _playing.add(false);
+    _playback!.complete();
+    _playback = null;
+  }
+
+  void emit(Duration position) => _positions.add(position);
+
+  void interrupt() => _playing.add(false);
+
+  @override
+  Future<void> pause() async {
+    pauseCalls++;
+    _playing.add(false);
+    final playback = _playback;
+    if (playback != null && !playback.isCompleted) playback.complete();
+    _playback = null;
+  }
+
+  @override
+  Future<void> seek(Duration position) async => seeked.add(position);
+
+  @override
+  Future<void> setVolume(double volume) async {}
+
+  @override
+  Future<void> stop() async {
+    stopCalls++;
+    final playback = _playback;
+    if (playback != null && !playback.isCompleted) playback.complete();
+    _playback = null;
+    _playing.add(false);
+  }
+
+  @override
+  Future<void> dispose() async {}
+
+  Future<void> close() async {
+    await _positions.close();
+    await _playing.close();
+  }
 }
 
 final class _Scorer implements ScoringProvider {

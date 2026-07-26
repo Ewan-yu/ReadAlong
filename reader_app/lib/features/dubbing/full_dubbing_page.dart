@@ -71,7 +71,11 @@ class _FullDubbingPageState extends ConsumerState<FullDubbingPage>
               child: state.maybeWhen(
                 data: (value) => Center(
                   child: Text(
-                    value.isComplete ? '已完成' : '草稿',
+                    value.isComplete
+                        ? '作品已生成'
+                        : value.mixes.isNotEmpty
+                            ? '有旧作品'
+                            : '录音自动保存',
                     style: const TextStyle(
                       color: AppColors.primaryDark,
                       fontWeight: FontWeight.w700,
@@ -134,12 +138,8 @@ class _FullDubbingView extends ConsumerWidget {
               onPlayTake: (take) => unawaited(controller.playTake(take)),
               onScoreTake: (take) => unawaited(controller.scoreTake(take)),
               onSelectTake: (take) => unawaited(controller.selectTake(take.id)),
-              onDeleteTake: (take) => unawaited(controller.deleteTake(take.id)),
-              onSaveDraft: () => unawaited(controller.saveDraft()),
-              onComplete: () => unawaited(controller.complete()),
               onCreateMix: () => unawaited(controller.createMix()),
               onPlayMix: (mix) => unawaited(controller.playMix(mix)),
-              onDeleteMix: (mix) => unawaited(controller.deleteMix(mix.id)),
             ),
     );
   }
@@ -357,12 +357,8 @@ class _FullDubbingHome extends StatelessWidget {
     required this.onPlayTake,
     required this.onScoreTake,
     required this.onSelectTake,
-    required this.onDeleteTake,
-    required this.onSaveDraft,
-    required this.onComplete,
     required this.onCreateMix,
     required this.onPlayMix,
-    required this.onDeleteMix,
   });
 
   final FullDubbingState state;
@@ -372,19 +368,19 @@ class _FullDubbingHome extends StatelessWidget {
   final ValueChanged<DubbingTake> onPlayTake;
   final ValueChanged<DubbingTake> onScoreTake;
   final ValueChanged<DubbingTake> onSelectTake;
-  final ValueChanged<DubbingTake> onDeleteTake;
-  final VoidCallback onSaveDraft;
-  final VoidCallback onComplete;
   final VoidCallback onCreateMix;
   final ValueChanged<DubbingMix> onPlayMix;
-  final ValueChanged<DubbingMix> onDeleteMix;
 
   @override
   Widget build(BuildContext context) => ListView(
         padding: const EdgeInsets.all(AppSpacing.pageMargin),
         children: [
           Text(
-            state.takes.isEmpty ? '准备好，就来讲完整故事' : '再讲一遍，或者完成作品',
+            state.takes.isEmpty
+                ? '准备好，就来讲完整故事'
+                : state.isComplete
+                    ? '作品已生成，还可以再讲一遍'
+                    : '录音已保存，可以完成作品',
             textAlign: TextAlign.center,
             style: const TextStyle(
               fontSize: 28,
@@ -520,7 +516,6 @@ class _FullDubbingHome extends StatelessWidget {
                         onSelected: (value) {
                           if (value == 'score') onScoreTake(take);
                           if (value == 'select') onSelectTake(take);
-                          if (value == 'delete') onDeleteTake(take);
                         },
                         itemBuilder: (_) => [
                           const PopupMenuItem(
@@ -532,10 +527,6 @@ class _FullDubbingHome extends StatelessWidget {
                               value: 'select',
                               child: Text('使用这一版'),
                             ),
-                          const PopupMenuItem(
-                            value: 'delete',
-                            child: Text('删除这条录音'),
-                          ),
                         ],
                       ),
                     ],
@@ -545,24 +536,25 @@ class _FullDubbingHome extends StatelessWidget {
           ),
           if (selected != null) ...[
             const SizedBox(height: AppSpacing.cardPadding),
-            Row(
+            const Row(
+              mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                Expanded(
-                  child: OutlinedButton(
-                    onPressed: state.isBusy ? null : onSaveDraft,
-                    child: const Text('保存为草稿'),
-                  ),
+                Icon(
+                  Icons.cloud_done_outlined,
+                  size: 20,
+                  color: AppColors.success,
                 ),
-                const SizedBox(width: AppSpacing.cardPadding),
-                Expanded(
-                  child: FilledButton(
-                    onPressed: state.isBusy ? null : onComplete,
-                    child: const Text('确认完成故事'),
+                SizedBox(width: AppSpacing.unit),
+                Flexible(
+                  child: Text(
+                    '录音已经自动保存；生成作品后才算完成故事',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(color: AppColors.textSecondary),
                   ),
                 ),
               ],
             ),
-            const SizedBox(height: AppSpacing.unit),
+            const SizedBox(height: AppSpacing.cardPadding),
             FilledButton.icon(
               key: const ValueKey('full-dubbing-create-work'),
               onPressed: state.isBusy ? null : onCreateMix,
@@ -570,9 +562,13 @@ class _FullDubbingHome extends StatelessWidget {
               label: Text(
                 state.phase == FullDubbingPhase.mixing
                     ? '正在生成作品…'
-                    : state.original.backgroundPath == null
-                        ? '生成纯人声作品'
-                        : '生成背景音乐作品',
+                    : state.isComplete
+                        ? state.original.backgroundPath == null
+                            ? '重新生成纯人声作品'
+                            : '重新生成背景音乐作品'
+                        : state.original.backgroundPath == null
+                            ? '生成纯人声作品并完成'
+                            : '生成背景音乐作品并完成',
               ),
             ),
           ],
@@ -608,13 +604,6 @@ class _FullDubbingHome extends StatelessWidget {
                           ? Icons.pause_rounded
                           : Icons.play_arrow_rounded,
                     ),
-                  ),
-                  IconButton(
-                    tooltip: '删除作品',
-                    onPressed: state.isBusy
-                        ? null
-                        : () => onDeleteMix(state.mixes.first),
-                    icon: const Icon(Icons.delete_outline_rounded),
                   ),
                 ],
               ),
@@ -666,6 +655,7 @@ class _OriginalPreviewPanel extends StatelessWidget {
               currentFontSize: 28,
               neighbourFontSize: 17,
               semanticLabel: '完整配音原音试听歌词',
+              compact: true,
             ),
           ),
           LinearProgressIndicator(

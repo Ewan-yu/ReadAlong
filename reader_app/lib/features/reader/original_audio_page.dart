@@ -92,10 +92,11 @@ class _OriginalAudioErrorPage extends StatelessWidget {
 
 class _OriginalAudioAppBar extends StatelessWidget
     implements PreferredSizeWidget {
-  const _OriginalAudioAppBar({this.title, this.libraryId});
+  const _OriginalAudioAppBar({this.title, this.libraryId, this.onDubbing});
 
   final String? title;
   final String? libraryId;
+  final VoidCallback? onDubbing;
 
   @override
   Size get preferredSize => const Size.fromHeight(AppSizes.topBarHeight);
@@ -113,7 +114,8 @@ class _OriginalAudioAppBar extends StatelessWidget
         actions: [
           if (libraryId != null)
             TextButton.icon(
-              onPressed: () => context.go('/reader/$libraryId/dub'),
+              onPressed:
+                  onDubbing ?? () => context.go('/reader/$libraryId/dub'),
               icon: const Icon(Icons.mic_none_rounded),
               label: const Text('去配音'),
             ),
@@ -163,6 +165,7 @@ class _OriginalAudioPlaybackViewState
   var _isPrepared = false;
   var _isSeeking = false;
   var _resumeAfterSeek = false;
+  var _leavingForDubbing = false;
   String? _playbackError;
 
   late final OriginalAudioPlayer _player;
@@ -224,6 +227,21 @@ class _OriginalAudioPlaybackViewState
       // Native audio focus failures should not turn a valid timeline into an
       // unavailable page. The next explicit play remains the recovery path.
     }
+  }
+
+  Future<void> _openDubbing() async {
+    if (_leavingForDubbing) return;
+    _leavingForDubbing = true;
+    try {
+      // Release the long original-audio decoder before the next route starts
+      // loading. This avoids a first-transition MediaCodec/audio-focus race on
+      // Android emulators and lower-memory tablets.
+      await _player.stop().timeout(const Duration(seconds: 2));
+    } on Object {
+      // Navigation remains available even when Android has already reclaimed
+      // the decoder; the destination owns an independent audio player.
+    }
+    if (mounted) context.go('/reader/${widget.book.libraryId}/dub');
   }
 
   void _onPosition(Duration position) {
@@ -317,6 +335,7 @@ class _OriginalAudioPlaybackViewState
       appBar: _OriginalAudioAppBar(
         title: widget.book.title,
         libraryId: widget.book.libraryId,
+        onDubbing: () => unawaited(_openDubbing()),
       ),
       body: SafeArea(
         top: false,

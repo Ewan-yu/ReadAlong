@@ -693,9 +693,13 @@ class _ReaderViewState extends ConsumerState<_ReaderView>
       barrierDismissible: false,
       builder: (dialogContext) => PopScope(
         canPop: false,
-        child: _FollowScoreDialog(
+        child: FollowScoreDialog(
           sentence: sentence,
           score: score,
+          onClose: () {
+            Navigator.of(dialogContext).pop();
+            unawaited(_finishScoreAndClose());
+          },
           onDemo: () {
             Navigator.of(dialogContext).pop();
             unawaited(_finishScoreAndPlayDemonstration());
@@ -723,6 +727,12 @@ class _ReaderViewState extends ConsumerState<_ReaderView>
     await controller.acknowledgeResult();
     await controller.playDemonstration();
   }
+
+  Future<void> _finishScoreAndClose() => ref
+      .read(
+        followReadingControllerProvider(widget.book.libraryId).notifier,
+      )
+      .acknowledgeResult();
 
   Future<void> _finishScoreAndRecordAgain() async {
     final controller = ref.read(
@@ -1393,10 +1403,11 @@ class _RecordingMeter extends StatelessWidget {
       );
 }
 
-class _FollowScoreDialog extends StatelessWidget {
-  const _FollowScoreDialog({
+class FollowScoreDialog extends StatelessWidget {
+  const FollowScoreDialog({
     required this.sentence,
     required this.score,
+    required this.onClose,
     required this.onDemo,
     required this.onMyRecording,
     required this.onRepeat,
@@ -1404,6 +1415,7 @@ class _FollowScoreDialog extends StatelessWidget {
   });
   final ReaderSentence sentence;
   final ScoreResult score;
+  final VoidCallback onClose;
   final VoidCallback onDemo;
   final VoidCallback onMyRecording;
   final VoidCallback onRepeat;
@@ -1425,68 +1437,87 @@ class _FollowScoreDialog extends StatelessWidget {
       ),
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 460),
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(
-            AppSpacing.pageMargin,
-            AppSpacing.cardPadding,
-            AppSpacing.pageMargin,
-            AppSpacing.cardPadding,
-          ),
-          child: Semantics(
-            liveRegion: true,
-            label: '跟读评价：$message',
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Icon(Icons.celebration_rounded,
-                    color: AppColors.accent, size: 34),
-                const SizedBox(height: AppSpacing.unit),
-                _Stars(stars: score.stars),
-                const SizedBox(height: AppSpacing.unit),
-                Text(
-                  message,
-                  style: const TextStyle(
-                    fontSize: 24,
-                    fontWeight: FontWeight.w800,
-                    color: AppColors.primaryDark,
-                  ),
-                ),
-                const SizedBox(height: AppSpacing.cardPadding),
-                _ScoredSentence(sentence: sentence, scores: score.words),
-                const SizedBox(height: AppSpacing.cardPadding),
-                Wrap(
-                  spacing: AppSpacing.unit,
-                  runSpacing: AppSpacing.unit,
-                  alignment: WrapAlignment.center,
+        child: Stack(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(
+                AppSpacing.pageMargin,
+                AppSpacing.pageMargin + 12,
+                AppSpacing.pageMargin,
+                AppSpacing.cardPadding,
+              ),
+              child: Semantics(
+                liveRegion: true,
+                label: '跟读评价：$message',
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
                   children: [
-                    OutlinedButton.icon(
-                      onPressed: onDemo,
-                      icon: const Icon(Icons.volume_up_outlined),
-                      label: const Text('听示范'),
+                    const Icon(Icons.celebration_rounded,
+                        color: AppColors.accent, size: 34),
+                    const SizedBox(height: AppSpacing.unit),
+                    _Stars(stars: score.stars),
+                    const SizedBox(height: AppSpacing.unit),
+                    Text(
+                      message,
+                      style: const TextStyle(
+                        fontSize: 24,
+                        fontWeight: FontWeight.w800,
+                        color: AppColors.primaryDark,
+                      ),
                     ),
-                    OutlinedButton.icon(
-                      key: const ValueKey('follow-play-my-recording'),
-                      onPressed: onMyRecording,
-                      icon: const Icon(Icons.play_arrow_rounded),
-                      label: const Text('听我的录音'),
+                    const SizedBox(height: AppSpacing.cardPadding),
+                    _ScoredSentence(sentence: sentence, scores: score.words),
+                    const SizedBox(height: AppSpacing.cardPadding),
+                    Wrap(
+                      spacing: AppSpacing.unit,
+                      runSpacing: AppSpacing.unit,
+                      alignment: WrapAlignment.center,
+                      children: [
+                        OutlinedButton.icon(
+                          onPressed: onDemo,
+                          icon: const Icon(Icons.volume_up_outlined),
+                          label: const Text('听示范'),
+                        ),
+                        OutlinedButton.icon(
+                          key: const ValueKey('follow-play-my-recording'),
+                          onPressed: onMyRecording,
+                          icon: const Icon(Icons.play_arrow_rounded),
+                          label: const Text('听我的录音'),
+                        ),
+                        OutlinedButton.icon(
+                          onPressed: onRepeat,
+                          icon: const Icon(Icons.replay_rounded),
+                          label: const Text('再读一次'),
+                        ),
+                        FilledButton.icon(
+                          onPressed: onNext,
+                          icon: const Icon(Icons.arrow_forward_rounded),
+                          label: const Text('下一句'),
+                        ),
+                      ],
                     ),
-                    OutlinedButton.icon(
-                      onPressed: onRepeat,
-                      icon: const Icon(Icons.replay_rounded),
-                      label: const Text('再读一次'),
-                    ),
-                    FilledButton.icon(
-                      onPressed: onNext,
-                      icon: const Icon(Icons.arrow_forward_rounded),
-                      label: const Text('下一句'),
-                    ),
+                    const SizedBox(height: AppSpacing.unit),
+                    _ScoreDetails(score: score),
                   ],
                 ),
-                const SizedBox(height: AppSpacing.unit),
-                _ScoreDetails(score: score),
-              ],
+              ),
             ),
-          ),
+            Positioned(
+              top: 4,
+              right: 4,
+              child: IconButton(
+                key: const ValueKey('follow-score-close'),
+                onPressed: onClose,
+                tooltip: '关闭评价',
+                icon: const Icon(Icons.close_rounded),
+                iconSize: 28,
+                constraints: const BoxConstraints.tightFor(
+                  width: 48,
+                  height: 48,
+                ),
+              ),
+            ),
+          ],
         ),
       ),
     );

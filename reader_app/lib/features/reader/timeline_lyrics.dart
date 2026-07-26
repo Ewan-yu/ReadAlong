@@ -18,6 +18,7 @@ class TimelineLyrics extends StatelessWidget {
     this.currentFontSize = AppSizes.originalAudioCurrentLyric,
     this.neighbourFontSize = AppSizes.originalAudioNeighbourLyric,
     this.semanticLabel = '歌词',
+    this.compact = false,
   });
 
   final List<OriginalAudioSentence> sentences;
@@ -27,6 +28,10 @@ class TimelineLyrics extends StatelessWidget {
   final double currentFontSize;
   final double neighbourFontSize;
   final String semanticLabel;
+
+  /// Uses tighter vertical spacing for embedded previews with a bounded
+  /// height. Full-screen lyrics keep the larger child-friendly touch targets.
+  final bool compact;
 
   @override
   Widget build(BuildContext context) {
@@ -38,7 +43,9 @@ class TimelineLyrics extends StatelessWidget {
     return Semantics(
       label: '$semanticLabel，第 ${currentIndex + 1} 句，共 ${sentences.length} 句',
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: AppSpacing.pageMargin),
+        padding: EdgeInsets.symmetric(
+          horizontal: compact ? AppSpacing.cardPadding : AppSpacing.pageMargin,
+        ),
         child: Column(
           key: const ValueKey('original-audio-lyrics'),
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -48,6 +55,7 @@ class TimelineLyrics extends StatelessWidget {
               _NeighbourLyric(
                 sentence: previous,
                 fontSize: neighbourFontSize,
+                compact: compact,
                 onTap: onSentenceTap == null
                     ? null
                     : () => onSentenceTap!(currentIndex - 1),
@@ -61,6 +69,7 @@ class TimelineLyrics extends StatelessWidget {
                 sentence: current,
                 activeWordIndex: activeWordIndex,
                 fontSize: currentFontSize,
+                compact: compact,
                 onTap: onSentenceTap == null
                     ? null
                     : () => onSentenceTap!(currentIndex),
@@ -70,6 +79,7 @@ class TimelineLyrics extends StatelessWidget {
               _NeighbourLyric(
                 sentence: next,
                 fontSize: neighbourFontSize,
+                compact: compact,
                 onTap: onSentenceTap == null
                     ? null
                     : () => onSentenceTap!(currentIndex + 1),
@@ -85,23 +95,34 @@ class _NeighbourLyric extends StatelessWidget {
   const _NeighbourLyric({
     required this.sentence,
     required this.fontSize,
+    required this.compact,
     this.onTap,
   });
 
   final OriginalAudioSentence sentence;
   final double fontSize;
+  final bool compact;
   final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.symmetric(vertical: AppSpacing.cardPadding),
+        padding: EdgeInsets.symmetric(
+          vertical: compact ? 2 : AppSpacing.cardPadding,
+        ),
         child: TextButton(
           onPressed: onTap,
           style: TextButton.styleFrom(
             alignment: Alignment.centerLeft,
             padding: EdgeInsets.zero,
-            minimumSize:
-                const Size(AppSizes.minTouchTarget, AppSizes.minTouchTarget),
+            minimumSize: compact && onTap == null
+                ? Size.zero
+                : const Size(
+                    AppSizes.minTouchTarget,
+                    AppSizes.minTouchTarget,
+                  ),
+            tapTargetSize: compact && onTap == null
+                ? MaterialTapTargetSize.shrinkWrap
+                : null,
           ),
           child: Text(
             sentence.text,
@@ -123,12 +144,14 @@ class _CurrentLyric extends StatelessWidget {
     required this.sentence,
     required this.activeWordIndex,
     required this.fontSize,
+    required this.compact,
     this.onTap,
   });
 
   final OriginalAudioSentence sentence;
   final int? activeWordIndex;
   final double fontSize;
+  final bool compact;
   final VoidCallback? onTap;
 
   @override
@@ -152,7 +175,9 @@ class _CurrentLyric extends StatelessWidget {
         onTap: onTap,
         borderRadius: BorderRadius.circular(AppRadius.subtitleBar),
         child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: AppSpacing.cardPadding),
+          padding: EdgeInsets.symmetric(
+            vertical: compact ? AppSpacing.unit / 2 : AppSpacing.cardPadding,
+          ),
           child: Text.rich(
             TextSpan(
               children: [
@@ -177,7 +202,7 @@ class _CurrentLyric extends StatelessWidget {
               fontSize: fontSize,
               height: 1.32,
             ),
-            maxLines: 3,
+            maxLines: compact ? 2 : 3,
             overflow: TextOverflow.ellipsis,
           ),
         ),

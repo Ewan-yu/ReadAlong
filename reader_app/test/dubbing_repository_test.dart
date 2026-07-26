@@ -288,6 +288,36 @@ void main() {
         [second.id]);
   });
 
+  test('统一管理删除当前版本后自动选用最新剩余录音', () async {
+    final repository = repositoryWithIds(['project-1', 'take-1', 'take-2']);
+    final project = await createSentenceProject(repository);
+    final first = await repository.saveTake(
+      projectId: project.id,
+      kind: DubbingTakeKind.sentence,
+      sentenceId: 's0001',
+      sourceAudio: await recording('first'),
+      duration: const Duration(milliseconds: 800),
+    );
+    final second = await repository.saveTake(
+      projectId: project.id,
+      kind: DubbingTakeKind.sentence,
+      sentenceId: 's0001',
+      sourceAudio: await recording('second'),
+      duration: const Duration(milliseconds: 900),
+    );
+    await repository.selectTake(second.id);
+
+    await repository.deleteTake(second.id);
+
+    final remaining = await repository.listTakes(
+      project.id,
+      sentenceId: 's0001',
+    );
+    expect(remaining.single.id, first.id);
+    expect(remaining.single.isSelected, isTrue);
+    expect(File(repository.resolveAudioPath(second)).existsSync(), isFalse);
+  });
+
   test('项目模式、录音类型和私有相对路径严格匹配', () async {
     final repository = repositoryWithIds(['project-1', 'take-1']);
     final project = await createSentenceProject(repository);

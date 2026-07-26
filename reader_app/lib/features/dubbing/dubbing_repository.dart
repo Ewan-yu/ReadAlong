@@ -207,6 +207,17 @@ final class LocalDubbingRepository implements DubbingRepository {
     final take = await _shelfIndex.findDubbingTake(takeId);
     if (take == null) return;
     await _shelfIndex.deleteDubbingTake(takeId);
+    if (take.isSelected) {
+      final remaining = await _shelfIndex.listDubbingTakes(
+        take.projectId,
+        sentenceId:
+            take.takeKind == DubbingTakeKind.sentence ? take.sentenceId : null,
+      );
+      if (remaining.isNotEmpty &&
+          !remaining.any((candidate) => candidate.isSelected)) {
+        await _shelfIndex.selectDubbingTake(remaining.first.id);
+      }
+    }
     await _fileStore.deleteRelativeFile(take.audioRelativePath);
   }
 

@@ -116,7 +116,8 @@ final fullDubbingControllerProvider = AutoDisposeAsyncNotifierProviderFamily<
 
 final class FullDubbingController
     extends AutoDisposeFamilyAsyncNotifier<FullDubbingState, String> {
-  late final AudioRecordingService _recorder;
+  late final Future<AudioRecordingService> _recorderFuture;
+  AudioRecordingService? _recorder;
   late final DubbingRepository _repository;
   late final ScoringProvider _scorer;
   late final DubbingMixService _mixService;
@@ -136,6 +137,7 @@ final class FullDubbingController
   Duration _playbackEnd = Duration.zero;
   var _finishingPlayback = false;
   var _changingPlayback = false;
+  var _playbackCommand = 0;
   var _generation = 0;
   var _stopping = false;
   var _disposed = false;
@@ -143,7 +145,9 @@ final class FullDubbingController
   @override
   Future<FullDubbingState> build(String libraryId) async {
     _repository = await ref.watch(dubbingRepositoryProvider.future);
-    _recorder = await ref.watch(recordingServiceProvider.future);
+    // Do not keep the first page frame waiting for microphone cache cleanup.
+    // The service remains watched and is awaited only when recording starts.
+    _recorderFuture = ref.watch(recordingServiceProvider.future);
     _scorer = ref.watch(scoringProvider);
     _mixService = ref.watch(dubbingMixServiceProvider);
     _preparation = ref.watch(recordingPreparationProtocolProvider);
@@ -211,10 +215,19 @@ final class FullDubbingController
       if (!_isCurrent(generation) || draftProject == null) return;
       current = current.copyWith(project: draftProject);
     }
+    _set(current.copyWith(
+      phase: FullDubbingPhase.preparing,
+      countdown: 0,
+      elapsed: Duration.zero,
+      level: 0,
+      failure: null,
+    ));
     try {
-      final session = await _recorder.start(libraryId: arg, sentenceId: 'full');
+      final recorder = _recorder ??= await _recorderFuture;
+      if (!_isCurrent(generation)) return;
+      final session = await recorder.start(libraryId: arg, sentenceId: 'full');
       if (!_isCurrent(generation)) {
-        await _recorder.cancel();
+        await recorder.cancel();
         return;
       }
       _backgroundLoaded = false;
@@ -257,13 +270,13 @@ final class FullDubbingController
         },
       );
       if (!_isCurrent(generation)) {
-        await _recorder.cancel();
+        await recorder.cancel();
         return;
       }
       await _beginRecording(generation, session);
     } on RecordingPreparationCancelled {
       try {
-        await _recorder.cancel();
+        await _recorder?.cancel();
       } on Object {}
     } on RecordingException catch (error) {
       if (_isCurrent(generation)) _fail(error.message);
@@ -280,7 +293,7 @@ final class FullDubbingController
       return;
     }
     ++_generation;
-    await _recorder.cancel();
+    await _recorder?.cancel();
     try {
       await _audioPlayer.stop();
     } on Object {}
@@ -343,7 +356,11 @@ final class FullDubbingController
         await _audioPlayer.stop();
       } on Object {}
       _audioMode = _FullAudioMode.none;
-      final path = await _recorder.stop();
+      final recorder = _recorder;
+      if (recorder == null) {
+        throw const RecordingException('录音服务尚未准备好，请再试一次');
+      }
+      final path = await recorder.stop();
       if (!_isCurrent(generation)) return;
       final duration = _stopwatch?.elapsed ?? current.elapsed;
       final take = await _repository.saveTake(
@@ -402,9 +419,6 @@ final class FullDubbingController
       end: current.original.duration,
     );
   }
-
-  Future<void> saveDraft() => _setStatus(DubbingProjectStatus.draft);
-  Future<void> complete() => _setStatus(DubbingProjectStatus.complete);
 
   /// Android may remove audio focus or suspend the process at any time. Never
   /// let recording continue invisibly: cancel a preparation, or stop and
@@ -468,6 +482,11 @@ final class FullDubbingController
         sourceTakeFingerprint: plan.sourceTakeFingerprint,
         duration: result.duration,
       );
+      // “完成”必须对应一个真正可回放的作品，而不是只改变角标。
+      await _repository.updateProjectStatus(
+        current.project.id,
+        DubbingProjectStatus.complete,
+      );
       await _refresh();
     } on DubbingMixInputException catch (error) {
       _fail(error.message);
@@ -493,6 +512,12 @@ final class FullDubbingController
       await _stopPlayback(clearState: true);
     }
     await _repository.deleteMix(mixId);
+    if (current.mixes.length == 1 && current.mixes.single.id == mixId) {
+      await _repository.updateProjectStatus(
+        current.project.id,
+        DubbingProjectStatus.draft,
+      );
+    }
     await _refresh();
   }
 
@@ -534,13 +559,6 @@ final class FullDubbingController
     }
   }
 
-  Future<void> _setStatus(DubbingProjectStatus status) async {
-    final current = state.valueOrNull;
-    if (current == null || current.isBusy) return;
-    await _repository.updateProjectStatus(current.project.id, status);
-    await _refresh();
-  }
-
   Future<void> _refresh(
       {FullDubbingPhase phase = FullDubbingPhase.ready}) async {
     final current = state.valueOrNull;
@@ -577,7 +595,7 @@ final class FullDubbingController
     await _audioPlaying?.cancel();
     _audioPlaying = null;
     try {
-      await _recorder.cancel();
+      await _recorder?.cancel();
     } on Object {}
     try {
       await _audioPlayer.stop();
@@ -629,8 +647,10 @@ final class FullDubbingController
     final sameAudio = _audioMode == mode && _audioId == id;
     try {
       if (sameAudio && current.audioPlaying) {
+        ++_playbackCommand;
         await _audioPlayer.pause();
-        _set(current.copyWith(audioPlaying: false));
+        final latest = state.valueOrNull;
+        if (latest != null) _set(latest.copyWith(audioPlaying: false));
         return true;
       }
       if (sameAudio) {
@@ -641,9 +661,7 @@ final class FullDubbingController
           _set(current.copyWith(playbackPosition: Duration.zero));
         }
         await _audioPlayer.setVolume(1);
-        await _audioPlayer.play();
-        final latest = state.valueOrNull;
-        if (latest != null) _set(latest.copyWith(audioPlaying: true));
+        _beginPlayback(mode: mode, id: id);
         return true;
       }
 
@@ -664,9 +682,10 @@ final class FullDubbingController
         audioPlaying: false,
         failure: null,
       ));
-      await _audioPlayer.play();
-      final latest = state.valueOrNull;
-      if (latest != null) _set(latest.copyWith(audioPlaying: true));
+      // just_audio's play Future stays pending until playback stops. Do not
+      // await it here, otherwise _changingPlayback remains true for the whole
+      // recording and the visible pause button cannot handle another tap.
+      _beginPlayback(mode: mode, id: id);
       return true;
     } on Object {
       _audioMode = _FullAudioMode.none;
@@ -686,6 +705,52 @@ final class FullDubbingController
       return false;
     } finally {
       _changingPlayback = false;
+    }
+  }
+
+  void _beginPlayback({required _FullAudioMode mode, String? id}) {
+    final command = ++_playbackCommand;
+    final current = state.valueOrNull;
+    if (current != null) _set(current.copyWith(audioPlaying: true));
+    try {
+      final playback = _audioPlayer.play();
+      unawaited(playback.catchError((Object _) {
+        if (_disposed ||
+            command != _playbackCommand ||
+            _audioMode != mode ||
+            _audioId != id) {
+          return;
+        }
+        _audioMode = _FullAudioMode.none;
+        _audioId = null;
+        _playbackStart = Duration.zero;
+        _playbackEnd = Duration.zero;
+        final latest = state.valueOrNull;
+        if (latest != null) {
+          _set(latest.copyWith(
+            playbackKind: FullDubbingPlaybackKind.none,
+            playbackId: null,
+            playbackPosition: Duration.zero,
+            audioPlaying: false,
+            failure: '声音暂时不能播放，录音仍然安全保留。',
+          ));
+        }
+      }));
+    } on Object {
+      if (command == _playbackCommand) {
+        _audioMode = _FullAudioMode.none;
+        _audioId = null;
+        final latest = state.valueOrNull;
+        if (latest != null) {
+          _set(latest.copyWith(
+            playbackKind: FullDubbingPlaybackKind.none,
+            playbackId: null,
+            playbackPosition: Duration.zero,
+            audioPlaying: false,
+            failure: '声音暂时不能播放，录音仍然安全保留。',
+          ));
+        }
+      }
     }
   }
 
@@ -719,6 +784,7 @@ final class FullDubbingController
   Future<void> _finishPlayback() async {
     if (_finishingPlayback) return;
     _finishingPlayback = true;
+    ++_playbackCommand;
     final finishingMode = _audioMode;
     final finishingId = _audioId;
     final finishingStart = _playbackStart;
@@ -742,6 +808,7 @@ final class FullDubbingController
   }
 
   Future<void> _stopPlayback({required bool clearState}) async {
+    ++_playbackCommand;
     _audioMode = _FullAudioMode.none;
     _audioId = null;
     _playbackStart = Duration.zero;

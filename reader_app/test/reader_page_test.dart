@@ -16,6 +16,7 @@ import 'package:reader_app/features/reader/reader_models.dart';
 import 'package:reader_app/features/reader/reader_page.dart';
 import 'package:reader_app/features/reader/reader_repository.dart';
 import 'package:reader_app/features/reader/sentence_audio_player.dart';
+import 'package:reader_app/services/scoring/score_models.dart';
 
 const _png =
     'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
@@ -231,6 +232,39 @@ void main() {
     expect(find.text('这本绘本暂时打不开'), findsOneWidget);
     expect(find.text('资源可能已损坏，请返回书架后重新导入'), findsOneWidget);
     expect(find.textContaining('broken manifest'), findsNothing);
+  });
+
+  testWidgets('跟读评价提供 48dp 独立关闭按钮', (tester) async {
+    final target = sentence(
+      id: 'follow-one',
+      sequence: 1,
+      text: 'My dad.',
+      bbox: const NormalizedRect(x: .1, y: .1, width: .4, height: .1),
+    );
+    var closed = false;
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: FollowScoreDialog(
+          sentence: target,
+          score: const ScoreResult(childScore: 90, provider: 'widget-test'),
+          onClose: () => closed = true,
+          onDemo: () {},
+          onMyRecording: () {},
+          onRepeat: () {},
+          onNext: () {},
+        ),
+      ),
+    ));
+
+    expect(find.byKey(const ValueKey('follow-score-dialog')), findsOneWidget);
+    expect(find.byTooltip('关闭评价'), findsOneWidget);
+    expect(
+      tester.getSize(find.byKey(const ValueKey('follow-score-close'))),
+      const Size(48, 48),
+    );
+
+    await tester.tap(find.byKey(const ValueKey('follow-score-close')));
+    expect(closed, isTrue);
   });
 
   testWidgets('单页原图缺失时保持翻页和页码状态', (tester) async {

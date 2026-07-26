@@ -12,6 +12,7 @@ import 'package:reader_app/features/dubbing/full_dubbing_page.dart';
 import 'package:reader_app/features/reader/original_audio_models.dart';
 import 'package:reader_app/features/reader/original_audio_repository.dart';
 import 'package:reader_app/features/reader/original_audio_player.dart';
+import 'package:reader_app/services/audio/dubbing_mix_service.dart';
 import 'package:reader_app/services/recording/recording_service.dart';
 import 'package:reader_app/services/recording/recording_preparation.dart';
 
@@ -32,6 +33,7 @@ void main() {
       dubbingRepositoryProvider.overrideWith((_) async => repository),
       recordingServiceProvider.overrideWith((_) async => _Recorder(temporary)),
       originalAudioPlayerProvider.overrideWithValue(audioPlayer),
+      dubbingMixServiceProvider.overrideWithValue(_MixService()),
       recordingPreparationProtocolProvider.overrideWithValue(preparation),
       originalAudioBookProvider('book-copy').overrideWith((_) async => _book()),
     ]);
@@ -56,14 +58,12 @@ void main() {
   FullDubbingState current() =>
       container.read(fullDubbingControllerProvider('book-copy')).requireValue;
 
-  test('完整配音创建独立 full 项目，并可保存草稿状态', () async {
-    final controller = await ready();
+  test('完整配音创建独立 full 项目，录音默认自动保存为草稿', () async {
+    await ready();
 
     expect(current().project.mode, DubbingMode.full);
     expect(current().project.status, DubbingProjectStatus.draft);
-    await controller.saveDraft();
-
-    expect(repository.statuses, [DubbingProjectStatus.draft]);
+    expect(repository.statuses, isEmpty);
   });
 
   test('三秒倒计时可取消，未触发录音', () async {
@@ -156,13 +156,47 @@ void main() {
     expect(current().audioPlaying, isTrue);
   });
 
+  test('Android 播放 Future 未结束时，暂停按钮仍立即可用', () async {
+    final controller = await ready();
+    final starting = controller.startCountdown();
+    await pumpEventQueue();
+    preparation.release();
+    await starting;
+    await controller.stopRecording();
+    final take = current().takes.single;
+    audioPlayer.holdPlayback = true;
+
+    expect(await controller.playTake(take), isTrue);
+    expect(current().audioPlaying, isTrue);
+    expect(audioPlayer.pendingPlayback, isNotNull);
+
+    expect(await controller.playTake(take), isTrue);
+    expect(current().audioPlaying, isFalse);
+    expect(audioPlayer.pauseCalls, 1);
+  });
+
+  test('生成可回放作品后才把完整故事标为完成', () async {
+    final controller = await ready();
+    final starting = controller.startCountdown();
+    await pumpEventQueue();
+    preparation.release();
+    await starting;
+    await controller.stopRecording();
+
+    await controller.createMix();
+
+    expect(current().mixes, hasLength(1));
+    expect(current().isComplete, isTrue);
+    expect(repository.statuses.last, DubbingProjectStatus.complete);
+  });
+
   test('录音伴奏自动降低到 35% 音量，减少扬声器回录', () async {
     final controller = await ready();
 
     final starting = controller.startCountdown();
     await pumpEventQueue();
 
-    expect(audioPlayer.loadedPaths.last, 'background.mp3');
+    expect(audioPlayer.loadedPaths.last, 'original/background.ogg');
     expect(audioPlayer.volumes.last, closeTo(.35, .0001));
 
     preparation.release();
@@ -204,7 +238,7 @@ OriginalAudioBook _book() => OriginalAudioBook(
       sourceBookId: 'source-book',
       resourceSha256: 'a' * 64,
       timelineSha256: 'b' * 64,
-      backgroundPath: 'background.mp3',
+      backgroundPath: 'original/background.ogg',
       sentences: [
         OriginalAudioSentence(
             id: 's1',
@@ -249,6 +283,8 @@ final class _OriginalPlayer implements OriginalAudioPlayer {
   final volumes = <double>[];
   var playCalls = 0;
   var pauseCalls = 0;
+  var holdPlayback = false;
+  Completer<void>? pendingPlayback;
 
   @override
   Stream<bool> get playingStream => playing.stream;
@@ -261,6 +297,11 @@ final class _OriginalPlayer implements OriginalAudioPlayer {
   @override
   Future<void> pause() async {
     pauseCalls++;
+    final pending = pendingPlayback;
+    if (pending != null) {
+      if (!pending.isCompleted) pending.complete();
+      pendingPlayback = null;
+    }
     playing.add(false);
   }
 
@@ -268,6 +309,10 @@ final class _OriginalPlayer implements OriginalAudioPlayer {
   Future<void> play() async {
     playCalls++;
     playing.add(true);
+    if (holdPlayback) {
+      pendingPlayback = Completer<void>();
+      await pendingPlayback!.future;
+    }
   }
 
   @override
@@ -275,7 +320,14 @@ final class _OriginalPlayer implements OriginalAudioPlayer {
   @override
   Future<void> setVolume(double volume) async => volumes.add(volume);
   @override
-  Future<void> stop() async => playing.add(false);
+  Future<void> stop() async {
+    final pending = pendingPlayback;
+    if (pending != null) {
+      if (!pending.isCompleted) pending.complete();
+      pendingPlayback = null;
+    }
+    playing.add(false);
+  }
 
   Future<void> close() async {
     await positions.close();
@@ -300,6 +352,20 @@ final class _ControlledPreparation implements RecordingPreparationProtocol {
     await _gate.future;
     if (!isActive()) throw const RecordingPreparationCancelled();
     return const Duration(milliseconds: 650);
+  }
+}
+
+final class _MixService implements DubbingMixService {
+  @override
+  Future<DubbingMixResult> render(DubbingMixPlan plan) async {
+    final output = File(plan.outputPath);
+    await output.parent.create(recursive: true);
+    await output.writeAsBytes([1, 2, 3]);
+    return DubbingMixResult(
+      outputPath: output.path,
+      mode: plan.mode,
+      duration: plan.renderDuration,
+    );
   }
 }
 
@@ -368,12 +434,14 @@ final class _MemoryDubbingRepository implements DubbingRepository {
     Duration contentOffset = Duration.zero,
     String? sentenceId,
   }) async {
+    final filename = 'take-${takes.length + 1}.wav';
+    await sourceAudio.copy(p.join(directory.path, filename));
     final take = DubbingTake(
       id: 'take-${takes.length + 1}',
       projectId: projectId,
       sentenceId: sentenceId,
       takeKind: kind,
-      audioRelativePath: 'take-${takes.length + 1}.wav',
+      audioRelativePath: filename,
       duration: duration,
       contentOffset: contentOffset,
       isSelected: false,
@@ -385,12 +453,25 @@ final class _MemoryDubbingRepository implements DubbingRepository {
   }
 
   @override
-  Future<DubbingMix> saveMix(
-          {required DubbingMixOutput output,
-          required DubbingMixVariant variant,
-          required String sourceTakeFingerprint,
-          required Duration duration}) =>
-      throw UnimplementedError();
+  Future<DubbingMix> saveMix({
+    required DubbingMixOutput output,
+    required DubbingMixVariant variant,
+    required String sourceTakeFingerprint,
+    required Duration duration,
+  }) async {
+    final mix = DubbingMix(
+      id: output.id,
+      projectId: output.projectId,
+      audioRelativePath: output.relativePath,
+      variant: variant,
+      sourceTakeFingerprint: sourceTakeFingerprint,
+      duration: duration,
+      createdAt: DateTime.utc(2026),
+    );
+    mixes.insert(0, mix);
+    return mix;
+  }
+
   @override
   Future<void> selectTake(String takeId) async {
     for (var index = 0; index < takes.length; index++) {
