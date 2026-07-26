@@ -48,6 +48,7 @@ abstract interface class DubbingRepository {
     required DubbingTakeKind kind,
     required File sourceAudio,
     required Duration duration,
+    Duration contentOffset = Duration.zero,
     String? sentenceId,
   });
   Future<void> selectTake(String takeId);
@@ -140,10 +141,14 @@ final class LocalDubbingRepository implements DubbingRepository {
     required DubbingTakeKind kind,
     required File sourceAudio,
     required Duration duration,
+    Duration contentOffset = Duration.zero,
     String? sentenceId,
   }) async {
     if (duration <= Duration.zero) {
       throw ArgumentError.value(duration, 'duration', '录音时长必须大于零');
+    }
+    if (contentOffset < Duration.zero) {
+      throw ArgumentError.value(contentOffset, 'contentOffset', '内容零点偏移不能小于零');
     }
     final project = await _requireProject(projectId);
     if (project.mode == DubbingMode.sentence &&
@@ -169,6 +174,7 @@ final class LocalDubbingRepository implements DubbingRepository {
         takeKind: kind,
         audioRelativePath: relativePath,
         duration: duration,
+        contentOffset: contentOffset,
       );
     } catch (_) {
       if (relativePath != null) {

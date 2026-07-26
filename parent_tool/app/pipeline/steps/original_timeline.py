@@ -18,7 +18,12 @@ from app.pipeline.audio_validation import normalized_words
 from app.pipeline.definitions import StepRunContext
 from app.pipeline.hashing import file_sha256
 from app.pipeline.paths import ensure_within
-from app.pipeline.original_timeline import TIMELINE_PATH, load_and_validate_timeline, write_timeline
+from app.pipeline.original_timeline import (
+    TIMELINE_PATH,
+    load_and_validate_timeline,
+    validate_timeline_timing_quality,
+    write_timeline,
+)
 from app.providers.align import WordAligner
 
 
@@ -26,7 +31,7 @@ class OriginalTimelineStep:
     """Align final proofread text against the *confirmed* separated vocal stem."""
 
     step_id = StepId.ORIGINAL_TIMELINE
-    implementation_version = "original-timeline-v2"
+    implementation_version = "original-timeline-v3"
     params_model = OriginalTimelineParams
 
     def __init__(self, aligner: WordAligner, media_probe) -> None:
@@ -84,13 +89,22 @@ class OriginalTimelineStep:
                 details={"recognized_word_count": len(recognized)},
                 status_code=422,
             )
-        context.progress(0.45, "已识别原音朗读内容，正在进行逐词强制对齐…")
-        aligned = self._aligner.align_script(
-            vocal_path,
-            "\n".join(sentence.text for sentence in narration),
-            params.language,
-            context.cancellation,
-        )
+        context.progress(0.45, "已识别原音朗读内容，正在校准逐句边界…")
+        # Free transcription is much better at locating repeated sentence
+        # boundaries in a whole-book recording. Project its timings back onto
+        # the immutable proofread words first; only fall back to whole-script
+        # forced alignment when discovery cannot map every narrated sentence.
+        alignment_strategy = "discovery_projection"
+        try:
+            aligned = self._project_discovery_timings(narration, recognized)
+        except PipelineError:
+            alignment_strategy = "forced_script"
+            aligned = self._aligner.align_script(
+                vocal_path,
+                "\n".join(sentence.text for sentence in narration),
+                params.language,
+                context.cancellation,
+            )
         timeline = self._build_timeline(
             narration,
             aligned,
@@ -116,7 +130,11 @@ class OriginalTimelineStep:
         context.progress(1, "原音逐词时间线已生成。")
         return StepResult(
             outputs=(TIMELINE_PATH,),
-            summary={"sentence_count": len(timeline.sentences), "vocal_sha256": vocal_sha256},
+            summary={
+                "sentence_count": len(timeline.sentences),
+                "vocal_sha256": vocal_sha256,
+                "alignment_strategy": alignment_strategy,
+            },
         )
 
     @staticmethod
@@ -177,7 +195,7 @@ class OriginalTimelineStep:
                 details={"recognized_word_count": len(actual_words)},
                 status_code=422,
             )
-        return OriginalTimeline(
+        timeline = OriginalTimeline(
             source=OriginalTimelineSource(
                 proofread_revision=proofread_revision,
                 original_audio_revision=original_audio_revision,
@@ -188,6 +206,103 @@ class OriginalTimelineStep:
             duration_ms=duration_ms,
             sentences=tuple(output),
         )
+        validate_timeline_timing_quality(timeline)
+        return timeline
+
+    @staticmethod
+    def _project_discovery_timings(
+        sentences: tuple[OcrSentence, ...],
+        recognized: tuple[AudioWordTiming, ...],
+    ) -> tuple[AudioWordTiming, ...]:
+        """Keep discovery timestamps while restoring exact proofread words."""
+
+        actual = OriginalTimelineStep._flatten_words(recognized)
+        cursor = 0
+        projected: list[AudioWordTiming] = []
+        for sentence in sentences:
+            expected = normalized_words(sentence.text)
+            found = OriginalTimelineStep._find_similar_phrase(actual, expected, cursor)
+            if found is None:
+                raise PipelineError(
+                    "ORIGINAL_TIMELINE_WORD_MISMATCH",
+                    "原音朗读内容无法可靠映射到校对文本。",
+                    details={"sentence_id": sentence.id},
+                    status_code=422,
+                )
+            index, length = found
+            candidate = actual[index:index + length]
+            projected.extend(OriginalTimelineStep._project_expected_phrase(expected, candidate))
+            cursor = index + length
+        return tuple(projected)
+
+    @staticmethod
+    def _project_expected_phrase(
+        expected: tuple[str, ...],
+        actual: tuple[tuple[str, AudioWordTiming], ...],
+    ) -> tuple[AudioWordTiming, ...]:
+        actual_words = tuple(word for word, _ in actual)
+        matcher = SequenceMatcher(a=expected, b=actual_words, autojunk=False)
+        output: list[AudioWordTiming | None] = [None] * len(expected)
+        for tag, expected_start, expected_end, actual_start, actual_end in matcher.get_opcodes():
+            if tag == "equal":
+                for offset in range(expected_end - expected_start):
+                    timing = actual[actual_start + offset][1]
+                    output[expected_start + offset] = AudioWordTiming(
+                        word=expected[expected_start + offset],
+                        t_start=timing.t_start,
+                        t_end=timing.t_end,
+                    )
+                continue
+            if tag == "insert":
+                continue
+            if actual_start == actual_end or expected_start == expected_end:
+                raise PipelineError(
+                    "ORIGINAL_TIMELINE_WORD_MISMATCH",
+                    "原音识别缺少校对文本中的词。",
+                    status_code=422,
+                )
+            interval_start = actual[actual_start][1].t_start
+            interval_end = actual[actual_end - 1][1].t_end
+            weights = [max(1, len(word.replace("'", ""))) for word in expected[expected_start:expected_end]]
+            total_weight = sum(weights)
+            cursor_weight = 0
+            for offset, weight in enumerate(weights):
+                start = interval_start + (interval_end - interval_start) * cursor_weight / total_weight
+                cursor_weight += weight
+                end = interval_start + (interval_end - interval_start) * cursor_weight / total_weight
+                output[expected_start + offset] = AudioWordTiming(
+                    word=expected[expected_start + offset],
+                    t_start=start,
+                    t_end=end,
+                )
+        if any(item is None for item in output):
+            raise PipelineError(
+                "ORIGINAL_TIMELINE_WORD_MISMATCH",
+                "原音识别无法完整映射到校对文本。",
+                status_code=422,
+            )
+        return OriginalTimelineStep._repair_short_discovery_words(
+            tuple(item for item in output if item is not None)
+        )
+
+    @staticmethod
+    def _repair_short_discovery_words(
+        timings: tuple[AudioWordTiming, ...],
+    ) -> tuple[AudioWordTiming, ...]:
+        """Use adjacent boundaries to repair stable-ts' occasional 10 ms word."""
+
+        repaired: list[AudioWordTiming] = []
+        for index, timing in enumerate(timings):
+            start = timing.t_start
+            end = timing.t_end
+            if end - start < .03:
+                previous_end = repaired[-1].t_end if repaired else start
+                next_start = timings[index + 1].t_start if index + 1 < len(timings) else end
+                available_start = max(previous_end, min(start, next_start - .03))
+                available_end = max(end, min(next_start, available_start + .04))
+                start, end = available_start, available_end
+            repaired.append(AudioWordTiming(word=timing.word, t_start=start, t_end=end))
+        return tuple(repaired)
 
     @staticmethod
     def _select_narrated_sentences(

@@ -107,7 +107,8 @@ class _ReaderView extends ConsumerStatefulWidget {
   ConsumerState<_ReaderView> createState() => _ReaderViewState();
 }
 
-class _ReaderViewState extends ConsumerState<_ReaderView> {
+class _ReaderViewState extends ConsumerState<_ReaderView>
+    with WidgetsBindingObserver {
   late final PageController _pageController;
   late final ScrollController _thumbnailController;
   late final List<TransformationController> _transforms;
@@ -124,6 +125,7 @@ class _ReaderViewState extends ConsumerState<_ReaderView> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _pageController = PageController();
     _thumbnailController = ScrollController();
     _zoomedPages = List.filled(widget.book.pages.length, false);
@@ -141,6 +143,7 @@ class _ReaderViewState extends ConsumerState<_ReaderView> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _pageController.dispose();
     _thumbnailController.dispose();
     _progressSaveTimer?.cancel();
@@ -148,6 +151,16 @@ class _ReaderViewState extends ConsumerState<_ReaderView> {
       controller.dispose();
     }
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.paused) {
+      unawaited(ref
+          .read(followReadingControllerProvider(widget.book.libraryId).notifier)
+          .handleAppBackgrounded());
+    }
   }
 
   void _handleTransform(int index) {
@@ -523,6 +536,9 @@ class _ReaderViewState extends ConsumerState<_ReaderView> {
                           onStop: () => unawaited(panelRef
                               .read(followReadingProvider.notifier)
                               .stopRecording()),
+                          onCancelPreparation: () => unawaited(panelRef
+                              .read(followReadingProvider.notifier)
+                              .cancelPreparation()),
                           onRetry: () => unawaited(panelRef
                               .read(followReadingProvider.notifier)
                               .retryScoring()),
@@ -1066,6 +1082,7 @@ class _FollowReadingPanel extends StatelessWidget {
     required this.onDemo,
     required this.onRecord,
     required this.onStop,
+    required this.onCancelPreparation,
     required this.onRetry,
     required this.onMyRecording,
     required this.onRepeat,
@@ -1077,6 +1094,7 @@ class _FollowReadingPanel extends StatelessWidget {
   final VoidCallback onDemo;
   final VoidCallback onRecord;
   final VoidCallback onStop;
+  final VoidCallback onCancelPreparation;
   final VoidCallback onRetry;
   final VoidCallback onMyRecording;
   final VoidCallback onRepeat;
@@ -1135,15 +1153,45 @@ class _FollowReadingPanel extends StatelessWidget {
         ),
       );
     }
+    if (value.isPreparing) {
+      final countdown = value.phase == FollowReadingPhase.countdown;
+      return _ReaderControlPanelFrame(
+        child: Padding(
+          padding: const EdgeInsets.all(AppSpacing.cardPadding),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _FollowSentenceText(sentence: sentence),
+              const SizedBox(height: AppSpacing.unit),
+              Text(
+                countdown ? '${value.countdown}' : '麦克风准备中',
+                style: TextStyle(
+                  color: AppColors.accent,
+                  fontSize: countdown ? 42 : 20,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+              const SizedBox(height: AppSpacing.unit),
+              const Text(
+                '看到“开始读吧”再开口，第一个字会更完整',
+                style: TextStyle(color: AppColors.textSecondary),
+              ),
+              TextButton.icon(
+                onPressed: onCancelPreparation,
+                icon: const Icon(Icons.close_rounded),
+                label: const Text('取消这次'),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
     if (value.phase == FollowReadingPhase.recording) {
-      final isWarmingUp = value.elapsed < value.recordingWarmUp;
-      final recordingPrompt = isWarmingUp
-          ? '准备一下，马上开始…'
-          : !value.heardSpeech
-              ? '开始读吧，我在认真听'
-              : value.level < followSpeechLevelThreshold
-                  ? '读完后停一下，会自动结束'
-                  : '听得很清楚，继续读吧';
+      final recordingPrompt = !value.heardSpeech
+          ? '开始读吧，我在认真听'
+          : value.level < followSpeechLevelThreshold
+              ? '读完后停一下，会自动结束'
+              : '听得很清楚，继续读吧';
       return _ReaderControlPanelFrame(
         child: Padding(
           padding: const EdgeInsets.all(AppSpacing.cardPadding),

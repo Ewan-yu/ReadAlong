@@ -80,6 +80,15 @@ void main() {
     );
   });
 
+  test('拒绝结构合法但首词只有 10ms 的不可用逐句时间轴', () async {
+    await _writeReadyPackage(bookDir, unreliableTiming: true);
+
+    expect(
+      () => repository.loadBook('copy-1'),
+      throwsA(isA<OriginalAudioDataException>()),
+    );
+  });
+
   test('优先使用已校验的兼容 Ogg 播放轨', () async {
     await _writeReadyPackage(bookDir, includePlayback: true);
 
@@ -140,6 +149,7 @@ Future<void> _writeReadyPackage(
   String? timelineHash,
   int narratedSentenceSequence = 1,
   bool includePlayback = false,
+  bool unreliableTiming = false,
 }) async {
   final audio = File(p.join(bookDir.path, 'original', 'source.mp3'));
   await audio.parent.create(recursive: true);
@@ -164,7 +174,12 @@ Future<void> _writeReadyPackage(
         'start_ms': 200,
         'end_ms': 2000,
         'words': [
-          {'seq': 1, 'text': 'Good', 'start_ms': 200, 'end_ms': 1000},
+          {
+            'seq': 1,
+            'text': 'Good',
+            'start_ms': 200,
+            'end_ms': unreliableTiming ? 210 : 1000,
+          },
           {'seq': 2, 'text': 'night.', 'start_ms': 1000, 'end_ms': 2000},
         ],
       },

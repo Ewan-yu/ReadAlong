@@ -10,6 +10,7 @@ import 'package:reader_app/features/follow/follow_reading_controller.dart';
 import 'package:reader_app/features/reader/point_reading_models.dart';
 import 'package:reader_app/features/reader/sentence_audio_player.dart';
 import 'package:reader_app/services/recording/recording_service.dart';
+import 'package:reader_app/services/recording/recording_preparation.dart';
 import 'package:reader_app/services/scoring/score_models.dart';
 import 'package:reader_app/services/scoring/scoring_provider.dart';
 import 'package:reader_app/services/scoring/xfyun_ise_provider.dart';
@@ -86,6 +87,18 @@ final class _FakeScorer implements ScoringProvider {
   }
 }
 
+final class _ImmediatePreparation implements RecordingPreparationProtocol {
+  @override
+  Future<Duration> run({
+    required bool Function() isActive,
+    required void Function(RecordingPreparationUpdate update) onUpdate,
+  }) async {
+    onUpdate(const RecordingPreparationUpdate.stabilizing());
+    onUpdate(const RecordingPreparationUpdate.countdown(3));
+    return Duration.zero;
+  }
+}
+
 Uint8List _wav() {
   const pcm = [0, 0, 1, 0];
   final bytes = Uint8List(44 + pcm.length);
@@ -143,6 +156,8 @@ void main() {
         recordingServiceProvider.overrideWith((_) async => recorder),
         sentenceAudioPlayerProvider.overrideWithValue(player),
         scoringProvider.overrideWithValue(_FakeScorer()),
+        recordingPreparationProtocolProvider
+            .overrideWithValue(_ImmediatePreparation()),
       ],
     );
   });
@@ -171,7 +186,6 @@ void main() {
   Future<void> scoreOneTake(FollowReadingController controller) async {
     controller.selectSentence(_sentence('sentence-one'));
     await controller.startRecording();
-    expect(currentState().recordingWarmUp, const Duration(milliseconds: 700));
     expect(currentState().recordingLimit, const Duration(seconds: 7));
     await controller.stopRecording();
     expect(currentState().phase, FollowReadingPhase.scored);
@@ -188,7 +202,8 @@ void main() {
     expect(await controller.playMyRecording(), isTrue);
     expect(currentState().phase, FollowReadingPhase.scored);
     expect(currentState().record?.id, record.id);
-    expect(player.played.where((clip) => clip.wholeFile), hasLength(2));
+    expect(player.played, hasLength(2));
+    expect(player.played.every((clip) => !clip.wholeFile), isTrue);
     expect(await File(record.audioPath).exists(), isTrue);
 
     player.nextFailure = StateError('decoder failed');
@@ -200,7 +215,6 @@ void main() {
   test('录音时长按示范音长度缩放并保持儿童合理上下限', () {
     final short = followRecordingTimingFor(_sentence('short'));
     expect(short.referenceDuration, const Duration(seconds: 1));
-    expect(short.warmUpDuration, const Duration(milliseconds: 700));
     expect(short.minimumDuration, const Duration(milliseconds: 2200));
     expect(short.trailingSilenceDuration, const Duration(milliseconds: 1700));
     expect(short.maximumDuration, const Duration(seconds: 7));
@@ -297,5 +311,17 @@ void main() {
     subscription = null;
     await pumpEventQueue();
     expect(await File(secondPath).exists(), isFalse);
+  });
+
+  test('Android 切到后台会取消隐形录音并保留当前句', () async {
+    final controller = await readyController();
+    controller.selectSentence(_sentence('sentence-one'));
+    await controller.startRecording();
+
+    await controller.handleAppBackgrounded();
+
+    expect(currentState().phase, FollowReadingPhase.idle);
+    expect(currentState().sentence?.id, 'sentence-one');
+    expect(recorder.cancelCalls, greaterThan(0));
   });
 }

@@ -71,7 +71,19 @@ def test_candidate_requires_explicit_confirmation_and_is_promoted(tmp_path: Path
     book = paths.book("book-1")
     book.mkdir(parents=True)
     states.create(PipelineState.new(book_id="book-1", pdf_path="source.pdf", pdf_sha256="a" * 64, original_audio_path="original_audio.mp3", original_audio_sha256="b" * 64))
-    engine = PipelineEngine(states, ArtifactStore(paths), StepRegistry((FakeStage(StepId.PAGES), FakeStage(StepId.OCR), FakeProofread(), FakeOriginalAudio())))
+    engine = PipelineEngine(
+        states,
+        ArtifactStore(paths),
+        StepRegistry(
+            (
+                FakeStage(StepId.PAGES),
+                FakeStage(StepId.OCR),
+                FakeProofread(),
+                FakeOriginalAudio(),
+                FakeStage(StepId.ORIGINAL_TIMELINE),
+            )
+        ),
+    )
     _run(engine, StepId.PAGES, "02345678-1234-4234-8234-123456789abc")
     _run(engine, StepId.OCR, "11345678-1234-4234-8234-123456789abc")
     _run(engine, StepId.PROOFREAD, "12345678-1234-4234-8234-123456789abc")
@@ -96,6 +108,12 @@ def test_candidate_requires_explicit_confirmation_and_is_promoted(tmp_path: Path
     assert (book / published.output_root / "background.ogg").is_file()
     assert state.steps[StepId.ORIGINAL_AUDIO].status is StepStatus.DONE
 
+    _run(
+        engine,
+        StepId.ORIGINAL_TIMELINE,
+        "27345678-1234-4234-8234-123456789abc",
+    )
+
     review.disable_background("book-1")
     voice_only = states.load("book-1")
     assert voice_only.original_audio_review.background_disabled is True
@@ -107,6 +125,9 @@ def test_candidate_requires_explicit_confirmation_and_is_promoted(tmp_path: Path
         "32345678-1234-4234-8234-123456789abc",
         force=True,
     )
-    stale = states.load("book-1")
-    assert stale.steps[StepId.ORIGINAL_AUDIO].status is StepStatus.STALE
-    assert stale.original_audio_review.confirmed is None
+    updated = states.load("book-1")
+    assert updated.steps[StepId.ORIGINAL_AUDIO].status is StepStatus.DONE
+    assert updated.original_audio_review.confirmed == published
+    assert updated.original_audio_review.background_disabled is True
+    assert updated.steps[StepId.ORIGINAL_TIMELINE].status is StepStatus.STALE
+    assert review.workspace("book-1").status == "voice_only"

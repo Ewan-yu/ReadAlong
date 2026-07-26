@@ -43,6 +43,13 @@ int? activeWordIndex(ReaderSentence sentence, Duration elapsed) {
   final clipDuration = sentence.audio.end - sentence.audio.start;
   final sourcePosition =
       sentence.audio.start + clampPlaybackPosition(elapsed, clipDuration);
+  final first = timings.first;
+  final firstLeadStart = first.start - const Duration(milliseconds: 180);
+  if (sourcePosition < first.start &&
+      sourcePosition >= sentence.audio.start &&
+      sourcePosition >= firstLeadStart) {
+    return 0;
+  }
   var low = 0;
   var high = timings.length - 1;
   var candidate = -1;
@@ -55,7 +62,16 @@ int? activeWordIndex(ReaderSentence sentence, Duration elapsed) {
       high = middle - 1;
     }
   }
-  if (candidate < 0 || sourcePosition >= timings[candidate].end) return null;
+  if (candidate < 0) return null;
+  if (sourcePosition >= timings[candidate].end) {
+    if (candidate == 0) {
+      final nextStart =
+          timings.length > 1 ? timings[1].start : sentence.audio.end;
+      final heldEnd = timings[0].end + const Duration(milliseconds: 80);
+      if (sourcePosition < heldEnd && sourcePosition < nextStart) return 0;
+    }
+    return null;
+  }
   return candidate;
 }
 

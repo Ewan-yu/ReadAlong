@@ -20,7 +20,7 @@ class SeparationProvider(Protocol):
 
 class OriginalAudioStep:
     step_id = StepId.ORIGINAL_AUDIO
-    implementation_version = "original-audio-v1"
+    implementation_version = "original-audio-v2"
     params_model = OriginalAudioParams
 
     def __init__(self, provider: SeparationProvider) -> None:
@@ -45,9 +45,39 @@ class OriginalAudioStep:
         if separated.vocals_ogg != vocals:
             vocals.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(separated.vocals_ogg, vocals)
-        report = {**separated.report, "source_path": "original/source.mp3", "source_sha256": actual, "source_proofread_revision": context.dependency_outputs[StepId.PROOFREAD].name, "background": {"path": "background.ogg", "sha256": file_sha256(background), "duration_ms": separated.duration_ms}, "vocals_preview": {"path": "preview/vocals.ogg", "sha256": file_sha256(vocals)}}
-        (context.staging_dir / "source_report.json").write_text(json.dumps({"source_sha256": actual, "source_size_bytes": source.stat().st_size}, ensure_ascii=False), encoding="utf-8")
-        (context.staging_dir / "separation_report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-        outputs = ["background.ogg", "preview/vocals.ogg", "preview/background.ogg", "source_report.json", "separation_report.json"]
+        report = {
+            **separated.report,
+            "source_path": "original/source.mp3",
+            "source_sha256": actual,
+            "background": {
+                "path": "background.ogg",
+                "sha256": file_sha256(background),
+                "duration_ms": separated.duration_ms,
+            },
+            "vocals_preview": {
+                "path": "preview/vocals.ogg",
+                "sha256": file_sha256(vocals),
+            },
+        }
+        (context.staging_dir / "source_report.json").write_text(
+            json.dumps(
+                {
+                    "source_sha256": actual,
+                    "source_size_bytes": source.stat().st_size,
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        (context.staging_dir / "separation_report.json").write_text(
+            json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        outputs = [
+            "background.ogg",
+            "preview/vocals.ogg",
+            "preview/background.ogg",
+            "source_report.json",
+            "separation_report.json",
+        ]
         outputs.extend(f"waveform/{name}.json" for name in ("original", "vocals", "background"))
         return StepResult(outputs=tuple(outputs), summary=report)

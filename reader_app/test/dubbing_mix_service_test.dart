@@ -11,6 +11,7 @@ void main() {
     required String sentenceId,
     bool selected = true,
     DubbingTakeKind kind = DubbingTakeKind.sentence,
+    Duration contentOffset = Duration.zero,
   }) =>
       DubbingTake(
         id: id,
@@ -19,6 +20,7 @@ void main() {
         takeKind: kind,
         audioRelativePath: 'dubbing/book/project/takes/$sentenceId/$id.wav',
         duration: const Duration(milliseconds: 800),
+        contentOffset: contentOffset,
         isSelected: selected,
         scoreStatus: DubbingTakeScoreStatus.scored,
         createdAt: DateTime.utc(2026, 8, 1),
@@ -62,6 +64,7 @@ void main() {
       endsWith('original${p.separator}background.ogg'),
     );
     expect(plan.backgroundGainDb, defaultDubbingBackgroundGainDb);
+    expect(plan.backgroundGainDb, -12);
   });
 
   test('纯人声不接收背景轨', () {
@@ -148,7 +151,40 @@ void main() {
     expect(command, contains('background.ogg'));
     expect(command, isNot(contains('source.mp3')));
     expect(command, contains('adelay=0:all=1'));
+    expect(command, contains('volume=0.251188643'));
     expect(command, contains('loudnorm=I=-16:TP=-1'));
+  });
+
+  test('混音先裁掉麦克风预热段，再放到原音时间轴', () {
+    final take = selectedTake(
+      id: 'take-offset',
+      sentenceId: 's0001',
+      contentOffset: const Duration(milliseconds: 3650),
+    );
+    final plan = DubbingMixPlan.create(
+      sentenceTakes: [
+        DubbingMixSentenceTake(
+          sentenceId: 's0001',
+          sequence: 1,
+          start: const Duration(seconds: 2),
+          end: const Duration(seconds: 3),
+          take: take,
+          audioPath: 'C:/app/dubbing/book/project/takes/s0001/take.wav',
+        ),
+      ],
+      outputPath: 'C:/app/dubbing/book/project/mixes/work.wav',
+      mode: DubbingMixMode.voiceOnly,
+      timelineDuration: const Duration(seconds: 5),
+    );
+
+    final command = FfmpegKitDubbingMixService.buildCommandForTest(
+      plan,
+      'C:/app/dubbing/book/project/mixes/.work.part.wav',
+    );
+
+    expect(command, contains('atrim=start=3.650'));
+    expect(command, contains('adelay=2000:all=1'));
+    expect(plan.sourceTakeFingerprint, contains('+3650'));
   });
 
   test('成功后才原子发布作品，失败会清理半成品', () async {

@@ -139,6 +139,51 @@ void main() {
         ['dubbing_mix', 'dubbing_project', 'dubbing_take']);
   });
 
+  test('现有 v5 Take 升级后内容零点偏移默认为零', () async {
+    final databaseFile = File(p.join(documents.path, 'app.db'));
+    await databaseFile.delete();
+    final legacy = await databaseFactoryFfi.openDatabase(
+      databaseFile.path,
+      options: OpenDatabaseOptions(
+        version: 5,
+        onCreate: (db, _) async {
+          await db.execute('''
+            CREATE TABLE dubbing_take (
+              id TEXT PRIMARY KEY,
+              project_id TEXT NOT NULL,
+              sentence_id TEXT,
+              take_kind TEXT NOT NULL,
+              audio_path TEXT NOT NULL,
+              duration_ms INTEGER NOT NULL,
+              selected INTEGER NOT NULL,
+              score_status TEXT NOT NULL,
+              score_json TEXT,
+              score_error TEXT,
+              created_at TEXT NOT NULL
+            )
+          ''');
+        },
+      ),
+    );
+    await legacy.insert('dubbing_take', {
+      'id': 'legacy-take',
+      'project_id': 'legacy-project',
+      'sentence_id': 's1',
+      'take_kind': 'sentence',
+      'audio_path': 'dubbing/book/project/take.wav',
+      'duration_ms': 800,
+      'selected': 1,
+      'score_status': 'pending',
+      'created_at': DateTime.utc(2026).toIso8601String(),
+    });
+    await legacy.close();
+
+    final upgraded = await shelfIndex.findDubbingTake('legacy-take');
+
+    expect(upgraded, isNotNull);
+    expect(upgraded!.contentOffset, Duration.zero);
+  });
+
   test('逐句 Take 以相对路径原子持久化到 App 私有目录', () async {
     final repository = repositoryWithIds(['project-1', 'take-1']);
     final project = await createSentenceProject(repository);

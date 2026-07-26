@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../services/recording/recording_service.dart';
+import '../../services/recording/recording_preparation.dart';
 import '../../services/scoring/score_models.dart';
 import '../../services/scoring/scoring_provider.dart';
 import '../../services/scoring/xfyun_ise_provider.dart';
@@ -14,6 +15,8 @@ import '../reader/subtitle_timing.dart' as subtitle_timing;
 enum FollowReadingPhase {
   idle,
   demonstrating,
+  preparing,
+  countdown,
   recording,
   scoring,
   scored,
@@ -26,14 +29,12 @@ const _speechFramesRequired = 2;
 final class FollowRecordingTiming {
   const FollowRecordingTiming({
     required this.referenceDuration,
-    required this.warmUpDuration,
     required this.minimumDuration,
     required this.trailingSilenceDuration,
     required this.maximumDuration,
   });
 
   final Duration referenceDuration;
-  final Duration warmUpDuration;
   final Duration minimumDuration;
   final Duration trailingSilenceDuration;
   final Duration maximumDuration;
@@ -46,7 +47,6 @@ FollowRecordingTiming followRecordingTimingFor(ReaderSentence sentence) {
       : const Duration(milliseconds: 1500);
   return FollowRecordingTiming(
     referenceDuration: reference,
-    warmUpDuration: const Duration(milliseconds: 700),
     minimumDuration: _clampDuration(
       _scaleDuration(reference, 0.85) + const Duration(milliseconds: 1200),
       const Duration(milliseconds: 2200),
@@ -104,11 +104,15 @@ final class FollowRecording {
     required this.id,
     required this.audioPath,
     required this.referenceText,
+    required this.contentOffset,
+    required this.duration,
   });
 
   final int id;
   final String audioPath;
   final String referenceText;
+  final Duration contentOffset;
+  final Duration duration;
 }
 
 final class FollowReadingState {
@@ -119,7 +123,7 @@ final class FollowReadingState {
     this.result,
     this.elapsed = Duration.zero,
     this.level = 0,
-    this.recordingWarmUp = const Duration(milliseconds: 700),
+    this.countdown = 0,
     this.recordingLimit = const Duration(seconds: 30),
     this.heardSpeech = false,
     this.playbackPosition = Duration.zero,
@@ -134,7 +138,7 @@ final class FollowReadingState {
   final ScoreResult? result;
   final Duration elapsed;
   final double level;
-  final Duration recordingWarmUp;
+  final int countdown;
   final Duration recordingLimit;
   final bool heardSpeech;
   final Duration playbackPosition;
@@ -143,6 +147,9 @@ final class FollowReadingState {
   final String? failure;
 
   bool get isRecording => phase == FollowReadingPhase.recording;
+  bool get isPreparing =>
+      phase == FollowReadingPhase.preparing ||
+      phase == FollowReadingPhase.countdown;
   bool get canRetry => record != null && phase == FollowReadingPhase.failed;
 
   FollowReadingState copyWith({
@@ -152,7 +159,7 @@ final class FollowReadingState {
     Object? result = _unset,
     Duration? elapsed,
     double? level,
-    Duration? recordingWarmUp,
+    int? countdown,
     Duration? recordingLimit,
     bool? heardSpeech,
     Duration? playbackPosition,
@@ -172,7 +179,7 @@ final class FollowReadingState {
             identical(result, _unset) ? this.result : result as ScoreResult?,
         elapsed: elapsed ?? this.elapsed,
         level: level ?? this.level,
-        recordingWarmUp: recordingWarmUp ?? this.recordingWarmUp,
+        countdown: countdown ?? this.countdown,
         recordingLimit: recordingLimit ?? this.recordingLimit,
         heardSpeech: heardSpeech ?? this.heardSpeech,
         playbackPosition: playbackPosition ?? this.playbackPosition,
@@ -196,6 +203,7 @@ final class FollowReadingController
   late final AudioRecordingService _recorder;
   late final SentenceAudioPlayer _player;
   late final ScoringProvider _scorer;
+  late final RecordingPreparationProtocol _preparation;
   StreamSubscription<RecordingLevel>? _levels;
   Timer? _limitTimer;
   Timer? _silenceTimer;
@@ -205,12 +213,14 @@ final class FollowReadingController
   var _recordSequence = 0;
   var _generation = 0;
   var _disposed = false;
+  Duration _contentOffset = Duration.zero;
 
   @override
   Future<FollowReadingState> build(String libraryId) async {
     _player = ref.watch(sentenceAudioPlayerProvider);
     _scorer = ref.watch(scoringProvider);
     _recorder = await ref.watch(recordingServiceProvider.future);
+    _preparation = ref.watch(recordingPreparationProtocolProvider);
     ref.onDispose(() {
       final record = state.valueOrNull?.record;
       _disposed = true;
@@ -238,6 +248,20 @@ final class FollowReadingController
     await _deleteRecording(record);
     if (_disposed || state.valueOrNull == null) return;
     _setState(const FollowReadingState());
+  }
+
+  Future<void> handleAppBackgrounded() async {
+    final current = state.valueOrNull;
+    if (current == null) return;
+    _generation++;
+    await _cancelActiveRecording();
+    try {
+      await _player.stop();
+    } on Object {}
+    await _deleteRecording(current.record);
+    final sentence = current.sentence;
+    if (_disposed || sentence == null) return;
+    _setState(FollowReadingState(sentence: sentence));
   }
 
   Future<void> playDemonstration() async {
@@ -304,6 +328,37 @@ final class FollowReadingController
         await _recorder.cancel();
         return;
       }
+      _setState(current.copyWith(
+        phase: FollowReadingPhase.preparing,
+        record: null,
+        result: null,
+        elapsed: Duration.zero,
+        level: 0,
+        countdown: 0,
+        recordingLimit: timing.maximumDuration,
+        heardSpeech: false,
+        playbackPosition: Duration.zero,
+        playbackDuration: Duration.zero,
+        activeWordIndex: null,
+        failure: null,
+      ));
+      _contentOffset = await _preparation.run(
+        isActive: () => _isCurrent(generation),
+        onUpdate: (update) {
+          final latest = state.valueOrNull;
+          if (!_isCurrent(generation) || latest == null) return;
+          _setState(latest.copyWith(
+            phase: update.stage == RecordingPreparationStage.stabilizing
+                ? FollowReadingPhase.preparing
+                : FollowReadingPhase.countdown,
+            countdown: update.countdown,
+          ));
+        },
+      );
+      if (!_isCurrent(generation)) {
+        await _recorder.cancel();
+        return;
+      }
       _stopwatch = Stopwatch()..start();
       _voiceActivity = FollowVoiceActivityTracker(timing);
       _setState(current.copyWith(
@@ -312,7 +367,7 @@ final class FollowReadingController
         result: null,
         elapsed: Duration.zero,
         level: 0,
-        recordingWarmUp: timing.warmUpDuration,
+        countdown: 0,
         recordingLimit: timing.maximumDuration,
         heardSpeech: false,
         playbackPosition: Duration.zero,
@@ -348,11 +403,28 @@ final class FollowReadingController
       _limitTimer = Timer(timing.maximumDuration, () {
         unawaited(stopRecording());
       });
+    } on RecordingPreparationCancelled {
+      try {
+        await _recorder.cancel();
+      } on Object {}
     } on RecordingException catch (error) {
       if (_isCurrent(generation)) _setFailure(error.message);
     } on Object {
       if (_isCurrent(generation)) _setFailure('录音没有开始，请稍后重试');
     }
+  }
+
+  Future<void> cancelPreparation() async {
+    final current = state.valueOrNull;
+    if (current == null || !current.isPreparing) return;
+    ++_generation;
+    await _recorder.cancel();
+    _setState(current.copyWith(
+      phase: FollowReadingPhase.idle,
+      countdown: 0,
+      level: 0,
+      failure: null,
+    ));
   }
 
   Future<void> stopRecording() async {
@@ -382,6 +454,8 @@ final class FollowReadingController
         id: ++_recordSequence,
         audioPath: audioPath,
         referenceText: sentence.text,
+        contentOffset: _contentOffset,
+        duration: _stopwatch?.elapsed ?? current.elapsed,
       );
       final latest = state.valueOrNull;
       if (latest == null) return;
@@ -445,9 +519,8 @@ final class FollowReadingController
       await _player.play(
         SentenceAudioClip(
           path: record.audioPath,
-          start: Duration.zero,
-          end: const Duration(seconds: 30),
-          wholeFile: true,
+          start: record.contentOffset,
+          end: record.contentOffset + record.duration,
         ),
       );
       return true;
@@ -460,8 +533,9 @@ final class FollowReadingController
     try {
       final bytes = await File(record.audioPath).readAsBytes();
       final pcm = parseWavPcm16(bytes).pcm16k;
+      final contentPcm = pcm16SliceFromOffset(pcm, record.contentOffset);
       final result = await _scorer.score(
-        pcm16k: pcm,
+        pcm16k: contentPcm,
         refText: record.referenceText,
       );
       if (!_isCurrent(generation)) return;

@@ -49,6 +49,9 @@ final class _FakeOriginalAudioPlayer implements OriginalAudioPlayer {
   Future<void> seek(Duration position) async => seeked.add(position);
 
   @override
+  Future<void> setVolume(double volume) async {}
+
+  @override
   Future<void> stop() async {
     stopCalls++;
     playing.add(false);

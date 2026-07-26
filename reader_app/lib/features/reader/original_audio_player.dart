@@ -12,6 +12,7 @@ abstract interface class OriginalAudioPlayer {
   Future<void> play();
   Future<void> pause();
   Future<void> seek(Duration position);
+  Future<void> setVolume(double volume);
 
   /// 停止并释放系统解码资源。页面返回和进入后台都必须调用它。
   Future<void> stop();
@@ -26,6 +27,7 @@ abstract interface class OriginalAudioEngine {
   Future<void> play();
   Future<void> pause();
   Future<void> seek(Duration position);
+  Future<void> setVolume(double volume);
   Future<void> stop();
   Future<void> dispose();
 }
@@ -121,6 +123,16 @@ final class JustAudioOriginalAudioPlayer implements OriginalAudioPlayer {
   }
 
   @override
+  Future<void> setVolume(double volume) async {
+    _ensureActive();
+    try {
+      await _engine.setVolume(volume.clamp(0.0, 1.0));
+    } on Object catch (error) {
+      throw OriginalAudioPlaybackException('Volume change failed: $error');
+    }
+  }
+
+  @override
   Future<void> stop() async {
     if (_disposed) return;
     try {
@@ -167,6 +179,9 @@ final class _JustAudioOriginalAudioEngine implements OriginalAudioEngine {
 
   @override
   Future<void> seek(Duration position) => _player.seek(position);
+
+  @override
+  Future<void> setVolume(double volume) => _player.setVolume(volume);
 
   @override
   Future<void> stop() => _player.stop();

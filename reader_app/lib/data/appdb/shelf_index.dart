@@ -470,6 +470,7 @@ class ShelfIndex {
     required DubbingTakeKind takeKind,
     required String audioRelativePath,
     required Duration duration,
+    Duration contentOffset = Duration.zero,
     String? sentenceId,
   }) async {
     _requireDubbingValue(id, 'id');
@@ -477,6 +478,9 @@ class ShelfIndex {
     _requireDubbingRelativePath(audioRelativePath);
     if (duration <= Duration.zero) {
       throw ArgumentError.value(duration, 'duration', '必须大于零');
+    }
+    if (contentOffset < Duration.zero) {
+      throw ArgumentError.value(contentOffset, 'contentOffset', '不能小于零');
     }
     if (takeKind == DubbingTakeKind.sentence &&
         (sentenceId == null || sentenceId.isEmpty)) {
@@ -495,6 +499,7 @@ class ShelfIndex {
         takeKind: takeKind,
         audioRelativePath: audioRelativePath,
         duration: duration,
+        contentOffset: contentOffset,
         isSelected: false,
         scoreStatus: DubbingTakeScoreStatus.pending,
         createdAt: now,
@@ -531,6 +536,7 @@ class ShelfIndex {
           'take_kind': take.takeKind.name,
           'audio_path': take.audioRelativePath,
           'duration_ms': take.duration.inMilliseconds,
+          'content_offset_ms': take.contentOffset.inMilliseconds,
           'selected': 0,
           'score_status': take.scoreStatus.name,
           'created_at': take.createdAt.toIso8601String(),
@@ -806,7 +812,7 @@ class ShelfIndex {
         // reader startup queries (book, point reading, original-audio entry,
         // progress) would therefore close each other's shared app.db handle.
         singleInstance: false,
-        version: 5,
+        version: 6,
         onCreate: (db, _) async {
           await db.execute('''
           CREATE TABLE shelf_book (
@@ -837,6 +843,12 @@ class ShelfIndex {
           if (oldVersion < 3) await _createRuntimeTables(db);
           if (oldVersion < 4) await _createDubbingTables(db);
           if (oldVersion < 5) await _createDubbingMixTable(db);
+          if (oldVersion >= 4 && oldVersion < 6) {
+            await db.execute(
+              'ALTER TABLE dubbing_take '
+              'ADD COLUMN content_offset_ms INTEGER NOT NULL DEFAULT 0',
+            );
+          }
         },
       ),
     );
@@ -928,6 +940,7 @@ Future<void> _createDubbingTables(Database db) async {
       take_kind TEXT NOT NULL CHECK (take_kind IN ('sentence', 'full')),
       audio_path TEXT NOT NULL,
       duration_ms INTEGER NOT NULL CHECK (duration_ms > 0),
+      content_offset_ms INTEGER NOT NULL DEFAULT 0 CHECK (content_offset_ms >= 0),
       selected INTEGER NOT NULL DEFAULT 0 CHECK (selected IN (0, 1)),
       score_status TEXT NOT NULL CHECK (score_status IN ('pending', 'scored', 'failed')),
       score_json TEXT,

@@ -82,7 +82,7 @@ void main() {
     expect(activeWordIndex(sentence, const Duration(seconds: 2)), isNull);
   });
 
-  test('词区间左闭右开且词间静音不高亮', () {
+  test('首词提前提示并短暂保持，后续词间静音仍不高亮', () {
     final sentence = _sentence(
       timings: [
         _word(1, 'Good', 100, 700),
@@ -90,16 +90,32 @@ void main() {
       ],
     );
 
-    expect(activeWordIndex(sentence, Duration.zero), isNull);
+    expect(activeWordIndex(sentence, Duration.zero), 0);
     expect(activeWordIndex(sentence, const Duration(milliseconds: 100)), 0);
     expect(activeWordIndex(sentence, const Duration(milliseconds: 699)), 0);
+    expect(activeWordIndex(sentence, const Duration(milliseconds: 700)), 0);
+    expect(activeWordIndex(sentence, const Duration(milliseconds: 779)), 0);
     expect(
-        activeWordIndex(sentence, const Duration(milliseconds: 700)), isNull);
+        activeWordIndex(sentence, const Duration(milliseconds: 780)), isNull);
     expect(
         activeWordIndex(sentence, const Duration(milliseconds: 899)), isNull);
     expect(activeWordIndex(sentence, const Duration(milliseconds: 900)), 1);
     expect(
         activeWordIndex(sentence, const Duration(milliseconds: 1700)), isNull);
+  });
+
+  test('首词提前容差只覆盖 180ms，不会把较长前导静音全部高亮', () {
+    final sentence = _sentence(
+      timings: [
+        _word(1, 'Good', 300, 700),
+        _word(2, 'night.', 900, 1700),
+      ],
+    );
+
+    expect(activeWordIndex(sentence, Duration.zero), isNull);
+    expect(
+        activeWordIndex(sentence, const Duration(milliseconds: 119)), isNull);
+    expect(activeWordIndex(sentence, const Duration(milliseconds: 120)), 0);
   });
 
   test('无 timing 时不查词且返回完整普通文本片段', () {

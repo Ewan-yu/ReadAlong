@@ -9,7 +9,7 @@ import 'package:path/path.dart' as p;
 import '../../data/appdb/dubbing_models.dart';
 
 /// The background is intentionally quieter than a child's narration.
-const double defaultDubbingBackgroundGainDb = -18;
+const double defaultDubbingBackgroundGainDb = -12;
 const double _minimumBackgroundGainDb = -36;
 const double _maximumBackgroundGainDb = -6;
 
@@ -165,8 +165,11 @@ final class DubbingMixPlan {
             takeKind: DubbingTakeKind.sentence,
             audioRelativePath: take.audioRelativePath,
             duration: take.duration,
+            contentOffset: take.contentOffset,
             isSelected: true,
             scoreStatus: take.scoreStatus,
+            scoreJson: take.scoreJson,
+            scoreError: take.scoreError,
             createdAt: take.createdAt,
           ),
           audioPath: audioPath,
@@ -193,7 +196,8 @@ final class DubbingMixPlan {
       mode == DubbingMixMode.withConfirmedBackground;
 
   String get sourceTakeFingerprint => sentenceTakes
-      .map((entry) => '${entry.take.id}@${entry.start.inMilliseconds}')
+      .map((entry) => '${entry.take.id}@${entry.start.inMilliseconds}'
+          '+${entry.take.contentOffset.inMilliseconds}')
       .join(',');
 }
 
@@ -345,10 +349,12 @@ final class FfmpegKitDubbingMixService implements DubbingMixService {
     for (var index = 0; index < plan.sentenceTakes.length; index++) {
       final take = plan.sentenceTakes[index];
       final delay = take.start.inMilliseconds;
+      final trimStart = _seconds(take.take.contentOffset);
       final sourceIndex = inputIndex + index;
       final label = 'voice$index';
       filters.add(
-        '[$sourceIndex:a]aresample=48000,adelay=$delay:all=1,asetpts=N/SR/TB[$label]',
+        '[$sourceIndex:a]atrim=start=$trimStart,asetpts=PTS-STARTPTS,'
+        'aresample=48000,adelay=$delay:all=1[$label]',
       );
       labels.add('[$label]');
     }

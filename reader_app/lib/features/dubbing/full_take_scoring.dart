@@ -17,11 +17,16 @@ final class FullTakeScorer {
   Future<FullTakeScoreReport> score({
     required File audio,
     required List<OriginalAudioSentence> sentences,
+    Duration contentOffset = Duration.zero,
   }) async {
     final pcm = parseWavPcm16(await audio.readAsBytes()).pcm16k;
     final results = <FullTakeSentenceScore>[];
     for (final sentence in sentences) {
-      final slice = pcm16SliceForRange(pcm, sentence.start, sentence.end);
+      final slice = pcm16SliceForRange(
+        pcm,
+        sentence.start + contentOffset,
+        sentence.end + contentOffset,
+      );
       if (slice.isEmpty) {
         results.add(FullTakeSentenceScore.failed(
           sentenceId: sentence.id,

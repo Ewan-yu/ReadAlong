@@ -17,6 +17,7 @@ from app.models.original_timeline import (
 )
 from app.pipeline.original_timeline import (
     load_and_validate_timeline,
+    validate_timeline_timing_quality,
     validate_timeline_against_alignment_db,
     write_timeline,
 )
@@ -186,6 +187,69 @@ def test_builder_emits_reader_ms_contract_and_refuses_recognition_drift() -> Non
             duration_ms=2_000,
         )
     assert caught.value.code == "ORIGINAL_TIMELINE_WORD_MISMATCH"
+
+
+def test_timing_quality_rejects_ten_ms_words_and_multi_second_internal_gaps() -> None:
+    short_word = _timeline().model_copy(
+        update={
+            "sentences": (
+                _timeline().sentences[0].model_copy(
+                    update={
+                        "start_ms": 290,
+                        "words": (
+                            OriginalTimelineWord(seq=1, text="hello", start_ms=290, end_ms=300),
+                            _timeline().sentences[0].words[1],
+                        ),
+                    }
+                ),
+                _timeline().sentences[1],
+            )
+        }
+    )
+    with pytest.raises(PipelineError) as caught:
+        validate_timeline_timing_quality(short_word)
+    assert caught.value.code == "ORIGINAL_TIMELINE_TIMING_UNRELIABLE"
+
+    long_gap = _timeline().model_copy(
+        update={
+            "duration_ms": 5_000,
+            "sentences": (
+                _timeline().sentences[0].model_copy(
+                    update={
+                        "end_ms": 3_500,
+                        "words": (
+                            _timeline().sentences[0].words[0],
+                            OriginalTimelineWord(seq=2, text="world", start_ms=3_300, end_ms=3_500),
+                        ),
+                    }
+                ),
+            ),
+        }
+    )
+    with pytest.raises(PipelineError) as caught:
+        validate_timeline_timing_quality(long_gap)
+    assert caught.value.code == "ORIGINAL_TIMELINE_TIMING_UNRELIABLE"
+
+
+def test_discovery_projection_merges_fragmented_asr_word_without_losing_boundaries() -> None:
+    def timing(word: str, start: float, end: float) -> tuple[str, AudioWordTiming]:
+        return word, AudioWordTiming(word=word, t_start=start, t_end=end)
+
+    projected = OriginalTimelineStep._project_expected_phrase(
+        ("my", "grandpa's", "chopsticks", "are", "long"),
+        (
+            timing("my", 28.9, 29.2),
+            timing("grand", 29.2, 29.8),
+            timing("possed", 29.8, 30.5),
+            timing("chopsticks", 30.5, 31.1),
+            timing("are", 31.3, 31.7),
+            timing("long", 31.8, 32.4),
+        ),
+    )
+
+    assert [item.word for item in projected] == ["my", "grandpa's", "chopsticks", "are", "long"]
+    assert projected[1].t_start == pytest.approx(29.2)
+    assert projected[1].t_end == pytest.approx(30.5)
 
 
 def test_timeline_allows_a_narrated_subset_but_rejects_source_identity_drift(tmp_path: Path) -> None:

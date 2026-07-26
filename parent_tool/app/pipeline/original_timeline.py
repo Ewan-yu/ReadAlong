@@ -13,6 +13,37 @@ from app.pipeline.hashing import file_sha256
 
 
 TIMELINE_PATH = "timeline/original_timeline.json"
+MINIMUM_WORD_DURATION_MS = 30
+MAXIMUM_INTERNAL_WORD_GAP_MS = 2_500
+
+
+def validate_timeline_timing_quality(timeline: OriginalTimeline) -> None:
+    """Reject structurally valid but perceptually unusable forced alignment.
+
+    Stable-ts can occasionally collapse a repeated first word to its 10 ms
+    normalization floor or attach a later repeated word several seconds away.
+    Such JSON is monotonic, but sentence clipping will cut speech or borrow the
+    previous sentence on Android.  Packaging must fail instead of publishing it.
+    """
+
+    for sentence in timeline.sentences:
+        previous_end: int | None = None
+        for word in sentence.words:
+            if word.end_ms - word.start_ms < MINIMUM_WORD_DURATION_MS:
+                raise PipelineError(
+                    "ORIGINAL_TIMELINE_TIMING_UNRELIABLE",
+                    "原音逐词时间过短，无法可靠切分逐句示范音，请重新生成原音字幕。",
+                    details={"sentence_id": sentence.sentence_id, "word": word.text},
+                    status_code=422,
+                )
+            if previous_end is not None and word.start_ms - previous_end > MAXIMUM_INTERNAL_WORD_GAP_MS:
+                raise PipelineError(
+                    "ORIGINAL_TIMELINE_TIMING_UNRELIABLE",
+                    "原音句内词间隔异常，无法可靠切分逐句示范音，请重新生成原音字幕。",
+                    details={"sentence_id": sentence.sentence_id, "word": word.text},
+                    status_code=422,
+                )
+            previous_end = word.end_ms
 
 
 def load_and_validate_timeline(
@@ -49,6 +80,7 @@ def load_and_validate_timeline(
             "原音逐词时间线基于旧校对文本或旧人声轨，请重新生成。",
             status_code=409,
         )
+    validate_timeline_timing_quality(timeline)
     source_by_id = {sentence.id: sentence for sentence in sentences.sentences}
     for actual in timeline.sentences:
         expected = source_by_id.get(actual.sentence_id)

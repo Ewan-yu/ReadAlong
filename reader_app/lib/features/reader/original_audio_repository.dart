@@ -376,7 +376,10 @@ List<OriginalAudioWord> _parseWords(
     final start = _millisecondsToDuration(raw['start_ms']);
     final end = _millisecondsToDuration(raw['end_ms']);
     if (end <= start ||
+        end - start < const Duration(milliseconds: 30) ||
         start < previousEnd ||
+        (words.isNotEmpty &&
+            start - previousEnd > const Duration(milliseconds: 2500)) ||
         start < sentenceStart ||
         end > sentenceEnd) {
       throw const OriginalAudioDataException('Timeline word range is invalid');

@@ -17,7 +17,10 @@ STEP_DEPENDENCIES: dict[StepId, tuple[StepId, ...]] = {
     StepId.PROOFREAD: (StepId.OCR,),
     StepId.AUDIO: (StepId.PROOFREAD,),
     StepId.EXPORT: (StepId.PAGES, StepId.PROOFREAD, StepId.AUDIO),
-    StepId.ORIGINAL_AUDIO: (StepId.PROOFREAD,),
+    # Source separation depends only on the uploaded original recording.
+    # Editing OCR/proofread text must not discard an already reviewed
+    # background/vocal split; only the lyric timeline depends on that text.
+    StepId.ORIGINAL_AUDIO: (),
     StepId.ORIGINAL_TIMELINE: (StepId.PROOFREAD, StepId.ORIGINAL_AUDIO),
 }
 

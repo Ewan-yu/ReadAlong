@@ -295,3 +295,15 @@ WavPcmData parseWavPcm16(Uint8List bytes) {
     bitsPerSample: bitsPerSample!,
   );
 }
+
+/// Returns PCM starting at the child-visible content zero. The lead-in remains
+/// in the WAV for recovery and diagnostics but never dilutes speech scoring.
+Uint8List pcm16SliceFromOffset(Uint8List pcm, Duration contentOffset) {
+  if (contentOffset <= Duration.zero) return pcm;
+  const bytesPerMillisecond = 32; // 16 kHz × 16-bit mono.
+  final offset = (contentOffset.inMilliseconds * bytesPerMillisecond)
+      .clamp(0, pcm.length)
+      .toInt();
+  if (offset >= pcm.length) return Uint8List(0);
+  return Uint8List.sublistView(pcm, offset);
+}

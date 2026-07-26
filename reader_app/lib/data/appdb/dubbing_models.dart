@@ -65,6 +65,7 @@ final class DubbingTake {
     required this.scoreStatus,
     required this.createdAt,
     this.sentenceId,
+    this.contentOffset = Duration.zero,
     this.scoreJson,
     this.scoreError,
   });
@@ -75,6 +76,11 @@ final class DubbingTake {
   final DubbingTakeKind takeKind;
   final String audioRelativePath;
   final Duration duration;
+
+  /// Lead-in captured while Android stabilizes the microphone and the child
+  /// sees the countdown. Existing v5 Takes default to zero and keep their
+  /// original playback, scoring and mixing semantics.
+  final Duration contentOffset;
   final bool isSelected;
   final DubbingTakeScoreStatus scoreStatus;
   final String? scoreJson;
@@ -88,6 +94,9 @@ final class DubbingTake {
         takeKind: DubbingTakeKind.values.byName(map['take_kind']! as String),
         audioRelativePath: map['audio_path']! as String,
         duration: Duration(milliseconds: map['duration_ms']! as int),
+        contentOffset: Duration(
+          milliseconds: (map['content_offset_ms'] as int?) ?? 0,
+        ),
         isSelected: (map['selected']! as int) != 0,
         scoreStatus: DubbingTakeScoreStatus.values
             .byName(map['score_status']! as String),

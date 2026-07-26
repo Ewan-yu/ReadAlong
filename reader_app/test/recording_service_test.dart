@@ -50,6 +50,18 @@ void main() {
     );
   });
 
+  test('评分只读取内容零点之后的 PCM', () {
+    final pcm = Uint8List.fromList(List<int>.generate(96, (index) => index));
+
+    final sliced = pcm16SliceFromOffset(pcm, const Duration(milliseconds: 2));
+
+    expect(sliced, pcm.sublist(64));
+    expect(
+      pcm16SliceFromOffset(pcm, const Duration(seconds: 1)),
+      isEmpty,
+    );
+  });
+
   test('启动清理只删除临时跟读目录和旧版 records 目录', () async {
     final root = await Directory.systemTemp.createTemp('follow_cleanup_test_');
     addTearDown(() => root.delete(recursive: true));
