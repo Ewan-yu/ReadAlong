@@ -13,6 +13,10 @@ const double defaultDubbingBackgroundGainDb = -12;
 const double _minimumBackgroundGainDb = -36;
 const double _maximumBackgroundGainDb = -6;
 
+/// A natural breath between two child recordings. It is used only when a
+/// slower recording would otherwise overlap the following sentence.
+const Duration defaultDubbingSentenceGap = Duration(milliseconds: 350);
+
 enum DubbingMixMode { voiceOnly, withConfirmedBackground }
 
 /// A selected, durable sentence Take placed on the original-audio timeline.
@@ -90,7 +94,10 @@ final class DubbingMixPlan {
     final seenSequences = <int>{};
     final normalizedTakes = <DubbingMixSentenceTake>[];
     var renderDuration = timelineDuration;
-    for (final entry in sentenceTakes) {
+    Duration? previousVoiceEnd;
+    final orderedEntries = sentenceTakes.toList()
+      ..sort((left, right) => left.sequence.compareTo(right.sequence));
+    for (final entry in orderedEntries) {
       if (entry.sentenceId.isEmpty ||
           entry.sentenceId != entry.take.sentenceId ||
           entry.sequence < 1 ||
@@ -111,16 +118,25 @@ final class DubbingMixPlan {
         background: normalizedBackground,
         source: normalizedSource,
       );
-      final takeEnd = entry.start + entry.take.duration;
+      // Prefer the original timeline, but do not start the next child voice
+      // while the previous one is still speaking. We delay only the later
+      // voice; no child recording is cropped to fit a reference window.
+      final minimumStart = previousVoiceEnd == null
+          ? entry.start
+          : previousVoiceEnd + defaultDubbingSentenceGap;
+      final voiceStart =
+          entry.start >= minimumStart ? entry.start : minimumStart;
+      final takeEnd = voiceStart + entry.take.duration;
       if (takeEnd > renderDuration) renderDuration = takeEnd;
       normalizedTakes.add(DubbingMixSentenceTake(
         sentenceId: entry.sentenceId,
         sequence: entry.sequence,
-        start: entry.start,
+        start: voiceStart,
         end: entry.end,
         take: entry.take,
         audioPath: path,
       ));
+      previousVoiceEnd = takeEnd;
     }
     normalizedTakes
         .sort((left, right) => left.sequence.compareTo(right.sequence));

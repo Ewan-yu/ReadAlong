@@ -12,6 +12,7 @@ void main() {
     bool selected = true,
     DubbingTakeKind kind = DubbingTakeKind.sentence,
     Duration contentOffset = Duration.zero,
+    Duration duration = const Duration(milliseconds: 800),
   }) =>
       DubbingTake(
         id: id,
@@ -19,7 +20,7 @@ void main() {
         sentenceId: sentenceId,
         takeKind: kind,
         audioRelativePath: 'dubbing/book/project/takes/$sentenceId/$id.wav',
-        duration: const Duration(milliseconds: 800),
+        duration: duration,
         contentOffset: contentOffset,
         isSelected: selected,
         scoreStatus: DubbingTakeScoreStatus.scored,
@@ -32,13 +33,19 @@ void main() {
     required int sequence,
     String? path,
     bool selected = true,
+    Duration duration = const Duration(milliseconds: 800),
   }) =>
       DubbingMixSentenceTake(
         sentenceId: sentenceId,
         sequence: sequence,
         start: Duration(seconds: sequence - 1),
         end: Duration(seconds: sequence),
-        take: selectedTake(id: id, sentenceId: sentenceId, selected: selected),
+        take: selectedTake(
+          id: id,
+          sentenceId: sentenceId,
+          selected: selected,
+          duration: duration,
+        ),
         audioPath:
             path ?? 'C:/app/dubbing/book/project/takes/$sentenceId/$id.wav',
       );
@@ -185,6 +192,38 @@ void main() {
     expect(command, contains('atrim=start=3.650'));
     expect(command, contains('adelay=2000:all=1'));
     expect(plan.sourceTakeFingerprint, contains('+3650'));
+  });
+
+  test('儿童录音较慢时顺延后续句，保留自然间隔且不重叠', () {
+    final plan = DubbingMixPlan.create(
+      sentenceTakes: [
+        entry(
+          id: 'take-1',
+          sentenceId: 's0001',
+          sequence: 1,
+          duration: const Duration(milliseconds: 1300),
+        ),
+        entry(id: 'take-2', sentenceId: 's0002', sequence: 2),
+        entry(id: 'take-3', sentenceId: 's0003', sequence: 3),
+      ],
+      outputPath: 'C:/app/dubbing/book/project/mixes/work.wav',
+      mode: DubbingMixMode.voiceOnly,
+      timelineDuration: const Duration(seconds: 3),
+    );
+
+    expect(plan.sentenceTakes.map((entry) => entry.start), [
+      Duration.zero,
+      const Duration(milliseconds: 1650),
+      const Duration(milliseconds: 2800),
+    ]);
+    expect(plan.renderDuration, const Duration(milliseconds: 3600));
+
+    final command = FfmpegKitDubbingMixService.buildCommandForTest(
+      plan,
+      'C:/app/dubbing/book/project/mixes/.work.part.wav',
+    );
+    expect(command, contains('adelay=1650:all=1'));
+    expect(command, contains('adelay=2800:all=1'));
   });
 
   test('成功后才原子发布作品，失败会清理半成品', () async {

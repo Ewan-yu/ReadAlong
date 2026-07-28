@@ -26,6 +26,23 @@ enum FollowReadingPhase {
 const followSpeechLevelThreshold = 0.08;
 const _speechFramesRequired = 2;
 
+/// MediaRecorder can begin writing PCM a little after `start()` resolves on
+/// Android. Never trim the full visual countdown from a follow-reading take:
+/// doing so can cut the child's first spoken consonant. The remaining short
+/// silence is safe for scoring and replay, while the first word is not.
+const followRecordingContentOffsetSafetyLead = Duration(milliseconds: 650);
+
+Duration followRecordingContentOffset(Duration preparationElapsed) {
+  return preparationElapsed - followRecordingContentLeadIn(preparationElapsed);
+}
+
+Duration followRecordingContentLeadIn(Duration preparationElapsed) {
+  if (preparationElapsed <= followRecordingContentOffsetSafetyLead) {
+    return preparationElapsed;
+  }
+  return followRecordingContentOffsetSafetyLead;
+}
+
 final class FollowRecordingTiming {
   const FollowRecordingTiming({
     required this.referenceDuration,
@@ -214,6 +231,7 @@ final class FollowReadingController
   var _generation = 0;
   var _disposed = false;
   Duration _contentOffset = Duration.zero;
+  Duration _contentLeadIn = Duration.zero;
 
   @override
   Future<FollowReadingState> build(String libraryId) async {
@@ -342,7 +360,7 @@ final class FollowReadingController
         activeWordIndex: null,
         failure: null,
       ));
-      _contentOffset = await _preparation.run(
+      final preparationElapsed = await _preparation.run(
         isActive: () => _isCurrent(generation),
         onUpdate: (update) {
           final latest = state.valueOrNull;
@@ -355,6 +373,8 @@ final class FollowReadingController
           ));
         },
       );
+      _contentOffset = followRecordingContentOffset(preparationElapsed);
+      _contentLeadIn = followRecordingContentLeadIn(preparationElapsed);
       if (!_isCurrent(generation)) {
         await _recorder.cancel();
         return;
@@ -455,7 +475,7 @@ final class FollowReadingController
         audioPath: audioPath,
         referenceText: sentence.text,
         contentOffset: _contentOffset,
-        duration: _stopwatch?.elapsed ?? current.elapsed,
+        duration: (_stopwatch?.elapsed ?? current.elapsed) + _contentLeadIn,
       );
       final latest = state.valueOrNull;
       if (latest == null) return;

@@ -133,9 +133,6 @@ final class ReadingRecord {
 }
 
 class ShelfIndex {
-  /// Product limit for alternative recordings of one sentence.
-  static const maxSentenceTakes = 3;
-
   final String databasePath;
   final DatabaseFactory databaseFactory;
 
@@ -513,21 +510,6 @@ class ShelfIndex {
           limit: 1,
         );
         if (projectRows.isEmpty) throw StateError('配音项目不存在');
-
-        // A child may keep three alternatives for one sentence. Count inside
-        // this transaction so concurrent save requests cannot make the fourth
-        // recording visible.
-        if (takeKind == DubbingTakeKind.sentence) {
-          final countRows = await transaction.rawQuery(
-            'SELECT COUNT(*) AS count FROM dubbing_take '
-            'WHERE project_id = ? AND take_kind = ? AND sentence_id = ?',
-            [projectId, takeKind.name, sentenceId],
-          );
-          final count = countRows.single['count']! as int;
-          if (count >= maxSentenceTakes) {
-            throw StateError('每句最多保留 $maxSentenceTakes 个 Take，请先替换一个');
-          }
-        }
 
         await transaction.insert('dubbing_take', {
           'id': take.id,

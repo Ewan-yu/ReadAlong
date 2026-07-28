@@ -371,13 +371,16 @@ class _ShelfContents extends StatelessWidget {
                   ? 2
                   : width < 976
                       ? 3
-                      : 4;
+                      : width < 1280
+                          ? 4
+                          : 5;
+              final childAspectRatio = width < 568 ? 0.56 : 0.62;
               return SliverGrid(
                 gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
                   crossAxisCount: columns,
                   mainAxisSpacing: AppSpacing.pageMargin,
                   crossAxisSpacing: AppSpacing.cardPadding,
-                  childAspectRatio: 0.68,
+                  childAspectRatio: childAspectRatio,
                 ),
                 delegate: SliverChildBuilderDelegate(
                   (context, index) {
@@ -525,23 +528,22 @@ class _BookTile extends StatelessWidget {
                       ],
                     ),
                   ),
-                  Expanded(
+                  SizedBox(
+                    height: 64,
                     child: Padding(
                       padding: const EdgeInsets.symmetric(
                         horizontal: AppSpacing.cardPadding,
                         vertical: AppSpacing.unit,
                       ),
-                      child: Align(
-                        alignment: Alignment.centerLeft,
-                        child: Text(
-                          book.title,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            color: AppColors.textPrimary,
-                            fontSize: 18,
-                            fontWeight: FontWeight.w700,
-                          ),
+                      child: Text(
+                        book.title,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: AppColors.textPrimary,
+                          fontSize: 17,
+                          height: 1.16,
+                          fontWeight: FontWeight.w700,
                         ),
                       ),
                     ),
@@ -600,11 +602,11 @@ class _ShelfImportCard extends StatelessWidget {
               ),
             ),
             child: SizedBox(
-              width: 64,
-              height: 64,
+              width: 48,
+              height: 48,
               child: Icon(
                 Icons.drive_folder_upload_outlined,
-                size: 36,
+                size: 28,
                 color: AppColors.primary,
               ),
             ),
@@ -622,7 +624,7 @@ class _ShelfImportCard extends StatelessWidget {
               const SizedBox(height: AppSpacing.unit / 2),
               const Text(
                 '从本地文件选择资源包，添加新的绘本到书架',
-                maxLines: 2,
+                maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(color: AppColors.textSecondary),
               ),
@@ -637,7 +639,10 @@ class _ShelfImportCard extends StatelessWidget {
           final compact = constraints.maxWidth < 520;
           return Card(
             child: Padding(
-              padding: const EdgeInsets.all(AppSpacing.cardPadding),
+              padding: const EdgeInsets.symmetric(
+                horizontal: AppSpacing.cardPadding,
+                vertical: AppSpacing.unit + 2,
+              ),
               child: compact
                   ? Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,

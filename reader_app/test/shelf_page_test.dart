@@ -158,7 +158,7 @@ void main() {
     );
   });
 
-  testWidgets('书架标题省略且封面边界稳定保持 3:4', (tester) async {
+  testWidgets('书架标题可显示两行且封面边界稳定保持 3:4', (tester) async {
     final book = _book('one', title: '月亮晚安', pageCount: 18);
     await _pumpShelf(tester, books: [book]);
 
@@ -171,7 +171,7 @@ void main() {
     final title = tester.widget<Text>(find.text(book.title));
     expect(cover.aspectRatio, 3 / 4);
     expect(coverSize.width / coverSize.height, closeTo(3 / 4, 0.001));
-    expect(title.maxLines, 1);
+    expect(title.maxLines, 2);
     expect(title.overflow, TextOverflow.ellipsis);
   });
 
@@ -195,13 +195,13 @@ void main() {
     await _pumpShelf(
       tester,
       books: books,
-      size: const Size(1280, 800),
+      size: const Size(1600, 900),
     );
     expect(tester.takeException(), isNull);
     final wideFirstRow = _visibleFirstRowCount(tester);
 
     expect(narrowFirstRow, 2);
-    expect(wideFirstRow, 4);
+    expect(wideFirstRow, 5);
   });
 
   testWidgets('校验错误对话框可滚动到最末错误', (tester) async {

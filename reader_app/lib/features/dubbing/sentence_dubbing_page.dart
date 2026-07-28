@@ -189,8 +189,11 @@ class _DubbingView extends ConsumerWidget {
             onSelect: (take) => unawaited(controller.selectTake(take.id)),
             onPlay: (take) => unawaited(controller.playTake(take)),
             onRetryScore: (take) => unawaited(controller.retryScore(take)),
+            onDelete: (take) => unawaited(controller.deleteTake(take.id)),
             onCreateMix: () => unawaited(controller.createMix()),
             onPlayMix: (mix) => unawaited(controller.playMix(mix)),
+            onRestartStory: () =>
+                unawaited(_confirmRestartStory(context, controller)),
           );
           if (compact) {
             final lyricHeight =
@@ -212,6 +215,54 @@ class _DubbingView extends ConsumerWidget {
         },
       ),
     );
+  }
+}
+
+enum _RestartStoryChoice { keepLatestStory, deleteEverything }
+
+Future<void> _confirmRestartStory(
+  BuildContext context,
+  SentenceDubbingController controller,
+) async {
+  final choice = await showDialog<_RestartStoryChoice>(
+    context: context,
+    builder: (dialogContext) => AlertDialog(
+      title: const Text('重新录这本故事？'),
+      content: const Text(
+        '会清除这次的所有逐句录音，并回到第 1 句。你可以保留最后合成的作品，或者把它也一起清除。',
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(dialogContext),
+          child: const Text('取消'),
+        ),
+        TextButton(
+          onPressed: () => Navigator.pop(
+            dialogContext,
+            _RestartStoryChoice.keepLatestStory,
+          ),
+          child: const Text('保留最后作品'),
+        ),
+        TextButton(
+          style: TextButton.styleFrom(
+            foregroundColor: Theme.of(dialogContext).colorScheme.error,
+          ),
+          onPressed: () => Navigator.pop(
+            dialogContext,
+            _RestartStoryChoice.deleteEverything,
+          ),
+          child: const Text('全部清除'),
+        ),
+      ],
+    ),
+  );
+  switch (choice) {
+    case _RestartStoryChoice.keepLatestStory:
+      await controller.restartStory(keepMixes: true);
+    case _RestartStoryChoice.deleteEverything:
+      await controller.restartStory(keepMixes: false);
+    case null:
+      return;
   }
 }
 
@@ -302,8 +353,10 @@ class _GuidedControls extends StatelessWidget {
     required this.onSelect,
     required this.onPlay,
     required this.onRetryScore,
+    required this.onDelete,
     required this.onCreateMix,
     required this.onPlayMix,
+    required this.onRestartStory,
   });
 
   final SentenceDubbingState state;
@@ -317,8 +370,10 @@ class _GuidedControls extends StatelessWidget {
   final ValueChanged<DubbingTake> onSelect;
   final ValueChanged<DubbingTake> onPlay;
   final ValueChanged<DubbingTake> onRetryScore;
+  final ValueChanged<DubbingTake> onDelete;
   final VoidCallback onCreateMix;
   final ValueChanged<DubbingMix> onPlayMix;
+  final VoidCallback onRestartStory;
 
   @override
   Widget build(BuildContext context) {
@@ -328,6 +383,8 @@ class _GuidedControls extends StatelessWidget {
       onCancelPreparation: onCancelPreparation,
       onStop: onStop,
       onContinue: onContinue,
+      onCreateMix: onCreateMix,
+      onRestartStory: onRestartStory,
     );
     final failure = state.failure == null
         ? null
@@ -339,7 +396,7 @@ class _GuidedControls extends StatelessWidget {
         childrenPadding: EdgeInsets.zero,
         leading: const Icon(Icons.library_music_outlined),
         title: Text('我的录音（${state.takes.length}）'),
-        subtitle: const Text('需要试听或改选时再打开；删除由家长统一管理'),
+        subtitle: const Text('可以试听、改选；不想要的录音直接删掉'),
         children: [
           if (state.takes.isEmpty)
             const Padding(
@@ -355,10 +412,11 @@ class _GuidedControls extends StatelessWidget {
               onSelect: () => onSelect(take),
               onPlay: () => onPlay(take),
               onRetry: () => onRetryScore(take),
+              onDelete: () => onDelete(take),
             ),
         ],
       ),
-      if (state.canCreateMix) ...[
+      if (state.canCreateMix && state.phase != SentenceDubbingPhase.result) ...[
         const SizedBox(height: AppSpacing.cardPadding),
         FilledButton.icon(
           key: const ValueKey('sentence-dubbing-create-work'),
@@ -374,9 +432,10 @@ class _GuidedControls extends StatelessWidget {
         ),
       ],
       if (state.mixes.isNotEmpty)
-        _LatestMix(
-          mix: state.mixes.first,
-          onPlay: () => onPlayMix(state.mixes.first),
+        _StoryWorks(
+          mixes: state.mixes,
+          lastGeneratedMixId: state.lastGeneratedMixId,
+          onPlay: onPlayMix,
         ),
     ];
     final navigation = _SentenceNavigation(
@@ -496,6 +555,8 @@ class _PrimaryStage extends StatelessWidget {
     required this.onCancelPreparation,
     required this.onStop,
     required this.onContinue,
+    required this.onCreateMix,
+    required this.onRestartStory,
   });
 
   final SentenceDubbingState state;
@@ -503,6 +564,8 @@ class _PrimaryStage extends StatelessWidget {
   final VoidCallback onCancelPreparation;
   final VoidCallback onStop;
   final VoidCallback onContinue;
+  final VoidCallback onCreateMix;
+  final VoidCallback onRestartStory;
 
   @override
   Widget build(BuildContext context) {
@@ -515,9 +578,12 @@ class _PrimaryStage extends StatelessWidget {
       SentenceDubbingPhase.countdown => '马上到你',
       SentenceDubbingPhase.recording => '轮到你啦',
       SentenceDubbingPhase.scoring => '录音保存好了',
-      SentenceDubbingPhase.result => '这一句完成啦',
+      SentenceDubbingPhase.result => state.canCreateMix
+          ? (state.mixes.isEmpty ? '全部录好啦' : '故事已经做好啦')
+          : '这一句完成啦',
       SentenceDubbingPhase.mixing => '正在完成故事',
-      _ => state.canRecord ? '听一句，录一句' : '本句已有 3 条录音',
+      SentenceDubbingPhase.restarting => '正在重新开始',
+      _ => '听一句，录一句',
     };
     final hint = switch (phase) {
       SentenceDubbingPhase.demonstrating => '看着亮起的词，记住说话节奏',
@@ -525,9 +591,14 @@ class _PrimaryStage extends StatelessWidget {
       SentenceDubbingPhase.countdown => '听完这一拍就开始',
       SentenceDubbingPhase.recording => '读完后点“完成这一句”',
       SentenceDubbingPhase.scoring => '正在听一听你的表现…',
-      SentenceDubbingPhase.result => state.result == null
-          ? '录音已经保留，可以再录或从下面选择一版'
-          : '得到 ${state.result!.stars.toStringAsFixed(1)} 星，已自动选用这一版',
+      SentenceDubbingPhase.result => state.canCreateMix
+          ? (state.mixes.isEmpty
+              ? '所有句子都完成了，点“完成故事”生成可以回听的作品'
+              : '可以试听下面的最新故事；想换一版也可以重新生成')
+          : state.result == null
+              ? '录音已经保留，可以再录或从下面选择一版'
+              : '得到 ${state.result!.stars.toStringAsFixed(1)} 星，已自动选用这一版',
+      SentenceDubbingPhase.restarting => '正在安全清理这次的逐句录音…',
       _ => '点一次按钮，会自动听示范并接着录音',
     };
     return Semantics(
@@ -601,20 +672,29 @@ class _PrimaryStage extends StatelessWidget {
                 alignment: WrapAlignment.center,
                 children: [
                   OutlinedButton.icon(
-                    onPressed: state.canRecord ? onStart : null,
+                    onPressed: state.canCreateMix
+                        ? onRestartStory
+                        : (state.canRecord ? onStart : null),
                     icon: const Icon(Icons.refresh_rounded),
-                    label: const Text('再录一次'),
+                    label: Text(state.canCreateMix ? '重新录整本' : '再录一次'),
                   ),
                   FilledButton.icon(
-                    onPressed: state.hasSelectedTake ? onContinue : null,
+                    onPressed: state.hasSelectedTake
+                        ? (state.canCreateMix ? onCreateMix : onContinue)
+                        : null,
                     icon: const Icon(Icons.arrow_forward_rounded),
-                    label: Text(state.canCreateMix ? '去完成故事' : '下一句，接着录'),
+                    label: Text(state.canCreateMix
+                        ? (state.original.backgroundPath == null
+                            ? '完成故事（纯人声）'
+                            : '完成故事（带背景音乐）')
+                        : '下一句，接着录'),
                   ),
                 ],
               )
             else if (phase == SentenceDubbingPhase.demonstrating ||
                 phase == SentenceDubbingPhase.scoring ||
-                phase == SentenceDubbingPhase.mixing)
+                phase == SentenceDubbingPhase.mixing ||
+                phase == SentenceDubbingPhase.restarting)
               const SizedBox(
                 width: AppSizes.minTouchTarget,
                 height: AppSizes.minTouchTarget,
@@ -628,9 +708,9 @@ class _PrimaryStage extends StatelessWidget {
                   padding:
                       const EdgeInsets.symmetric(horizontal: 28, vertical: 16),
                 ),
-                onPressed: state.canRecord ? onStart : null,
+                onPressed: onStart,
                 icon: const Icon(Icons.volume_up_rounded),
-                label: Text(state.canRecord ? '开始这一句' : '请先管理已有录音'),
+                label: const Text('开始这一句'),
               ),
           ],
         ),
@@ -645,18 +725,21 @@ class _TakeRow extends StatelessWidget {
     required this.onSelect,
     required this.onPlay,
     required this.onRetry,
+    required this.onDelete,
   });
 
   final DubbingTake take;
   final VoidCallback onSelect;
   final VoidCallback onPlay;
   final VoidCallback onRetry;
+  final VoidCallback onDelete;
 
   @override
   Widget build(BuildContext context) {
     final score = take.scoreJson == null ? null : _score(take.scoreJson!);
     return ListTile(
       contentPadding: EdgeInsets.zero,
+      onTap: take.isSelected ? null : onSelect,
       leading: Icon(
         take.isSelected ? Icons.check_circle : Icons.mic_none_rounded,
         color: take.isSelected ? AppColors.success : AppColors.textSecondary,
@@ -666,7 +749,9 @@ class _TakeRow extends StatelessWidget {
         score == null
             ? (take.scoreStatus == DubbingTakeScoreStatus.failed
                 ? '评分暂时没完成，录音仍然保留'
-                : '录音已保存')
+                : take.isSelected
+                    ? '录音已保存'
+                    : '点这一行就使用这版')
             : '${score.toStringAsFixed(1)} 星',
       ),
       trailing: Row(
@@ -677,32 +762,122 @@ class _TakeRow extends StatelessWidget {
             icon: const Icon(Icons.play_arrow_rounded),
             tooltip: '听这条录音',
           ),
-          PopupMenuButton<String>(
-            tooltip: '管理这条录音',
-            onSelected: (value) {
-              if (value == 'select') onSelect();
-              if (value == 'retry') onRetry();
-            },
-            itemBuilder: (_) => [
-              if (!take.isSelected)
-                const PopupMenuItem(value: 'select', child: Text('使用这一版')),
-              if (take.scoreStatus == DubbingTakeScoreStatus.failed)
-                const PopupMenuItem(value: 'retry', child: Text('重新评分')),
-            ],
+          if (take.scoreStatus == DubbingTakeScoreStatus.failed)
+            IconButton(
+              onPressed: onRetry,
+              icon: const Icon(Icons.refresh_rounded),
+              tooltip: '重新评分',
+            ),
+          IconButton(
+            onPressed: () => _confirmDelete(context),
+            icon: const Icon(Icons.delete_outline_rounded),
+            tooltip: '删除这条录音',
           ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _confirmDelete(BuildContext context) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('删除这条录音？'),
+        content: const Text('删掉后不能恢复，但不会影响这本绘本。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('保留'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('删除'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true) onDelete();
+  }
+}
+
+class _StoryWorks extends StatelessWidget {
+  const _StoryWorks({
+    required this.mixes,
+    required this.lastGeneratedMixId,
+    required this.onPlay,
+  });
+
+  final List<DubbingMix> mixes;
+  final String? lastGeneratedMixId;
+  final ValueChanged<DubbingMix> onPlay;
+
+  @override
+  Widget build(BuildContext context) {
+    DubbingMix? newlyCreated;
+    for (final mix in mixes) {
+      if (mix.id == lastGeneratedMixId) {
+        newlyCreated = mix;
+        break;
+      }
+    }
+    return Padding(
+      padding: const EdgeInsets.only(top: AppSpacing.cardPadding),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (newlyCreated != null)
+            Semantics(
+              liveRegion: true,
+              child: Container(
+                padding: const EdgeInsets.all(AppSpacing.cardPadding),
+                decoration: BoxDecoration(
+                  color: AppColors.primaryContainer,
+                  borderRadius: BorderRadius.circular(AppRadius.card),
+                ),
+                child: const Row(
+                  children: [
+                    Icon(Icons.check_circle_rounded, color: AppColors.success),
+                    SizedBox(width: AppSpacing.unit),
+                    Expanded(
+                      child: Text(
+                        '新故事作品已生成，已安全保存',
+                        style: TextStyle(fontWeight: FontWeight.w800),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          if (newlyCreated != null) const SizedBox(height: AppSpacing.unit),
+          Text(
+            '故事作品（${mixes.length}）',
+            style: const TextStyle(fontWeight: FontWeight.w800),
+          ),
+          for (var index = 0; index < mixes.length; index++)
+            _StoryWorkRow(
+              mix: mixes[index],
+              title: mixes[index].id == lastGeneratedMixId
+                  ? '刚刚生成的作品'
+                  : index == 0
+                      ? '最新作品'
+                      : '保留的上一版',
+              onPlay: () => onPlay(mixes[index]),
+            ),
         ],
       ),
     );
   }
 }
 
-class _LatestMix extends StatelessWidget {
-  const _LatestMix({
+class _StoryWorkRow extends StatelessWidget {
+  const _StoryWorkRow({
     required this.mix,
+    required this.title,
     required this.onPlay,
   });
 
   final DubbingMix mix;
+  final String title;
   final VoidCallback onPlay;
 
   @override
@@ -714,19 +889,14 @@ class _LatestMix extends StatelessWidget {
               : Icons.record_voice_over_rounded,
           color: AppColors.primary,
         ),
-        title: Text(mix.variant == DubbingMixVariant.background
-            ? '最新背景版故事'
-            : '最新纯人声故事'),
-        subtitle: Text(_clock(mix.duration)),
-        trailing: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            IconButton(
-              tooltip: '播放故事',
-              onPressed: onPlay,
-              icon: const Icon(Icons.play_arrow_rounded),
-            ),
-          ],
+        title: Text(title),
+        subtitle: Text(
+          '${mix.variant == DubbingMixVariant.background ? '带背景音乐' : '纯人声'} · ${_clock(mix.duration)}',
+        ),
+        trailing: IconButton(
+          tooltip: '播放故事',
+          onPressed: onPlay,
+          icon: const Icon(Icons.play_arrow_rounded),
         ),
       );
 }

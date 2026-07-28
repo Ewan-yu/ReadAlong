@@ -18,7 +18,6 @@ import '../reader/sentence_audio_player.dart';
 import '../reader/timeline_lyrics.dart';
 import 'dubbing_repository.dart';
 
-const sentenceDubbingMaximumTakes = 3;
 const sentenceDubbingMaximumDemonstrationPreroll = Duration(milliseconds: 900);
 const sentenceDubbingDemonstrationTail = Duration(milliseconds: 650);
 const sentenceDubbingMinimumGapPadding = Duration(milliseconds: 350);
@@ -26,6 +25,13 @@ const sentenceDubbingMinimumGapPadding = Duration(milliseconds: 350);
 /// Microphone capture can briefly reroute Android audio. Tests override this
 /// to zero; production waits before play so the first spoken sound is audible.
 final sentenceDubbingPlaybackSettleProvider = Provider<Duration>(
+  (_) => const Duration(milliseconds: 350),
+);
+
+/// Android's media position can reach the last decoded frame before it has
+/// reached the speaker, especially just after microphone routing changes.
+/// Keep the output path alive briefly before switching into recording.
+final sentenceDubbingDemonstrationOutputDrainProvider = Provider<Duration>(
   (_) => const Duration(milliseconds: 350),
 );
 
@@ -38,6 +44,7 @@ enum SentenceDubbingPhase {
   scoring,
   result,
   mixing,
+  restarting,
   failed,
 }
 
@@ -57,6 +64,7 @@ final class SentenceDubbingState {
     this.activeWordIndex,
     this.result,
     this.failure,
+    this.lastGeneratedMixId,
   });
 
   final DubbingProject project;
@@ -73,6 +81,7 @@ final class SentenceDubbingState {
   final int? activeWordIndex;
   final ScoreResult? result;
   final String? failure;
+  final String? lastGeneratedMixId;
 
   OriginalAudioSentence get sentence => original.sentences[sentenceIndex];
   bool get isRecording => phase == SentenceDubbingPhase.recording;
@@ -82,8 +91,12 @@ final class SentenceDubbingState {
       phase == SentenceDubbingPhase.preparing ||
       phase == SentenceDubbingPhase.countdown ||
       phase == SentenceDubbingPhase.scoring ||
-      phase == SentenceDubbingPhase.mixing;
-  bool get canRecord => !isBusy && takes.length < sentenceDubbingMaximumTakes;
+      phase == SentenceDubbingPhase.mixing ||
+      phase == SentenceDubbingPhase.restarting;
+
+  /// Keep recording available after several attempts. The page exposes a
+  /// direct per-take delete action, while Settings remains for parent cleanup.
+  bool get canRecord => !isBusy;
   bool get canGoPrevious => !isBusy && sentenceIndex > 0;
   bool get canGoNext =>
       !isBusy && sentenceIndex + 1 < original.sentences.length;
@@ -103,6 +116,7 @@ final class SentenceDubbingState {
     Object? activeWordIndex = _dubbingUnset,
     Object? result = _dubbingUnset,
     Object? failure = _dubbingUnset,
+    Object? lastGeneratedMixId = _dubbingUnset,
   }) =>
       SentenceDubbingState(
         project: project,
@@ -126,6 +140,9 @@ final class SentenceDubbingState {
         failure: identical(failure, _dubbingUnset)
             ? this.failure
             : failure as String?,
+        lastGeneratedMixId: identical(lastGeneratedMixId, _dubbingUnset)
+            ? this.lastGeneratedMixId
+            : lastGeneratedMixId as String?,
       );
 }
 
@@ -151,6 +168,7 @@ final class SentenceDubbingController
   late final DubbingMixService _mixService;
   late final RecordingPreparationProtocol _preparation;
   late final Duration _playbackSettle;
+  late final Duration _demonstrationOutputDrain;
   StreamSubscription<RecordingLevel>? _levels;
   StreamSubscription<Duration>? _demonstrationPositions;
   StreamSubscription<bool>? _demonstrationPlaying;
@@ -179,6 +197,8 @@ final class SentenceDubbingController
     _mixService = ref.watch(dubbingMixServiceProvider);
     _preparation = ref.watch(sentenceDubbingPreparationProtocolProvider);
     _playbackSettle = ref.watch(sentenceDubbingPlaybackSettleProvider);
+    _demonstrationOutputDrain =
+        ref.watch(sentenceDubbingDemonstrationOutputDrainProvider);
     final original =
         await ref.watch(originalAudioBookProvider(libraryId).future);
     if (original.sourceBookId.isEmpty ||
@@ -663,13 +683,13 @@ final class SentenceDubbingController
     _set(current.copyWith(phase: SentenceDubbingPhase.mixing, failure: null));
     try {
       final result = await _mixService.render(plan);
-      await _repository.saveMix(
+      final mix = await _repository.saveMix(
         output: output,
         variant: result.variant,
         sourceTakeFingerprint: plan.sourceTakeFingerprint,
         duration: result.duration,
       );
-      await _refreshMixes();
+      await _refreshMixes(createdMixId: mix.id);
     } on DubbingMixInputException catch (error) {
       _fail(error.message);
     } on DubbingMixRenderException catch (error) {
@@ -701,7 +721,110 @@ final class SentenceDubbingController
     await _refreshMixes();
   }
 
-  Future<void> _refreshMixes() async {
+  /// Starts the whole story over without making the latest finished work
+  /// disappear by accident. The UI asks whether that latest mix is kept.
+  Future<void> restartStory({required bool keepMixes}) async {
+    final current = state.valueOrNull;
+    if (current == null || current.isBusy || !current.canCreateMix) return;
+
+    // Invalidate any late audio/scoring callback before deleting its files.
+    ++_generation;
+    _set(current.copyWith(
+      phase: SentenceDubbingPhase.restarting,
+      level: 0,
+      elapsed: Duration.zero,
+      countdown: 0,
+      playbackPosition: Duration.zero,
+      activeWordIndex: null,
+      result: null,
+      failure: null,
+    ));
+    try {
+      await _cancelAndStop();
+      final takes = await _repository.listTakes(current.project.id);
+      for (final take in takes) {
+        await _repository.deleteTake(take.id);
+      }
+      final mixes = await _repository.listMixes(current.project.id);
+      if (keepMixes && mixes.length > 1) {
+        // The reader displays the most recently generated story. Retaining
+        // only that one avoids silently accumulating obsolete versions.
+        final latest = mixes.reduce((latest, candidate) =>
+            candidate.createdAt.isAfter(latest.createdAt) ? candidate : latest);
+        for (final mix in mixes.where((mix) => mix.id != latest.id)) {
+          await _repository.deleteMix(mix.id);
+        }
+      } else if (!keepMixes) {
+        for (final mix in mixes) {
+          await _repository.deleteMix(mix.id);
+        }
+      }
+      if (!_isCurrent(_generation)) return;
+      final remainingMixes = await _repository.listMixes(current.project.id);
+      _set(current.copyWith(
+        sentenceIndex: 0,
+        takes: const [],
+        mixes: remainingMixes,
+        completedSentenceCount: 0,
+        phase: SentenceDubbingPhase.ready,
+        level: 0,
+        elapsed: Duration.zero,
+        countdown: 0,
+        playbackPosition: Duration.zero,
+        activeWordIndex: null,
+        result: null,
+        failure: null,
+        lastGeneratedMixId: null,
+      ));
+    } on Object {
+      // A file/database failure can happen part-way through a deletion. Never
+      // pretend the old recordings are gone: reload the durable state and
+      // leave the user on the first unfinished sentence.
+      await _restoreAfterRestartFailure(current);
+    }
+  }
+
+  Future<void> _restoreAfterRestartFailure(
+      SentenceDubbingState previous) async {
+    try {
+      final allTakes = await _repository.listTakes(previous.project.id);
+      final completed = _completedSentenceIds(allTakes);
+      final firstUnfinished = previous.original.sentences.indexWhere(
+        (sentence) => !completed.contains(sentence.id),
+      );
+      final sentenceIndex = firstUnfinished < 0 ? 0 : firstUnfinished;
+      final takes = allTakes
+          .where((take) =>
+              take.sentenceId == previous.original.sentences[sentenceIndex].id)
+          .toList(growable: false);
+      final mixes = await _repository.listMixes(previous.project.id);
+      _set(previous.copyWith(
+        sentenceIndex: sentenceIndex,
+        takes: takes,
+        mixes: mixes,
+        completedSentenceCount: completed.length,
+        phase: SentenceDubbingPhase.failed,
+        level: 0,
+        elapsed: Duration.zero,
+        countdown: 0,
+        playbackPosition: Duration.zero,
+        activeWordIndex: null,
+        result: _selectedTakeScore(takes),
+        failure: '没有完全清除录音，请稍后再试；现有内容已保留。',
+        lastGeneratedMixId: null,
+      ));
+    } on Object {
+      // The state is still truthful about the attempted operation and remains
+      // non-busy, so the user can leave and safely reopen the project.
+      _set(previous.copyWith(
+        phase: SentenceDubbingPhase.failed,
+        failure: '没有完全清除录音，请稍后再试；现有内容已保留。',
+        lastGeneratedMixId: null,
+      ));
+    }
+  }
+
+  Future<void> _refreshMixes({String? createdMixId}) async {
     final current = state.valueOrNull;
     if (current == null) return;
     final mixes = await _repository.listMixes(current.project.id);
@@ -710,6 +833,7 @@ final class SentenceDubbingController
       phase: _restingPhase(current.takes),
       result: _selectedTakeScore(current.takes),
       failure: null,
+      lastGeneratedMixId: createdMixId,
     ));
   }
 
@@ -760,9 +884,18 @@ final class SentenceDubbingController
     _demonstrationCompletion = completion;
     var heardPlaying = false;
     var lastPosition = bounds.start;
+    var terminalReached = false;
 
     void complete() {
       if (!completion.isCompleted) completion.complete();
+    }
+
+    void completeAfterOutputDrain() {
+      if (terminalReached || completion.isCompleted) return;
+      terminalReached = true;
+      unawaited(Future<void>.delayed(_demonstrationOutputDrain).then((_) {
+        if (_isCurrent(generation)) complete();
+      }));
     }
 
     void fail(Object error, StackTrace stackTrace) {
@@ -784,7 +917,7 @@ final class SentenceDubbingController
               activeWordIndex: null,
             ));
           }
-          complete();
+          completeAfterOutputDrain();
           return;
         }
         if (absolutePosition < sentenceStart) {
@@ -815,7 +948,7 @@ final class SentenceDubbingController
           heardPlaying = true;
         } else if (heardPlaying) {
           if (lastPosition >= bounds.end - const Duration(milliseconds: 120)) {
-            complete();
+            completeAfterOutputDrain();
           } else {
             fail(
               const _SentenceDemonstrationException('示范音播放被中断'),
@@ -836,10 +969,22 @@ final class SentenceDubbingController
     });
     unawaited(
       _demonstrationPlayer.play().then<void>(
-            (_) => complete(),
-            onError: (Object error, StackTrace stackTrace) =>
-                fail(error, stackTrace),
-          ),
+        (_) async {
+          // The position stream reaches listeners asynchronously. Give its
+          // final event one turn before interpreting a returned play Future.
+          await Future<void>.delayed(Duration.zero);
+          if (lastPosition >= bounds.end - const Duration(milliseconds: 120)) {
+            completeAfterOutputDrain();
+          } else {
+            fail(
+              const _SentenceDemonstrationException('示范音播放被中断'),
+              StackTrace.current,
+            );
+          }
+        },
+        onError: (Object error, StackTrace stackTrace) =>
+            fail(error, stackTrace),
+      ),
     );
     try {
       await completion.future;

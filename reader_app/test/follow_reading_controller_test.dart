@@ -227,6 +227,25 @@ void main() {
     expect(long.maximumDuration, const Duration(milliseconds: 27500));
   });
 
+  test('跟读内容零点保留 Android 录音启动安全前导，避免裁掉首词', () {
+    expect(
+      followRecordingContentOffset(const Duration(milliseconds: 3650)),
+      const Duration(seconds: 3),
+    );
+    expect(
+      followRecordingContentLeadIn(const Duration(milliseconds: 3650)),
+      const Duration(milliseconds: 650),
+    );
+    expect(
+      followRecordingContentOffset(const Duration(milliseconds: 500)),
+      Duration.zero,
+    );
+    expect(
+      followRecordingContentLeadIn(const Duration(milliseconds: 500)),
+      const Duration(milliseconds: 500),
+    );
+  });
+
   test('初始静音不会结束录音且开口后过最短时长才允许收尾', () {
     final timing = followRecordingTimingFor(_sentence('my-mom'));
     final tracker = FollowVoiceActivityTracker(timing);

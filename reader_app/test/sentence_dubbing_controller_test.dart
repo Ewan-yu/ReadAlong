@@ -267,6 +267,39 @@ void main() {
     expect(current().completedSentenceCount, 0);
   });
 
+  test('重新录整本时只保留最后的故事，清空逐句录音并回到第 1 句', () async {
+    final controller = await ready();
+    repository.mixes.add(_mix());
+    repository.mixes.add(_mix(
+      id: 'mix-2',
+      createdAt: DateTime.utc(2026, 1, 2),
+    ));
+    await _finishStory(controller);
+
+    await controller.restartStory(keepMixes: true);
+
+    expect(repository.takes, isEmpty);
+    expect(current().sentenceIndex, 0);
+    expect(current().completedSentenceCount, 0);
+    expect(current().takes, isEmpty);
+    expect(current().mixes.map((mix) => mix.id), ['mix-2']);
+    expect(current().phase, SentenceDubbingPhase.ready);
+  });
+
+  test('重新录整本时可一并清除最后的故事', () async {
+    final controller = await ready();
+    repository.mixes.add(_mix());
+    await _finishStory(controller);
+
+    await controller.restartStory(keepMixes: false);
+
+    expect(repository.takes, isEmpty);
+    expect(repository.mixes, isEmpty);
+    expect(current().mixes, isEmpty);
+    expect(current().sentenceIndex, 0);
+    expect(current().phase, SentenceDubbingPhase.ready);
+  });
+
   test('结果页一次点击进入下一句并自动开始示范和录音', () async {
     final controller = await ready();
     await controller.startRecording();
@@ -308,6 +341,24 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 }
+
+Future<void> _finishStory(SentenceDubbingController controller) async {
+  await controller.startRecording();
+  await controller.stopRecording();
+  await controller.continueToNextSentence();
+  await controller.startRecording();
+  await controller.stopRecording();
+}
+
+DubbingMix _mix({String id = 'mix-1', DateTime? createdAt}) => DubbingMix(
+      id: id,
+      projectId: 'project',
+      audioRelativePath: 'mix-1.m4a',
+      variant: DubbingMixVariant.background,
+      sourceTakeFingerprint: 'fingerprint',
+      duration: const Duration(seconds: 4),
+      createdAt: createdAt ?? DateTime.utc(2026),
+    );
 
 OriginalAudioBook _book() => OriginalAudioBook(
       libraryId: 'book-copy',
@@ -523,6 +574,7 @@ final class _Repository implements DubbingRepository {
   final Directory directory;
   final projects = <DubbingProject>[];
   final takes = <DubbingTake>[];
+  final mixes = <DubbingMix>[];
 
   @override
   Future<DubbingProject> createProject(DubbingProjectDraft draft) async {
@@ -619,7 +671,8 @@ final class _Repository implements DubbingRepository {
   Future<void> updateProjectStatus(
       String projectId, DubbingProjectStatus status) async {}
   @override
-  Future<List<DubbingMix>> listMixes(String projectId) async => const [];
+  Future<List<DubbingMix>> listMixes(String projectId) async =>
+      mixes.where((mix) => mix.projectId == projectId).toList(growable: false);
   @override
   Future<DubbingMixOutput> prepareMixOutput(String projectId,
           {String extension = '.m4a'}) =>
@@ -633,7 +686,8 @@ final class _Repository implements DubbingRepository {
   }) =>
       throw UnimplementedError();
   @override
-  Future<void> deleteMix(String mixId) async {}
+  Future<void> deleteMix(String mixId) async =>
+      mixes.removeWhere((mix) => mix.id == mixId);
   @override
   String resolveMixAudioPath(DubbingMix mix) => '';
 }

@@ -212,7 +212,7 @@ void main() {
     );
   });
 
-  test('每句最多三条 Take，第四条不会留下文件或数据库行', () async {
+  test('逐句录音不设 3 Take 硬上限，后续版本会安全保存', () async {
     final repository = repositoryWithIds([
       'project-1',
       'take-1',
@@ -221,7 +221,7 @@ void main() {
       'take-4',
     ]);
     final project = await createSentenceProject(repository);
-    for (var i = 1; i <= ShelfIndex.maxSentenceTakes; i++) {
+    for (var i = 1; i <= 4; i++) {
       await repository.saveTake(
         projectId: project.id,
         kind: DubbingTakeKind.sentence,
@@ -231,20 +231,9 @@ void main() {
       );
     }
 
-    await expectLater(
-      repository.saveTake(
-        projectId: project.id,
-        kind: DubbingTakeKind.sentence,
-        sentenceId: 's0001',
-        sourceAudio: await recording('take-4'),
-        duration: const Duration(milliseconds: 800),
-      ),
-      throwsA(isA<StateError>()),
-    );
-
     expect(
       await repository.listTakes(project.id, sentenceId: 's0001'),
-      hasLength(ShelfIndex.maxSentenceTakes),
+      hasLength(4),
     );
     expect(
       await File(
@@ -258,7 +247,7 @@ void main() {
           'take-4.wav',
         ),
       ).exists(),
-      isFalse,
+      isTrue,
     );
   });
 
