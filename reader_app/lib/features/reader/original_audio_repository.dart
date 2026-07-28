@@ -1,4 +1,6 @@
+import 'dart:async';
 import 'dart:convert';
+import 'dart:developer' as developer;
 import 'dart:io';
 
 import 'package:crypto/crypto.dart';
@@ -67,7 +69,10 @@ final class LocalOriginalAudioRepository implements OriginalAudioRepository {
 
   @override
   Future<OriginalAudioBook> loadBook(String libraryId) async {
-    final shelfBook = await shelfIndex.findByLibraryId(libraryId);
+    final shelfBook = await _traceOriginalAudioStage(
+      'shelf_lookup',
+      () => shelfIndex.findByLibraryId(libraryId),
+    );
     if (shelfBook == null) {
       throw const OriginalAudioUnavailableException('Shelf book was not found');
     }
@@ -226,26 +231,35 @@ final class LocalOriginalAudioRepository implements OriginalAudioRepository {
     }
     Database? database;
     try {
-      database = await databaseFactory.openDatabase(
-        path,
-        // Keep this handle independent from point reading. Android sqflite's
-        // default single-instance cache otherwise lets one repository close
-        // the other repository's connection to the same immutable package.
-        options: OpenDatabaseOptions(
-          readOnly: true,
-          singleInstance: false,
+      database = await _traceOriginalAudioStage(
+        'alignment_open',
+        () => databaseFactory.openDatabase(
+          path,
+          // Keep this handle independent from point reading. Android sqflite's
+          // default single-instance cache otherwise lets one repository close
+          // the other repository's connection to the same immutable package.
+          options: OpenDatabaseOptions(
+            readOnly: true,
+            singleInstance: false,
+          ),
         ),
       );
-      final books = await database.query('book', columns: const ['id']);
+      final books = await _traceOriginalAudioStage(
+        'book_query',
+        () => database!.query('book', columns: const ['id']),
+      );
       if (books.length != 1 || books.single['id'] != shelfBook.sourceBookId) {
         throw const OriginalAudioDataException(
           'Alignment source identity mismatch',
         );
       }
-      final rows = await database.query(
-        'sentence',
-        columns: const ['id', 'page_no', 'seq', 'text'],
-        orderBy: 'seq ASC',
+      final rows = await _traceOriginalAudioStage(
+        'sentence_query',
+        () => database!.query(
+          'sentence',
+          columns: const ['id', 'page_no', 'seq', 'text'],
+          orderBy: 'seq ASC',
+        ),
       );
       final result =
           <({String id, int pageNumber, int sequence, String text})>[];
@@ -279,8 +293,36 @@ final class LocalOriginalAudioRepository implements OriginalAudioRepository {
       }
       return result;
     } finally {
-      await database?.close();
+      if (database != null) {
+        await _traceOriginalAudioStage('alignment_close', database.close);
+      }
     }
+  }
+}
+
+const _originalAudioStageTimeout = Duration(seconds: 10);
+
+Future<T> _traceOriginalAudioStage<T>(
+  String stage,
+  Future<T> Function() operation,
+) async {
+  final stopwatch = Stopwatch()..start();
+  developer.log('$stage:start', name: 'readalong.original_audio');
+  try {
+    final result = await operation().timeout(_originalAudioStageTimeout);
+    developer.log(
+      '$stage:done:${stopwatch.elapsedMilliseconds}ms',
+      name: 'readalong.original_audio',
+    );
+    return result;
+  } on TimeoutException catch (error, stackTrace) {
+    developer.log(
+      '$stage:timeout:${stopwatch.elapsedMilliseconds}ms',
+      name: 'readalong.original_audio',
+      error: error,
+      stackTrace: stackTrace,
+    );
+    rethrow;
   }
 }
 

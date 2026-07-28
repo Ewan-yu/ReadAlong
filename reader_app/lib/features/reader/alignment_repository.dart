@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:developer' as developer;
 import 'dart:io';
@@ -44,7 +45,10 @@ final class LocalPointReadingRepository implements PointReadingRepository {
 
   @override
   Future<PointReadingBook> loadBook(String libraryId) async {
-    final shelfBook = await shelfIndex.findByLibraryId(libraryId);
+    final shelfBook = await _tracePointReadingStage(
+      'shelf_lookup',
+      () => shelfIndex.findByLibraryId(libraryId),
+    );
     if (shelfBook == null) {
       throw const PointReadingLoadException('Shelf book was not found');
     }
@@ -56,18 +60,24 @@ final class LocalPointReadingRepository implements PointReadingRepository {
 
     Database? database;
     try {
-      database = await databaseFactory.openDatabase(
-        alignmentPath,
-        // Point reading and original-audio playback can load the same package
-        // at the same time. Android sqflite otherwise returns one shared
-        // handle for the path, so closing either repository can invalidate the
-        // other's in-flight query.
-        options: OpenDatabaseOptions(
-          readOnly: true,
-          singleInstance: false,
+      database = await _tracePointReadingStage(
+        'alignment_open',
+        () => databaseFactory.openDatabase(
+          alignmentPath,
+          // Point reading and original-audio playback can load the same package
+          // at the same time. Android sqflite otherwise returns one shared
+          // handle for the path, so closing either repository can invalidate the
+          // other's in-flight query.
+          options: OpenDatabaseOptions(
+            readOnly: true,
+            singleInstance: false,
+          ),
         ),
       );
-      final bookRows = await database.query('book', columns: ['id']);
+      final bookRows = await _tracePointReadingStage(
+        'book_query',
+        () => database!.query('book', columns: ['id']),
+      );
       if (bookRows.length != 1 ||
           bookRows.single['id'] != shelfBook.sourceBookId) {
         throw const PointReadingDataException(
@@ -75,27 +85,33 @@ final class LocalPointReadingRepository implements PointReadingRepository {
         );
       }
 
-      final rows = await database.query(
-        'sentence',
-        columns: const [
-          'id',
-          'book_id',
-          'page_no',
-          'seq',
-          'text',
-          'bbox_json',
-          'shared_bbox',
-          'audio_path',
-          't_start',
-          't_end',
-          'audio_source',
-        ],
-        orderBy: 'seq ASC',
+      final rows = await _tracePointReadingStage(
+        'sentence_query',
+        () => database!.query(
+          'sentence',
+          columns: const [
+            'id',
+            'book_id',
+            'page_no',
+            'seq',
+            'text',
+            'bbox_json',
+            'shared_bbox',
+            'audio_path',
+            't_start',
+            't_end',
+            'audio_source',
+          ],
+          orderBy: 'seq ASC',
+        ),
       );
       final baseSentences = rows
           .map((row) => _parseSentence(shelfBook, row))
           .toList(growable: false);
-      final wordTimings = await _loadWordTimings(database, baseSentences);
+      final wordTimings = await _tracePointReadingStage(
+        'word_timing_query',
+        () => _loadWordTimings(database!, baseSentences),
+      );
       final sentences = baseSentences
           .map(
             (sentence) => sentence.withWordTimings(
@@ -127,12 +143,40 @@ final class LocalPointReadingRepository implements PointReadingRepository {
       );
     } finally {
       try {
-        await database?.close();
+        if (database != null) {
+          await _tracePointReadingStage('alignment_close', database.close);
+        }
       } on Object {
         // A successfully read immutable package must remain usable even when
         // Android reports a late close error for its read-only SQLite handle.
       }
     }
+  }
+}
+
+const _alignmentStageTimeout = Duration(seconds: 10);
+
+Future<T> _tracePointReadingStage<T>(
+  String stage,
+  Future<T> Function() operation,
+) async {
+  final stopwatch = Stopwatch()..start();
+  developer.log('$stage:start', name: 'readalong.point_reading');
+  try {
+    final result = await operation().timeout(_alignmentStageTimeout);
+    developer.log(
+      '$stage:done:${stopwatch.elapsedMilliseconds}ms',
+      name: 'readalong.point_reading',
+    );
+    return result;
+  } on TimeoutException catch (error, stackTrace) {
+    developer.log(
+      '$stage:timeout:${stopwatch.elapsedMilliseconds}ms',
+      name: 'readalong.point_reading',
+      error: error,
+      stackTrace: stackTrace,
+    );
+    rethrow;
   }
 }
 
