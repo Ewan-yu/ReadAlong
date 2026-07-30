@@ -147,6 +147,14 @@ export function PageStage({
               y: event.target.y() - size.height / 2,
             })}
           >
+            <Rect
+              x={imageRect.x}
+              y={imageRect.y}
+              width={imageRect.width}
+              height={imageRect.height}
+              fill="rgba(0, 0, 0, 0.01)"
+              listening={tool === "pan"}
+            />
             {image && (
               <KonvaImage
                 image={image}

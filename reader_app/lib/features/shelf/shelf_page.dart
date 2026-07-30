@@ -33,11 +33,16 @@ class ShelfPage extends ConsumerWidget {
         ],
       ),
       body: shelf.when(
-        data: (state) => _ShelfContents(
-          state: state,
-          onOpen: (book) => _openBook(context, book),
-          onDelete: (book) => _confirmDelete(context, ref, book),
-          onImport: () => _importBook(context, ref),
+        data: (state) => Stack(
+          children: [
+            _ShelfContents(
+              state: state,
+              onOpen: (book) => _openBook(context, book),
+              onDelete: (book) => _confirmDelete(context, ref, book),
+              onImport: () => _importBook(context, ref),
+            ),
+            if (state.isMutating) const _ShelfMutationProgress(),
+          ],
         ),
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (_, __) => const _ShelfLoadError(),
@@ -401,6 +406,36 @@ class _ShelfContents extends StatelessWidget {
       ],
     );
   }
+}
+
+class _ShelfMutationProgress extends StatelessWidget {
+  const _ShelfMutationProgress();
+
+  @override
+  Widget build(BuildContext context) => const Positioned.fill(
+        child: ColoredBox(
+          color: AppColors.scrim,
+          child: Center(
+            child: Card(
+              child: Padding(
+                padding: EdgeInsets.all(AppSpacing.pageMargin),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    SizedBox(
+                      width: 24,
+                      height: 24,
+                      child: CircularProgressIndicator(strokeWidth: 3),
+                    ),
+                    SizedBox(width: AppSpacing.cardPadding),
+                    Text('正在处理本地资源，请稍候…'),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
 }
 
 class _ShelfEmptyState extends StatelessWidget {

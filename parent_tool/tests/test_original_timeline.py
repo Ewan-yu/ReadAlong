@@ -231,6 +231,35 @@ def test_timing_quality_rejects_ten_ms_words_and_multi_second_internal_gaps() ->
     assert caught.value.code == "ORIGINAL_TIMELINE_TIMING_UNRELIABLE"
 
 
+def test_builder_repairs_short_forced_alignment_boundaries() -> None:
+    words = OriginalTimelineStep._timeline_words(
+        ("the", "frog", "family"),
+        (
+            ("the", AudioWordTiming(word="The", t_start=.6, t_end=.61)),
+            ("frog", AudioWordTiming(word="Frog", t_start=.6, t_end=1.14)),
+            ("family", AudioWordTiming(word="Family", t_start=1.14, t_end=1.94)),
+        ),
+        previous_end=0,
+    )
+
+    assert [(item.text, item.start_ms, item.end_ms) for item in words] == [
+        ("the", 600, 630),
+        ("frog", 630, 1140),
+        ("family", 1140, 1940),
+    ]
+    validate_timeline_timing_quality(
+        _timeline().model_copy(
+            update={
+                "sentences": (
+                    _timeline().sentences[0].model_copy(
+                        update={"start_ms": words[0].start_ms, "end_ms": words[-1].end_ms, "words": words}
+                    ),
+                )
+            }
+        )
+    )
+
+
 def test_discovery_projection_merges_fragmented_asr_word_without_losing_boundaries() -> None:
     def timing(word: str, start: float, end: float) -> tuple[str, AudioWordTiming]:
         return word, AudioWordTiming(word=word, t_start=start, t_end=end)
@@ -307,3 +336,45 @@ def test_discovery_tolerates_a_fragmented_asr_word_without_changing_export_text(
         0,
     )
     assert found == (0, 6)
+
+
+def test_discovery_prefers_a_complete_phrase_over_an_earlier_partial_match() -> None:
+    def timing(word: str, index: int) -> tuple[str, AudioWordTiming]:
+        return word, AudioWordTiming(word=word, t_start=index, t_end=index + .2)
+
+    actual = tuple(
+        timing(word, index)
+        for index, word in enumerate((
+            "he", "is", "me", "however", "this", "cousin", "doesn't", "look", "like", "me",
+        ))
+    )
+
+    found = OriginalTimelineStep._find_similar_phrase(
+        actual,
+        ("however", "this", "cousin", "doesn't", "look", "like", "me"),
+        0,
+    )
+
+    assert found == (3, 7)
+
+
+def test_discovery_projection_keeps_reliable_sentences_when_one_line_is_incomplete() -> None:
+    source = _sentences().model_copy(
+        update={
+            "sentences": (
+                _sentences().sentences[0].model_copy(update={"text": "Hello little world."}),
+                _sentences().sentences[1],
+            )
+        }
+    )
+    recognized = (
+        AudioWordTiming(word="Hello", t_start=0, t_end=.2),
+        AudioWordTiming(word="world", t_start=.2, t_end=.4),
+        AudioWordTiming(word="Good", t_start=.8, t_end=1.1),
+        AudioWordTiming(word="night", t_start=1.1, t_end=1.4),
+    )
+
+    sentences, projected = OriginalTimelineStep._project_discovery_timings(source.sentences, recognized)
+
+    assert [sentence.id for sentence in sentences] == ["s0002"]
+    assert [timing.word for timing in projected] == ["good", "night"]

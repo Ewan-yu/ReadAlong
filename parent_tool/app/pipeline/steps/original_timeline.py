@@ -19,6 +19,7 @@ from app.pipeline.definitions import StepRunContext
 from app.pipeline.hashing import file_sha256
 from app.pipeline.paths import ensure_within
 from app.pipeline.original_timeline import (
+    MINIMUM_WORD_DURATION_MS,
     TIMELINE_PATH,
     load_and_validate_timeline,
     validate_timeline_timing_quality,
@@ -31,7 +32,7 @@ class OriginalTimelineStep:
     """Align final proofread text against the *confirmed* separated vocal stem."""
 
     step_id = StepId.ORIGINAL_TIMELINE
-    implementation_version = "original-timeline-v3"
+    implementation_version = "original-timeline-v5"
     params_model = OriginalTimelineParams
 
     def __init__(self, aligner: WordAligner, media_probe) -> None:
@@ -91,20 +92,13 @@ class OriginalTimelineStep:
             )
         context.progress(0.45, "已识别原音朗读内容，正在校准逐句边界…")
         # Free transcription is much better at locating repeated sentence
-        # boundaries in a whole-book recording. Project its timings back onto
-        # the immutable proofread words first; only fall back to whole-script
-        # forced alignment when discovery cannot map every narrated sentence.
+        # boundaries in a whole-book recording.  Keep every sentence whose
+        # discovery timings can be projected back to the immutable proofread
+        # words.  A single ASR mismatch must not make us replace an otherwise
+        # trustworthy book timeline with a whole-script forced alignment: that
+        # fallback can place repeated words several seconds from their speech.
+        narration, aligned = self._project_discovery_timings(narration, recognized)
         alignment_strategy = "discovery_projection"
-        try:
-            aligned = self._project_discovery_timings(narration, recognized)
-        except PipelineError:
-            alignment_strategy = "forced_script"
-            aligned = self._aligner.align_script(
-                vocal_path,
-                "\n".join(sentence.text for sentence in narration),
-                params.language,
-                context.cancellation,
-            )
         timeline = self._build_timeline(
             narration,
             aligned,
@@ -213,27 +207,43 @@ class OriginalTimelineStep:
     def _project_discovery_timings(
         sentences: tuple[OcrSentence, ...],
         recognized: tuple[AudioWordTiming, ...],
-    ) -> tuple[AudioWordTiming, ...]:
-        """Keep discovery timestamps while restoring exact proofread words."""
+    ) -> tuple[tuple[OcrSentence, ...], tuple[AudioWordTiming, ...]]:
+        """Project reliable discovery matches and omit isolated ASR misses.
+
+        The produced timeline deliberately represents the ordered subset that
+        is demonstrably narrated.  This is important for books where the audio
+        omits a page heading or where the recognizer misses one sentence.
+        """
 
         actual = OriginalTimelineStep._flatten_words(recognized)
         cursor = 0
+        projected_sentences: list[OcrSentence] = []
         projected: list[AudioWordTiming] = []
         for sentence in sentences:
             expected = normalized_words(sentence.text)
             found = OriginalTimelineStep._find_similar_phrase(actual, expected, cursor)
             if found is None:
-                raise PipelineError(
-                    "ORIGINAL_TIMELINE_WORD_MISMATCH",
-                    "原音朗读内容无法可靠映射到校对文本。",
-                    details={"sentence_id": sentence.id},
-                    status_code=422,
-                )
+                continue
             index, length = found
             candidate = actual[index:index + length]
-            projected.extend(OriginalTimelineStep._project_expected_phrase(expected, candidate))
             cursor = index + length
-        return tuple(projected)
+            try:
+                words = OriginalTimelineStep._project_expected_phrase(expected, candidate)
+            except PipelineError:
+                # The candidate was sufficiently similar to identify a spoken
+                # line, but not sufficiently complete to safely assign every
+                # proofread word a boundary.  Do not poison the remaining
+                # sentences by switching the entire recording to forced mode.
+                continue
+            projected_sentences.append(sentence)
+            projected.extend(words)
+        if not projected_sentences:
+            raise PipelineError(
+                "ORIGINAL_TIMELINE_WORD_MISMATCH",
+                "原音朗读内容无法可靠映射到校对文本。",
+                status_code=422,
+            )
+        return tuple(projected_sentences), tuple(projected)
 
     @staticmethod
     def _project_expected_phrase(
@@ -352,7 +362,7 @@ class OriginalTimelineStep:
                 if actual[index][0] == expected[0]:
                     return index, 1
             return None
-        best: tuple[float, int, int] | None = None
+        best: tuple[int, float, int, int] | None = None
         lower = max(1, len(expected) - 2)
         upper = min(len(actual) - cursor, len(expected) + 2)
         for index in range(cursor, len(actual)):
@@ -368,13 +378,18 @@ class OriginalTimelineStep:
                 accepted = (len(expected) == 2 and ratio == 1) or (
                     len(expected) >= 3 and ratio >= .7 and exact >= max(2, round(len(expected) * .6))
                 )
-                if accepted and (best is None or ratio > best[0]):
-                    best = (ratio, index, length)
-            # Prefer the first qualified occurrence when scores are equal: it
-            # preserves chronological narration and avoids jumping to a repeat.
-            if best is not None and best[1] == index:
-                return best[1], best[2]
-        return None
+                if accepted and (
+                    best is None
+                    or exact > best[0]
+                    or (exact == best[0] and ratio > best[1])
+                ):
+                    best = (exact, ratio, index, length)
+        # Do not return the first merely acceptable window.  A sentence can be
+        # preceded by a short spoken interjection (for example ``he is me``),
+        # producing an early partial match that omits the final word.  Keep the
+        # highest similarity instead; ties retain the first occurrence so the
+        # narration still remains chronological.
+        return None if best is None else (best[2], best[3])
 
     @staticmethod
     def _timeline_words(
@@ -387,11 +402,13 @@ class OriginalTimelineStep:
         for index, (text, (_, timing)) in enumerate(zip(expected, matched), start=1):
             start = max(round(timing.t_start * 1000), last_end)
             end = round(timing.t_end * 1000)
-            if end <= start:
-                # Stable-ts can expose two boundaries in the same millisecond.
-                # Give the displayed word a minimal positive span; later words
-                # are shifted forward too, keeping the timeline monotonic.
-                end = start + 10
+            if end - start < MINIMUM_WORD_DURATION_MS:
+                # Forced alignment can collapse a boundary word to 10–29 ms,
+                # including when the following word starts at the same instant.
+                # Keep the reader's 30 ms safety contract by extending this
+                # word and shifting later words forward instead of rejecting an
+                # otherwise usable narration timeline.
+                end = start + MINIMUM_WORD_DURATION_MS
             words.append(OriginalTimelineWord(seq=index, text=text, start_ms=start, end_ms=end))
             last_end = end
         return tuple(words)

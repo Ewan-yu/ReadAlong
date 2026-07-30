@@ -1,4 +1,5 @@
-import { Group, Image as KonvaImage, Layer, Rect, Stage } from "react-konva";
+import Konva from "konva";
+import { Group, Image as KonvaImage, Layer, Rect, Stage, Transformer } from "react-konva";
 import { Maximize2, ZoomIn, ZoomOut } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
@@ -16,6 +17,7 @@ type Props = {
   tool: Tool;
   onSelect: (id: string, additive: boolean) => void;
   onDraw: (box: OcrSentence["bbox"], splitSourceId?: string) => void;
+  onChangeBox: (id: string, box: OcrSentence["bbox"]) => void;
 };
 
 function useLoadedImage(url: string) {
@@ -47,8 +49,10 @@ function useContainerSize(ref: React.RefObject<HTMLDivElement | null>) {
   return size;
 }
 
-export function ProofreadStage({ imageUrl, sentences, selectedIds, tool, onSelect, onDraw }: Props) {
+export function ProofreadStage({ imageUrl, sentences, selectedIds, tool, onSelect, onDraw, onChangeBox }: Props) {
   const ref = useRef<HTMLDivElement>(null);
+  const selectedShapeRef = useRef<Konva.Rect>(null);
+  const transformerRef = useRef<Konva.Transformer>(null);
   const image = useLoadedImage(imageUrl);
   const size = useContainerSize(ref);
   const [zoom, setZoom] = useState(1);
@@ -63,6 +67,15 @@ export function ProofreadStage({ imageUrl, sentences, selectedIds, tool, onSelec
   const groupY = size.height / 2 + pan.y;
   useEffect(() => { setZoom(1); setPan({ x: 0, y: 0 }); }, [imageUrl]);
   const selected = selectedIds[0];
+  const canTransform = tool === "select" && selectedIds.length === 1;
+
+  useEffect(() => {
+    const transformer = transformerRef.current;
+    const node = selectedShapeRef.current;
+    if (!transformer) return;
+    transformer.nodes(canTransform && node ? [node] : []);
+    transformer.getLayer()?.batchDraw();
+  }, [canTransform, selected, zoom]);
 
   const positionToBox = (x: number, y: number): OcrSentence["bbox"] => clampBox({
     x: (Math.min(x, start.current?.x ?? x) / zoom - groupX / zoom - imageRect.x) / imageRect.width,
@@ -70,6 +83,21 @@ export function ProofreadStage({ imageUrl, sentences, selectedIds, tool, onSelec
     width: Math.abs(x - (start.current?.x ?? x)) / zoom / imageRect.width,
     height: Math.abs(y - (start.current?.y ?? y)) / zoom / imageRect.height,
   });
+  const persistBox = (node: Konva.Rect) => {
+    const box = clampBox({
+      x: (node.x() - imageRect.x) / imageRect.width,
+      y: (node.y() - imageRect.y) / imageRect.height,
+      width: node.width() * node.scaleX() / imageRect.width,
+      height: node.height() * node.scaleY() / imageRect.height,
+    });
+    node.position({
+      x: imageRect.x + box.x * imageRect.width,
+      y: imageRect.y + box.y * imageRect.height,
+    });
+    node.size({ width: box.width * imageRect.width, height: box.height * imageRect.height });
+    node.scale({ x: 1, y: 1 });
+    onChangeBox(node.id(), box);
+  };
 
   return (
     <div className={styles.stageShell}>
@@ -115,12 +143,23 @@ export function ProofreadStage({ imageUrl, sentences, selectedIds, tool, onSelec
               draggable={tool === "pan"}
               onDragEnd={(event) => setPan({ x: event.target.x() - size.width / 2, y: event.target.y() - size.height / 2 })}
             >
+              <Rect
+                x={imageRect.x}
+                y={imageRect.y}
+                width={imageRect.width}
+                height={imageRect.height}
+                fill="rgba(0, 0, 0, 0.01)"
+                listening={tool === "pan"}
+              />
               {image && <KonvaImage image={image} {...imageRect} listening={false} />}
               {sentences.map((sentence) => {
                 const active = selectedIds.includes(sentence.id);
                 const review = sentence.status === "needs_review";
+                const editable = active && canTransform;
                 return <Rect
                   key={sentence.id}
+                  ref={editable ? selectedShapeRef : undefined}
+                  id={sentence.id}
                   x={imageRect.x + sentence.bbox.x * imageRect.width}
                   y={imageRect.y + sentence.bbox.y * imageRect.height}
                   width={sentence.bbox.width * imageRect.width}
@@ -129,10 +168,24 @@ export function ProofreadStage({ imageUrl, sentences, selectedIds, tool, onSelec
                   strokeWidth={(active ? 3 : 1.25) / zoom}
                   dash={review ? [6, 4] : undefined}
                   fill={active ? "rgba(8,127,123,.13)" : "rgba(8,127,123,.035)"}
+                  draggable={editable}
                   onClick={(event) => { event.cancelBubble = true; onSelect(sentence.id, event.evt.shiftKey || event.evt.ctrlKey || event.evt.metaKey); }}
                   onTap={(event) => { event.cancelBubble = true; onSelect(sentence.id, false); }}
+                  onDragEnd={(event) => { event.cancelBubble = true; persistBox(event.target as Konva.Rect); }}
+                  onTransformEnd={(event) => { event.cancelBubble = true; persistBox(event.target as Konva.Rect); }}
                 />;
               })}
+              {canTransform && selected && <Transformer
+                ref={transformerRef}
+                rotateEnabled={false}
+                flipEnabled={false}
+                keepRatio={false}
+                enabledAnchors={["top-left", "top-center", "top-right", "middle-left", "middle-right", "bottom-left", "bottom-center", "bottom-right"]}
+                anchorSize={9 / zoom}
+                borderStrokeWidth={1.5 / zoom}
+                anchorStrokeWidth={1.5 / zoom}
+                boundBoxFunc={(oldBox, nextBox) => nextBox.width < 12 / zoom || nextBox.height < 12 / zoom ? oldBox : nextBox}
+              />}
               {draft && <Rect x={imageRect.x + draft.x * imageRect.width} y={imageRect.y + draft.y * imageRect.height} width={draft.width * imageRect.width} height={draft.height * imageRect.height} stroke="#087f7b" dash={[6 / zoom, 4 / zoom]} strokeWidth={2 / zoom} />}
             </Group>
           </Layer>

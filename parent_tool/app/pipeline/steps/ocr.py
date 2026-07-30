@@ -30,6 +30,7 @@ _WORDS = re.compile(r"[A-Za-z]+(?:['’-][A-Za-z]+)*")
 _SYMBOLS_ONLY = re.compile(r"^[\W_]+$", re.UNICODE)
 _CLOSING_QUOTES = "\"”’"
 _ENGLISH_LINE = re.compile(r"[A-Za-z][A-Za-z0-9\s.,!?;:'\"’\-]*")
+_SENTENCE_ENDING = re.compile(r"[.!?](?:[\"”’])?$")
 
 
 class EnglishSpellChecker:
@@ -73,7 +74,7 @@ class RawBlock:
 
 class OcrStep:
     step_id = StepId.OCR
-    implementation_version = "ocr-v1"
+    implementation_version = "ocr-v2"
     params_model = OcrParams
 
     def __init__(self, provider: OcrProvider, spell_checker: EnglishSpellChecker | None = None) -> None:
@@ -217,7 +218,7 @@ class OcrStep:
                     bbox = candidate.get("block_bbox", candidate.get("bbox"))
                     parsed = cls._pixel_bbox(bbox, width, height)
                     spoken = cls._english_text(text) if isinstance(text, str) else ""
-                    if label in _TEXT_LABELS and spoken and parsed:
+                    if cls._is_spoken_text_block(label, spoken) and parsed:
                         if label == "vision_footnote":
                             parsed = cls._include_nearest_image(parsed, image_boxes)
                         blocks.append(RawBlock(text=spoken, bbox=parsed))
@@ -231,6 +232,20 @@ class OcrStep:
         # Dense publication/copyright pages contain scattered Latin fragments such as ISBN and URLs.
         # They are not read-aloud content; keeping them produces long, noisy synthetic audio.
         return () if len(ordered) >= 10 else ordered
+
+    @staticmethod
+    def _is_spoken_text_block(label: str, text: str) -> bool:
+        """Keep sentence-like document titles but leave cover titles out of audio.
+
+        PaddleOCR-VL uses ``doc_title`` for both a cover's title and prominent
+        one-line story text. The latter belongs in the reading script; the
+        former does not. A terminal sentence mark is a stable, explainable
+        distinction for the books this pipeline targets.
+        """
+
+        return label in _TEXT_LABELS or (
+            label == "doc_title" and bool(_SENTENCE_ENDING.search(text.strip()))
+        )
 
     @staticmethod
     def _iter_layouts(record: dict[str, Any]) -> Iterable[dict[str, Any]]:

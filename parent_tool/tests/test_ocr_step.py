@@ -76,6 +76,16 @@ def test_ocr_step_replays_response_and_builds_sentence_draft(tmp_path: Path) -> 
                                     "block_content": "Granny\n奶奶",
                                     "block_bbox": [220, 150, 320, 180],
                                 },
+                                {
+                                    "block_label": "doc_title",
+                                    "block_content": "Read with me.",
+                                    "block_bbox": [30, 185, 210, 210],
+                                },
+                                {
+                                    "block_label": "doc_title",
+                                    "block_content": "The Frog Family",
+                                    "block_bbox": [30, 215, 210, 240],
+                                },
                                 {"block_label": "number", "block_content": "4", "block_bbox": [1, 1, 10, 10]},
                                 {"block_label": "image", "block_bbox": [0, 0, 100, 100]},
                                 {"block_label": "image", "block_bbox": [210, 80, 330, 145]},
@@ -100,17 +110,23 @@ def test_ocr_step_replays_response_and_builds_sentence_draft(tmp_path: Path) -> 
     revision = book / success.output_root
     output = OcrSentences.model_validate_json((revision / "sentences.json").read_text(encoding="utf-8"))
     assert (revision / "responses/p0001.jsonl").read_text(encoding="utf-8") == response
-    assert [item.text for item in output.sentences] == ["Helo world.", '"What now?"', "♥", "Granny"]
-    assert [item.shared_bbox for item in output.sentences] == [True, True, False, False]
+    assert [item.text for item in output.sentences] == [
+        "Helo world.",
+        '"What now?"',
+        "♥",
+        "Read with me.",
+        "Granny",
+    ]
+    assert [item.shared_bbox for item in output.sentences] == [True, True, False, False, False]
     assert output.sentences[0].suspect_words == (
         SuspectWord(word="Helo", kind=SuspectKind.PROPER_NOUN),
     )
     assert output.sentences[2].status.value == "needs_review"
-    assert output.pages[0].blocks_seen == 3
-    assert output.pages[0].sentences_created == 4
+    assert output.pages[0].blocks_seen == 4
+    assert output.pages[0].sentences_created == 5
     assert 0 <= output.sentences[0].bbox.x < 1
     assert output.sentences[0].bbox.x + output.sentences[0].bbox.width <= 1
-    assert output.sentences[-1].bbox.y < output.sentences[2].bbox.y
+    assert "The Frog Family" not in [item.text for item in output.sentences]
 
 
 def test_ocr_step_rejects_invalid_replayed_jsonl(tmp_path: Path) -> None:

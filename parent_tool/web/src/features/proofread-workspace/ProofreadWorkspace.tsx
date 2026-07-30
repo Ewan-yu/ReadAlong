@@ -68,6 +68,16 @@ export function ProofreadWorkspace() {
   const page = workspace?.pages.find((item) => item.page_no === selectedPage);
   const pageSentences = useMemo(() => sentences.filter((sentence) => sentence.page_no === selectedPage), [selectedPage, sentences]);
   const selected = sentences.find((sentence) => sentence.id === selectedIds[0]);
+  const sharedBoxSentences = useMemo(() => {
+    if (!selected?.shared_bbox) return [];
+    return pageSentences.filter((sentence) =>
+      sentence.shared_bbox
+      && sentence.bbox.x === selected.bbox.x
+      && sentence.bbox.y === selected.bbox.y
+      && sentence.bbox.width === selected.bbox.width
+      && sentence.bbox.height === selected.bbox.height,
+    );
+  }, [pageSentences, selected]);
   const pagesWithReview = useMemo(() => new Set(sentences.filter((sentence) => sentence.status === "needs_review").map((sentence) => sentence.page_no)), [sentences]);
   const confirmationBlockers = useMemo(
     () => sentences.filter((sentence) => sentence.status === "needs_review" || sentence.suspect_words.some((word) => word.kind === "spelling")),
@@ -203,12 +213,16 @@ export function ProofreadWorkspace() {
 
       <main className={styles.canvasColumn}>
         <div className={styles.canvasHint}>{tool === "draw" ? "在阅读页上拖动，补画漏识别的句子框。" : tool === "split" ? "已选句子保留为第一框；在页面上拖动绘制第二个句子框。" : "点击文字框或句子列表可双向定位；Shift/Ctrl 点击可多选合并。"}<b>第 {selectedPage} 页</b></div>
-        <ProofreadStage imageUrl={pageAssetUrl(bookId, workspace.pages_revision_id, page.image)} sentences={pageSentences} selectedIds={selectedIds} tool={tool} onSelect={select} onDraw={draw} />
+        <ProofreadStage imageUrl={pageAssetUrl(bookId, workspace.pages_revision_id, page.image)} sentences={pageSentences} selectedIds={selectedIds} tool={tool} onSelect={select} onDraw={draw} onChangeBox={(id, bbox) => updateSentence(id, { bbox })} />
       </main>
 
       <aside className={styles.inspector} aria-label="句子属性">
         {selected ? <>
           <div className={styles.inspectorHeading}><span>当前句子</span><strong>#{selected.seq} · 第 {selected.page_no} 页</strong></div>
+          {sharedBoxSentences.length > 1 && <section className={styles.sharedBoxNotice} aria-label="同一文字框内的句子">
+            <strong>同一文字框内有 {sharedBoxSentences.length} 句</strong>
+            <div>{sharedBoxSentences.map((sentence) => <button key={sentence.id} type="button" data-active={sentence.id === selected.id || undefined} onClick={() => select(sentence.id)}>#{sentence.seq} · {sentence.text}</button>)}</div>
+          </section>}
           <label className={styles.textField}><span>朗读文本</span><textarea value={selected.text} onChange={(event) => updateSentence(selected.id, { text: event.target.value, status: event.target.value.trim() ? "sentence" : "needs_review", suspect_words: [] })} onBlur={(event) => { const text = event.target.value.trim(); if (text) void checkProofreadText(bookId, text).then((suspectWords) => updateSentence(selected.id, { suspect_words: suspectWords })).catch(() => undefined); }} /></label>
           <div className={styles.status}><span data-review={selected.status === "needs_review" || undefined}>{statusLabel(selected)}</span>{selected.suspect_words.map((word) => <em key={word.word} data-proper={word.kind === "proper_noun" || undefined}>{word.word}</em>)}</div>
           <section className={styles.boxEditor}><strong>文字框（归一化坐标）</strong>{(["x", "y", "width", "height"] as const).map((key) => <label key={key}><span>{{ x: "左", y: "上", width: "宽", height: "高" }[key]}</span><input type="number" min="0" max="1" step="0.001" value={selected.bbox[key]} onChange={(event) => updateSentence(selected.id, { bbox: clampBox({ ...selected.bbox, [key]: Number(event.target.value) }) })} /></label>)}</section>
