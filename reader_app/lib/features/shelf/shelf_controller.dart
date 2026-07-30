@@ -7,6 +7,8 @@ import 'package:path/path.dart' as p;
 import '../../data/appdb/app_database_providers.dart';
 import '../../data/appdb/shelf_index.dart';
 import '../../data/bookpack/book_pack_importer.dart';
+import '../reader/original_audio_repository.dart';
+import '../reader/reader_repository.dart';
 import 'shelf_library.dart';
 
 class ShelfState {
@@ -89,7 +91,8 @@ final class _LocalBookRecordCleaner implements BookRecordCleaner {
   @override
   Future<void> deleteForBook(String libraryId) async {
     await shelfIndex.deleteRecordsForBook(libraryId);
-    final directory = Directory(p.join(documentsDirectory.path, 'records', libraryId));
+    final directory =
+        Directory(p.join(documentsDirectory.path, 'records', libraryId));
     if (await directory.exists()) await directory.delete(recursive: true);
   }
 }
@@ -178,6 +181,7 @@ class ShelfController extends AsyncNotifier<ShelfState> {
     try {
       if (library == null) return _libraryUnavailable();
       await library.deleteBook(book, deleteRecordings: deleteRecordings);
+      _invalidateBookResources(book.libraryId);
       await _reloadBooks(library);
       return ShelfActionResult(kind: ShelfActionKind.deleted, book: book);
     } on PartialBookDeleteException catch (error) {
@@ -200,6 +204,8 @@ class ShelfController extends AsyncNotifier<ShelfState> {
     required Uint8List bytes,
   }) async {
     if (result.ok) {
+      final book = result.entry;
+      if (book != null) _invalidateBookResources(book.libraryId);
       await _reloadBooks(library);
       return ShelfActionResult(
         kind: ShelfActionKind.imported,
@@ -237,6 +243,16 @@ class ShelfController extends AsyncNotifier<ShelfState> {
       books: books,
       isMutating: current?.isMutating ?? false,
     ));
+  }
+
+  /// A resource overwrite preserves its library ID. The reader and original
+  /// audio providers are intentionally cached for quick route re-entry, so
+  /// they must be invalidated once the on-disk package changes. Otherwise a
+  /// reopened book can retain the old page manifest or subtitle timeline.
+  void _invalidateBookResources(String libraryId) {
+    ref.invalidate(readerBookProvider(libraryId));
+    ref.invalidate(originalAudioReadyProvider(libraryId));
+    ref.invalidate(originalAudioBookProvider(libraryId));
   }
 
   Future<void> _reloadAfterPartialDelete(

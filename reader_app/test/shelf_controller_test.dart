@@ -11,6 +11,8 @@ import 'package:reader_app/data/appdb/shelf_index.dart';
 import 'package:reader_app/data/bookpack/book_pack_importer.dart';
 import 'package:reader_app/features/shelf/shelf_controller.dart';
 import 'package:reader_app/features/shelf/shelf_library.dart';
+import 'package:reader_app/features/reader/reader_models.dart';
+import 'package:reader_app/features/reader/reader_repository.dart';
 
 class _FakeBookPackPicker implements BookPackPicker {
   BookPackSelection? selection;
@@ -107,6 +109,7 @@ void main() {
   late _FakeBookPackPicker picker;
   late ProviderContainer container;
   late ShelfController controller;
+  late int readerLoads;
 
   setUp(() async {
     library = _FakeShelfLibrary(
@@ -114,9 +117,19 @@ void main() {
       importResult: ImportResult.operationFailure(['not configured']),
     );
     picker = _FakeBookPackPicker();
+    readerLoads = 0;
     container = ProviderContainer(overrides: [
       shelfLibraryProvider.overrideWith((_) async => library),
       bookPackPickerProvider.overrideWith((_) => picker),
+      readerBookProvider.overrideWith((ref, libraryId) async {
+        readerLoads++;
+        return ReaderBook(
+          libraryId: libraryId,
+          sourceBookId: 'source-$libraryId',
+          title: 'Cached $readerLoads',
+          pages: const [],
+        );
+      }),
     ]);
     addTearDown(container.dispose);
     await container.read(shelfControllerProvider.future);
@@ -301,6 +314,26 @@ void main() {
         ImportConflictResolution.overwrite);
     expect(library.importCalls.single.targetLibraryId, conflictBook.libraryId);
     expect(library.importCalls.single.bytes, pending.bytes);
+  });
+
+  test('overwrite invalidates the cached reader resource for the library',
+      () async {
+    final cachedBook = _book('existing');
+    final updatedBook = _book('existing');
+    library.importResult = ImportResult.success(entry: updatedBook);
+    library.books = [updatedBook];
+    await container.read(readerBookProvider(cachedBook.libraryId).future);
+    expect(readerLoads, 1);
+
+    final pending = PendingImport(
+      bytes: Uint8List.fromList([7, 8]),
+      conflict: ImportResult.conflict(conflictEntry: cachedBook),
+    );
+    await controller.resolveConflict(
+        pending, ImportConflictResolution.overwrite);
+
+    await container.read(readerBookProvider(cachedBook.libraryId).future);
+    expect(readerLoads, 2);
   });
 
   test('resolves save-copy using the pending conflict target', () async {

@@ -74,10 +74,21 @@ final class RecordAudioRecordingService implements AudioRecordingService {
   StreamController<RecordingLevel>? _levelController;
   String? _activePath;
   Future<String>? _stopOperation;
+  Future<void>? _disposeOperation;
+  Future<void> _lifecycleOperation = Future.value();
   var _disposed = false;
 
   @override
   Future<RecordingSession> start({
+    required String libraryId,
+    required String sentenceId,
+  }) =>
+      _serialize(() => _startInternal(
+            libraryId: libraryId,
+            sentenceId: sentenceId,
+          ));
+
+  Future<RecordingSession> _startInternal({
     required String libraryId,
     required String sentenceId,
   }) async {
@@ -140,7 +151,7 @@ final class RecordAudioRecordingService implements AudioRecordingService {
     final activeOperation = _stopOperation;
     if (activeOperation != null) return activeOperation;
     late final Future<String> operation;
-    operation = _stopInternal().whenComplete(() {
+    operation = _serialize(_stopInternal).whenComplete(() {
       if (identical(_stopOperation, operation)) _stopOperation = null;
     });
     _stopOperation = operation;
@@ -168,14 +179,41 @@ final class RecordAudioRecordingService implements AudioRecordingService {
   }
 
   @override
-  Future<void> cancel() => _cleanupActiveRecording(deleteFile: true);
+  Future<void> cancel() => _serialize(() async {
+        if (_disposed) return;
+        await _cleanupActiveRecording(deleteFile: true);
+      });
 
   @override
-  Future<void> dispose() async {
-    if (_disposed) return;
+  Future<void> dispose() {
+    final activeDispose = _disposeOperation;
+    if (activeDispose != null) return activeDispose;
     _disposed = true;
-    await _cleanupActiveRecording(deleteFile: true);
-    await _recorder.dispose();
+    return _disposeOperation = _serialize(() async {
+      try {
+        await _cleanupActiveRecording(deleteFile: true);
+      } finally {
+        try {
+          await _recorder.dispose();
+        } on Object {
+          // Teardown is best-effort. Some record_android 1.x paths report a
+          // duplicate receiver removal after Android has already released it.
+        }
+      }
+    });
+  }
+
+  /// record_android 1.x is not safe when platform calls overlap (for example,
+  /// a countdown cancellation racing an automatic stop during route teardown).
+  /// Keep every native recorder operation on one queue and absorb an earlier
+  /// failure before accepting the next cleanup command.
+  Future<T> _serialize<T>(Future<T> Function() operation) {
+    final result = _lifecycleOperation.then(
+      (_) => operation(),
+      onError: (_, __) => operation(),
+    );
+    _lifecycleOperation = result.then<void>((_) {}, onError: (_, __) {});
+    return result;
   }
 
   /// Removes takes left behind when Android terminated the previous process.
