@@ -1,6 +1,6 @@
 [project]
 name = "readalong-parent-tool"
-version = "0.1.0"
+version = "0.1.2"
 description = "ReadAlong 家长端加工工具：PDF → 点读资源包(.readalongbook)"
 requires-python = ">=3.10,<3.13"
 dependencies = [

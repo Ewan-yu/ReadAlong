@@ -344,7 +344,7 @@ class _AboutCard extends StatelessWidget {
                 style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
               ),
               const SizedBox(height: AppSpacing.unit),
-              const Text('版本 0.1.0 · 支持资源包 schema v1'),
+              const Text('版本 0.1.2 · 支持资源包 schema v1'),
               const SizedBox(height: AppSpacing.unit),
               const Text(
                 '离线混音使用 FFmpegKit（LGPL-3.0）；完整开源许可随应用提供。',

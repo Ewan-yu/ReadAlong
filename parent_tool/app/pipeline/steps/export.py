@@ -106,7 +106,7 @@ class ExportStep:
         original_audio: dict | None = None,
     ) -> dict:
         outputs = [(entry, item) for entry in plan.pages for item in entry.outputs]
-        manifest = {"schema_version": 1, "book_id": book_id, "title": title, "language": "en", "created_at": utc_now().isoformat(), "generator": {"name": "ReadAlong Parent Tool", "version": "0.1.0"}, "page_count": len(outputs), "page_image": {"format": "webp", "max_long_edge_px": plan.params.reading_long_edge, "quality": plan.params.webp_quality}, "thumbnail": {"format": "jpg", "max_long_edge_px": plan.params.thumbnail_long_edge, "quality": plan.params.thumbnail_quality}, "pages": [{"page_no": item.page_no, "image": item.page_image, "thumbnail": item.thumbnail, "width_px": item.width, "height_px": item.height, "source_pdf_page": entry.source_pdf_page, "source_region": item.region.value} for entry, item in outputs]}
+        manifest = {"schema_version": 1, "book_id": book_id, "title": title, "language": "en", "created_at": utc_now().isoformat(), "generator": {"name": "ReadAlong Parent Tool", "version": "0.1.2"}, "page_count": len(outputs), "page_image": {"format": "webp", "max_long_edge_px": plan.params.reading_long_edge, "quality": plan.params.webp_quality}, "thumbnail": {"format": "jpg", "max_long_edge_px": plan.params.thumbnail_long_edge, "quality": plan.params.thumbnail_quality}, "pages": [{"page_no": item.page_no, "image": item.page_image, "thumbnail": item.thumbnail, "width_px": item.width, "height_px": item.height, "source_pdf_page": entry.source_pdf_page, "source_region": item.region.value} for entry, item in outputs]}
         if original_audio is not None:
             manifest["original_audio"] = original_audio
         return manifest

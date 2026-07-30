@@ -160,14 +160,14 @@ def create_app(
 
     application = FastAPI(
         title="ReadAlong Parent Tool",
-        version="0.1.0",
+        version="0.1.2",
         lifespan=lifespan,
     )
     install_error_handlers(application)
 
     @application.get("/api/health")
     def health() -> dict[str, str]:
-        return {"status": "ok", "version": "0.1.0"}
+        return {"status": "ok", "version": "0.1.2"}
 
     application.include_router(pipeline_router)
     application.include_router(jobs_router)
