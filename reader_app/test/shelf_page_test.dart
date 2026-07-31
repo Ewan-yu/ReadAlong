@@ -175,6 +175,12 @@ void main() {
     expect(title.overflow, TextOverflow.ellipsis);
   });
 
+  test('书架封面按卡片物理宽度限制图片解码', () {
+    expect(shelfCoverCacheWidth(120, 2.75), 330);
+    expect(shelfCoverCacheWidth(0, 3), 1);
+    expect(shelfCoverCacheWidth(1000, 3), 2048);
+  });
+
   testWidgets('窄屏和宽屏自适应列数且不溢出', (tester) async {
     final books = List.generate(
       12,

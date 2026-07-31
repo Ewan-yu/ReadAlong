@@ -721,13 +721,29 @@ class _BookCover extends StatelessWidget {
     final file = File(thumbnailPath);
     if (!file.existsSync()) return const _MissingBookCover();
 
-    return Image.file(
-      file,
-      fit: BoxFit.cover,
-      errorBuilder: (_, __, ___) => const _MissingBookCover(),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        // A package may provide a large cover.jpg while this grid tile is only
+        // a fraction of the display. Decode near the physical tile width so a
+        // long shelf does not evict the active reading-page image from cache.
+        final cacheWidth = shelfCoverCacheWidth(
+          constraints.maxWidth,
+          MediaQuery.devicePixelRatioOf(context),
+        );
+        return Image.file(
+          file,
+          cacheWidth: cacheWidth,
+          fit: BoxFit.cover,
+          errorBuilder: (_, __, ___) => const _MissingBookCover(),
+        );
+      },
     );
   }
 }
+
+/// Bounds a decoded shelf cover to the space it can occupy on screen.
+int shelfCoverCacheWidth(double logicalWidth, double devicePixelRatio) =>
+    (logicalWidth * devicePixelRatio).ceil().clamp(1, 2048).toInt();
 
 class _MissingBookCover extends StatelessWidget {
   const _MissingBookCover();
