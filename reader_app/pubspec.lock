@@ -404,10 +404,10 @@ packages:
     dependency: "direct overridden"
     description:
       name: record_android
-      sha256: c15d7faffbbb8d3414e3062534fc125b445d2590327dc930636e7c70b8217733
+      sha256: d7af0b3119725a0f561817c72b5f5eca4d7a76d441deef519ae04e4824c0734c
       url: "https://pub.flutter-io.cn"
     source: hosted
-    version: "1.2.3"
+    version: "1.2.6"
   record_darwin:
     dependency: transitive
     description:
@@ -420,18 +420,18 @@ packages:
     dependency: "direct overridden"
     description:
       name: record_linux
-      sha256: "3dd8ae62a2cdb2d2100a0f37447f11f540c67adc59b629704c603e0d9288adc5"
+      sha256: "74d41a9ebb1eb498a38e9a813dd524e8f0b4fdd627270bda9756f437b110a3e3"
       url: "https://pub.flutter-io.cn"
     source: hosted
-    version: "0.5.0"
+    version: "0.7.2"
   record_platform_interface:
     dependency: "direct overridden"
     description:
       name: record_platform_interface
-      sha256: "33b0cd8a7d3770dae2596da0571f6767452795dd08202927d13b442c0470bff7"
+      sha256: "11f8b03ea8a0e279b0e306571dbe0db0202c0b8e866495c9fa1ad2281d5e4c15"
       url: "https://pub.flutter-io.cn"
     source: hosted
-    version: "1.0.0"
+    version: "1.1.0"
   record_web:
     dependency: transitive
     description:

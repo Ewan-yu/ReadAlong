@@ -43,9 +43,11 @@ flutter:
     - assets/audio/encouragement/
 
 # The Flutter 3.24 / AGP 8.1 template needs the mutually-compatible 5.1
-# platform set. Newer record plugins require AGP 8.5+ and currently resolve
-# incompatible desktop interface versions.
+# platform set. Keep the Android plugin on the latest 1.2 line: 1.2.6 adds
+# an idempotent Bluetooth receiver teardown, fixing Android lifecycle races.
 dependency_overrides:
-  record_android: 1.2.3
-  record_platform_interface: 1.0.0
-  record_linux: 0.5.0
+  record_android: 1.2.6
+  record_platform_interface: 1.1.0
+  # 0.7.x is the earliest compatible Linux implementation after the interface
+  # upgrade above; it remains within record 5.x's supported platform range.
+  record_linux: 0.7.2
