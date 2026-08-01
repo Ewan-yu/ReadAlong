@@ -113,6 +113,8 @@ class _ReaderViewState extends ConsumerState<_ReaderView>
   late final ScrollController _thumbnailController;
   late final List<TransformationController> _transforms;
   late final List<bool> _zoomedPages;
+  final Map<int, Size> _decodedPageSizes = {};
+  final Set<int> _pendingPageSizes = {};
   var _currentIndex = 0;
   var _isStripVisible = true;
   var _horizontalSwipeDistance = 0.0;
@@ -284,6 +286,40 @@ class _ReaderViewState extends ConsumerState<_ReaderView>
     }
   }
 
+  void _capturePageImageSize(ReaderPageData page) {
+    if (_decodedPageSizes.containsKey(page.pageNumber) ||
+        !_pendingPageSizes.add(page.pageNumber)) {
+      return;
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final stream = _readerPageImage(page).resolve(
+        createLocalImageConfiguration(context),
+      );
+      late final ImageStreamListener listener;
+      listener = ImageStreamListener(
+        (info, _) {
+          stream.removeListener(listener);
+          _pendingPageSizes.remove(page.pageNumber);
+          if (!mounted) return;
+          final size = Size(
+            info.image.width.toDouble(),
+            info.image.height.toDouble(),
+          );
+          if (size.isEmpty || _decodedPageSizes[page.pageNumber] == size) {
+            return;
+          }
+          setState(() => _decodedPageSizes[page.pageNumber] = size);
+        },
+        onError: (_, __) {
+          stream.removeListener(listener);
+          _pendingPageSizes.remove(page.pageNumber);
+        },
+      );
+      stream.addListener(listener);
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final pointReadingProvider =
@@ -326,12 +362,15 @@ class _ReaderViewState extends ConsumerState<_ReaderView>
         return LayoutBuilder(
           builder: (context, constraints) {
             final canvasSize = constraints.biggest;
+            _capturePageImageSize(page);
+            final imageSize = _decodedPageSizes[page.pageNumber] ??
+                Size(
+                  page.widthPx.toDouble(),
+                  page.heightPx.toDouble(),
+                );
             final imageRect = containedImageRect(
               canvasSize: canvasSize,
-              imageSize: Size(
-                page.widthPx.toDouble(),
-                page.heightPx.toDouble(),
-              ),
+              imageSize: imageSize,
             );
             return GestureDetector(
               key: ValueKey('reader-tap-surface-${page.pageNumber}'),

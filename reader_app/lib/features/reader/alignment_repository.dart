@@ -27,7 +27,7 @@ final pointReadingRepositoryProvider =
 });
 
 final pointReadingBookProvider =
-    FutureProvider.autoDispose.family<PointReadingBook, String>(
+    FutureProvider.family<PointReadingBook, String>(
   (ref, libraryId) async {
     final repository = await ref.watch(pointReadingRepositoryProvider.future);
     return repository.loadBook(libraryId);

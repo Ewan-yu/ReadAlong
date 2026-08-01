@@ -7,6 +7,7 @@ import 'package:path/path.dart' as p;
 import '../../data/appdb/app_database_providers.dart';
 import '../../data/appdb/shelf_index.dart';
 import '../../data/bookpack/book_pack_importer.dart';
+import '../reader/alignment_repository.dart';
 import '../reader/original_audio_repository.dart';
 import '../reader/reader_repository.dart';
 import 'shelf_library.dart';
@@ -251,6 +252,7 @@ class ShelfController extends AsyncNotifier<ShelfState> {
   /// reopened book can retain the old page manifest or subtitle timeline.
   void _invalidateBookResources(String libraryId) {
     ref.invalidate(readerBookProvider(libraryId));
+    ref.invalidate(pointReadingBookProvider(libraryId));
     ref.invalidate(originalAudioReadyProvider(libraryId));
     ref.invalidate(originalAudioBookProvider(libraryId));
   }
