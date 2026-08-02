@@ -16,10 +16,13 @@
 
 ## 工程文档
 
+- `docs/PROGRESS.md` — 最新进度、验证证据与剩余真机/发布工作（当前事实源）
 - `docs/architecture.md` — 框架设计（读代码前必读）
 - `docs/functional-design.md` — 功能详细设计
 - `docs/development-plan.md` — 里程碑计划（M0–M5）
 - `docs/design.md` — UI 设计规范（色板/组件/布局）
+
+截至 2026-08-02，M0–M5.5 的代码闭环已完成；家长端 127 项 pytest、阅读端 246 项 Flutter 测试和 `flutter analyze` 均通过。剩余工作是 Android 14 实体平板与 2–3 本真书的端到端回归、录音生命周期风险收敛、性能测量及正式 release 验收。
 
 ## 开发环境
 
