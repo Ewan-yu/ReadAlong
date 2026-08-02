@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from concurrent.futures import Future, TimeoutError as FutureTimeout
 from pathlib import Path
 from threading import Event
 from typing import Callable, Protocol
@@ -52,6 +53,28 @@ class CancellationToken:
     def raise_if_cancelled(self) -> None:
         if self.requested:
             raise PipelineError("JOB_CANCELLED", "任务已取消。", status_code=409)
+
+
+def wait_for_future(
+    future: Future[object],
+    cancellation: CancellationToken,
+    *,
+    poll_seconds: float = 0.1,
+) -> object:
+    """Wait for a blocking provider call while keeping cancellation responsive.
+
+    Native model APIs do not expose a safe way to interrupt an in-flight
+    inference.  The worker future is therefore allowed to finish in the
+    background, while the pipeline returns ``JOB_CANCELLED`` immediately and
+    suppresses any output publication.  Each provider owns a single-worker
+    executor so a cancelled inference cannot overlap a later inference.
+    """
+    while True:
+        cancellation.raise_if_cancelled()
+        try:
+            return future.result(timeout=poll_seconds)
+        except FutureTimeout:
+            continue
 
 
 ProgressReporter = Callable[[float, str], None]

@@ -3,8 +3,11 @@ import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:path/path.dart' as p;
 import 'package:reader_app/data/appdb/shelf_index.dart';
+import 'package:reader_app/data/appdb/dubbing_models.dart';
 import 'package:reader_app/data/bookpack/book_pack_importer.dart';
+import 'package:reader_app/features/dubbing/dubbing_file_store.dart';
 import 'package:reader_app/features/shelf/shelf_library.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
@@ -172,6 +175,74 @@ void main() {
       expect(Directory(book.bookDir).existsSync(), isFalse);
       expect(await index.findByLibraryId(book.libraryId), isNull);
       expect(pendingDeleteDirectories(), isEmpty);
+    });
+
+    test('deleting recordings removes durable dubbing data and files',
+        () async {
+      final book = await importFixture();
+      final fileStore = DubbingFileStore(documentsDirectory: tempDir);
+      final project = await index.createDubbingProject(
+        id: 'project-1',
+        libraryId: book.libraryId,
+        sourceBookId: book.sourceBookId,
+        resourceSha256: 'resource-sha',
+        timelineSha256: 'timeline-sha',
+        mode: DubbingMode.sentence,
+      );
+      final takePath = fileStore.takeRelativePath(
+        libraryId: book.libraryId,
+        projectId: project.id,
+        takeId: 'take-1',
+        kind: DubbingTakeKind.sentence,
+        sentenceId: 's0001',
+      );
+      final takeFile = File(fileStore.resolveRelativePath(takePath));
+      await takeFile.parent.create(recursive: true);
+      await takeFile.writeAsBytes([1, 2, 3]);
+      await index.createDubbingTake(
+        id: 'take-1',
+        projectId: project.id,
+        takeKind: DubbingTakeKind.sentence,
+        sentenceId: 's0001',
+        audioRelativePath: takePath,
+        duration: const Duration(milliseconds: 800),
+      );
+      final mixPath = fileStore.mixRelativePath(
+        libraryId: book.libraryId,
+        projectId: project.id,
+        mixId: 'mix-1',
+      );
+      final mixFile = File(fileStore.resolveRelativePath(mixPath));
+      await mixFile.parent.create(recursive: true);
+      await mixFile.writeAsBytes([4, 5, 6]);
+      await index.createDubbingMix(
+        id: 'mix-1',
+        projectId: project.id,
+        audioRelativePath: mixPath,
+        variant: DubbingMixVariant.voiceOnly,
+        sourceTakeFingerprint: 'take-fingerprint',
+        duration: const Duration(seconds: 1),
+      );
+
+      library = LocalShelfLibrary(
+        importer: importer,
+        shelfIndex: index,
+        recordCleaner: LocalBookRecordCleaner(
+          documentsDirectory: tempDir,
+          shelfIndex: index,
+          dubbingFileStore: fileStore,
+        ),
+      );
+
+      await library.deleteBook(book, deleteRecordings: true);
+
+      expect(await index.listDubbingProjects(book.libraryId), isEmpty);
+      expect(await index.listDubbingTakes(project.id), isEmpty);
+      expect(await index.listDubbingMixes(project.id), isEmpty);
+      expect(
+        Directory(p.join(tempDir.path, 'dubbing', book.libraryId)).existsSync(),
+        isFalse,
+      );
     });
 
     test('cleaner failure after shelf deletion surfaces partial deletion',

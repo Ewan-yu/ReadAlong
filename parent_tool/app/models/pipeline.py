@@ -4,7 +4,9 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_serializer, model_validator
+
+from app.models.errors import public_error_details
 
 
 def utc_now() -> datetime:
@@ -49,6 +51,10 @@ class PipelineErrorInfo(FrozenModel):
     code: str
     message: str
     details: dict[str, Any] = Field(default_factory=dict)
+
+    @field_serializer('details')
+    def serialize_public_details(self, details: dict[str, Any]) -> dict[str, Any]:
+        return public_error_details(details)
 
 
 class OutputFile(FrozenModel):

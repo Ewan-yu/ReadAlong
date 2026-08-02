@@ -206,30 +206,49 @@ final class LocalDubbingRepository implements DubbingRepository {
   Future<void> deleteTake(String takeId) async {
     final take = await _shelfIndex.findDubbingTake(takeId);
     if (take == null) return;
-    await _shelfIndex.deleteDubbingTake(takeId);
-    if (take.isSelected) {
-      final remaining = await _shelfIndex.listDubbingTakes(
-        take.projectId,
-        sentenceId:
-            take.takeKind == DubbingTakeKind.sentence ? take.sentenceId : null,
-      );
-      if (remaining.isNotEmpty &&
-          !remaining.any((candidate) => candidate.isSelected)) {
-        await _shelfIndex.selectDubbingTake(remaining.first.id);
+    final staged = await _fileStore.stageDeleteRelativeFile(
+      take.audioRelativePath,
+    );
+    try {
+      await _shelfIndex.deleteDubbingTake(takeId);
+      if (take.isSelected) {
+        final remaining = await _shelfIndex.listDubbingTakes(
+          take.projectId,
+          sentenceId: take.takeKind == DubbingTakeKind.sentence
+              ? take.sentenceId
+              : null,
+        );
+        if (remaining.isNotEmpty &&
+            !remaining.any((candidate) => candidate.isSelected)) {
+          await _shelfIndex.selectDubbingTake(remaining.first.id);
+        }
       }
+    } catch (_) {
+      try {
+        await staged?.restore();
+      } on Object {}
+      rethrow;
     }
-    await _fileStore.deleteRelativeFile(take.audioRelativePath);
+    await staged?.commit();
   }
 
   @override
   Future<void> deleteProject(String projectId) async {
     final project = await _shelfIndex.findDubbingProject(projectId);
     if (project == null) return;
-    await _shelfIndex.deleteDubbingProject(projectId);
-    await _fileStore.deleteProject(
+    final staged = await _fileStore.stageDeleteProject(
       libraryId: project.libraryId,
       projectId: project.id,
     );
+    try {
+      await _shelfIndex.deleteDubbingProject(projectId);
+    } catch (_) {
+      try {
+        await staged?.restore();
+      } on Object {}
+      rethrow;
+    }
+    await staged?.commit();
   }
 
   @override
@@ -287,8 +306,18 @@ final class LocalDubbingRepository implements DubbingRepository {
   Future<void> deleteMix(String mixId) async {
     final mix = await _shelfIndex.findDubbingMix(mixId);
     if (mix == null) return;
-    await _shelfIndex.deleteDubbingMix(mixId);
-    await _fileStore.deleteRelativeFile(mix.audioRelativePath);
+    final staged = await _fileStore.stageDeleteRelativeFile(
+      mix.audioRelativePath,
+    );
+    try {
+      await _shelfIndex.deleteDubbingMix(mixId);
+    } catch (_) {
+      try {
+        await staged?.restore();
+      } on Object {}
+      rethrow;
+    }
+    await staged?.commit();
   }
 
   @override

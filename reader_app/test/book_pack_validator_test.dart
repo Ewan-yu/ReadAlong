@@ -38,6 +38,22 @@ Uint8List _withDifferentContent(Uint8List source) {
   return Uint8List.fromList(ZipEncoder().encode(changedArchive)!);
 }
 
+Uint8List _withManifestPageCount(Uint8List source, int pageCount) {
+  final sourceArchive = ZipDecoder().decodeBytes(source);
+  final changedArchive = Archive();
+  for (final file in sourceArchive) {
+    if (file.name == 'manifest.json') {
+      final content = String.fromCharCodes(file.content as List<int>)
+          .replaceFirst('"page_count": 2', '"page_count": $pageCount')
+          .codeUnits;
+      changedArchive.addFile(ArchiveFile(file.name, content.length, content));
+    } else {
+      changedArchive.addFile(file);
+    }
+  }
+  return Uint8List.fromList(ZipEncoder().encode(changedArchive)!);
+}
+
 Uint8List _withDuplicateEntry(
   Uint8List source,
   String path, {
@@ -299,6 +315,27 @@ void main() {
         databaseFactory: databaseFactoryFfi,
       );
       expect(result.ok, isFalse);
+    });
+
+    test('压缩包超过大小上限时不解压即拒绝', () async {
+      final result = await BookPackValidator.validateBytes(
+        _fixture('fixture_book.readalongbook'),
+        databaseFactory: databaseFactoryFfi,
+        limits: const BookPackLimits(maxPackageBytes: 1),
+      );
+
+      expect(result.ok, isFalse);
+      expect(result.errors, contains(contains('资源包过大')));
+    });
+
+    test('manifest page_count 与页面数组不一致时拒绝', () async {
+      final result = await BookPackValidator.validateBytes(
+        _withManifestPageCount(_fixture('fixture_book.readalongbook'), 3),
+        databaseFactory: databaseFactoryFfi,
+      );
+
+      expect(result.ok, isFalse);
+      expect(result.errors, contains(contains('page_count 与 pages 数量不一致')));
     });
   });
 
@@ -589,6 +626,18 @@ void main() {
     test('坏包不创建书籍目录或书架索引', () async {
       final result = await importer.import(
         _fixture('bad_missing_file.readalongbook'),
+      );
+
+      expect(result.ok, isFalse);
+      expect(result.failureCategory, ImportFailureCategory.validation);
+      expect(await shelfIndex.listBooks(), isEmpty);
+      final booksDir = Directory('${tempDir.path}/books');
+      expect(booksDir.existsSync() ? booksDir.listSync() : const [], isEmpty);
+    });
+
+    test('页面数量不一致的包不创建书籍目录或书架索引', () async {
+      final result = await importer.import(
+        _withManifestPageCount(_fixture('fixture_book.readalongbook'), 3),
       );
 
       expect(result.ok, isFalse);

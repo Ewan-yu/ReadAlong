@@ -678,6 +678,52 @@ class ShelfIndex {
     }
   }
 
+  /// Deletes all durable dubbing metadata belonging to an imported book.
+  ///
+  /// The caller is responsible for deleting the corresponding private audio
+  /// directory after this transaction succeeds.  Returning the deleted
+  /// project IDs lets callers report or reconcile file-cleanup failures
+  /// without keeping the SQLite transaction open.
+  Future<List<String>> deleteDubbingForBook(String libraryId) async {
+    final db = await _open();
+    try {
+      return await db.transaction((transaction) async {
+        final projects = await transaction.query(
+          'dubbing_project',
+          columns: const ['id'],
+          where: 'library_id = ?',
+          whereArgs: [libraryId],
+          orderBy: 'id ASC',
+        );
+        final projectIds = [
+          for (final row in projects) row['id']! as String,
+        ];
+        if (projectIds.isEmpty) return projectIds;
+
+        const projectSubquery =
+            'project_id IN (SELECT id FROM dubbing_project WHERE library_id = ?)';
+        await transaction.delete(
+          'dubbing_take',
+          where: projectSubquery,
+          whereArgs: [libraryId],
+        );
+        await transaction.delete(
+          'dubbing_mix',
+          where: projectSubquery,
+          whereArgs: [libraryId],
+        );
+        await transaction.delete(
+          'dubbing_project',
+          where: 'library_id = ?',
+          whereArgs: [libraryId],
+        );
+        return projectIds;
+      });
+    } finally {
+      await db.close();
+    }
+  }
+
   Future<DubbingMix> createDubbingMix({
     required String id,
     required String projectId,

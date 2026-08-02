@@ -141,6 +141,23 @@ def test_failed_rerun_preserves_old_success(tmp_path: Path) -> None:
     assert state.steps[StepId.PAGES].success == first
 
 
+def test_rollback_failure_does_not_mask_original_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine, _repository = _engine(tmp_path, FakeStep(StepId.PAGES))
+    plan = engine.plan("book-1", StepId.PAGES, {"value": "broken", "fail": True})
+    assert not isinstance(plan, SkippedRun)
+    prepared = engine.begin(plan, "22345678-1234-4234-8234-123456789abc")
+
+    def fail_rollback(_prepared, _error) -> None:
+        raise OSError("state store unavailable")
+
+    monkeypatch.setattr(engine, "_rollback", fail_rollback)
+
+    with pytest.raises(RuntimeError, match="synthetic failure"):
+        engine.execute(prepared, lambda _progress, _message: None, CancellationToken())
+
+
 def test_successful_upstream_rerun_stales_completed_downstream(tmp_path: Path) -> None:
     engine, repository = _engine(
         tmp_path,

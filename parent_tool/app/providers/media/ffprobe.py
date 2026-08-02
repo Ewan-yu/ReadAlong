@@ -10,6 +10,7 @@ from pathlib import Path
 
 from app.models.errors import PipelineError
 from app.pipeline.definitions import CancellationToken
+from app.pipeline.processes import terminate_process
 
 
 class FfprobeMediaProbe:
@@ -40,8 +41,7 @@ class FfprobeMediaProbe:
         )
         while process.poll() is None:
             if cancellation.requested:
-                process.terminate()
-                process.wait(timeout=5)
+                terminate_process(process)
                 cancellation.raise_if_cancelled()
             time.sleep(0.05)
         stdout, stderr = process.communicate()

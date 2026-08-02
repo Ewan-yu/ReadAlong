@@ -1,4 +1,3 @@
-import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -7,6 +6,7 @@ import 'package:path/path.dart' as p;
 import '../../data/appdb/app_database_providers.dart';
 import '../../data/appdb/shelf_index.dart';
 import '../../data/bookpack/book_pack_importer.dart';
+import '../dubbing/dubbing_file_store.dart';
 import '../reader/alignment_repository.dart';
 import '../reader/original_audio_repository.dart';
 import '../reader/reader_repository.dart';
@@ -73,30 +73,13 @@ final shelfLibraryProvider = FutureProvider<ShelfLibrary>((ref) async {
   return LocalShelfLibrary(
     importer: importer,
     shelfIndex: shelfIndex,
-    recordCleaner: _LocalBookRecordCleaner(
+    recordCleaner: LocalBookRecordCleaner(
       documentsDirectory: documents,
       shelfIndex: shelfIndex,
+      dubbingFileStore: DubbingFileStore(documentsDirectory: documents),
     ),
   );
 });
-
-final class _LocalBookRecordCleaner implements BookRecordCleaner {
-  const _LocalBookRecordCleaner({
-    required this.documentsDirectory,
-    required this.shelfIndex,
-  });
-
-  final Directory documentsDirectory;
-  final ShelfIndex shelfIndex;
-
-  @override
-  Future<void> deleteForBook(String libraryId) async {
-    await shelfIndex.deleteRecordsForBook(libraryId);
-    final directory =
-        Directory(p.join(documentsDirectory.path, 'records', libraryId));
-    if (await directory.exists()) await directory.delete(recursive: true);
-  }
-}
 
 final bookPackPickerProvider = Provider<BookPackPicker>(
   (_) => const FilePickerBookPackPicker(),

@@ -6,6 +6,7 @@ from pydantic import ValidationError
 from app.models.pipeline import (
     ActiveAttempt,
     OutputFile,
+    PipelineErrorInfo,
     PipelineState,
     StepState,
     StepStatus,
@@ -99,3 +100,23 @@ def test_workspace_paths_keep_books_under_root(tmp_path: Path) -> None:
     paths = WorkspacePaths(tmp_path)
 
     assert paths.book("book-1") == (tmp_path / "book-1").resolve()
+
+
+def test_pipeline_error_details_redact_local_paths_and_subprocess_output() -> None:
+    info = PipelineErrorInfo(
+        code="AUDIO_TRANSCODE_FAILED",
+        message="failed",
+        details={
+            "path": "C:/Users/child/ReadAlongData/book-1/staging.wav",
+            "ffmpeg_error": "Input file: C:/secret/source.wav",
+            "sentence_id": "s0001",
+            "nested": {"cache": "C:/secret/cache", "count": 2},
+        },
+    )
+
+    serialized = info.model_dump(mode="json")
+
+    assert serialized["details"] == {
+        "sentence_id": "s0001",
+        "nested": {"count": 2},
+    }

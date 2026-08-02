@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
 from threading import Lock
 from typing import Protocol
 
 from app.models.audio import SynthesizedAudio, VoiceConfig, VoiceMode
 from app.models.errors import PipelineError
-from app.pipeline.definitions import CancellationToken
+from app.pipeline.definitions import CancellationToken, wait_for_future
 
 
 class TtsProvider(Protocol):
@@ -33,6 +34,10 @@ class VoxCpmTtsProvider:
         )
         self._model: object | None = None
         self._lock = Lock()
+        self._inference_executor = ThreadPoolExecutor(
+            max_workers=1,
+            thread_name_prefix="readalong-voxcpm",
+        )
 
     def synthesize(
         self,
@@ -61,12 +66,21 @@ class VoxCpmTtsProvider:
                         prompt_wav_path=voice.reference_wav_path,
                         prompt_text=voice.reference_text,
                     )
-                waveform = model.generate(text=prompt, **clone_options)
+                future = self._inference_executor.submit(
+                    model.generate,
+                    text=prompt,
+                    **clone_options,
+                )
             else:
                 # Short children's-reading clips are especially sensitive to a coarse
                 # denoising schedule.  A modestly higher step count gives consonants
                 # and word endings more definition without changing the voice API.
-                waveform = model.generate(text=prompt, **generation_options)
+                future = self._inference_executor.submit(
+                    model.generate,
+                    text=prompt,
+                    **generation_options,
+                )
+            waveform = wait_for_future(future, cancellation)
             sample_rate = int(model.tts_model.sample_rate)
             import soundfile as sound_file
 

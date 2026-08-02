@@ -6,7 +6,7 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from app.models.errors import ApiErrorResponse, PipelineError
+from app.models.errors import ApiErrorResponse, PipelineError, public_error_details
 
 
 def install_error_handlers(app: FastAPI) -> None:
@@ -22,7 +22,7 @@ def install_error_handlers(app: FastAPI) -> None:
         body = ApiErrorResponse(
             code=exc.code,
             message=exc.message,
-            details=exc.details,
+            details=public_error_details(exc.details),
             request_id=request.state.request_id,
         )
         return JSONResponse(status_code=exc.status_code, content=body.model_dump(mode="json"))

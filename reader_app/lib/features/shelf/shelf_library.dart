@@ -2,9 +2,12 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
+import 'package:path/path.dart' as p;
 
 import '../../data/appdb/shelf_index.dart';
 import '../../data/bookpack/book_pack_importer.dart';
+import '../../data/bookpack/book_pack_validator.dart';
+import '../dubbing/dubbing_file_store.dart';
 
 class BookPackSelection {
   final String name;
@@ -31,11 +34,23 @@ class FilePickerBookPackPicker implements BookPackPicker {
     if (result == null) return null;
 
     final file = result.files.single;
+    if (file.size > BookPackLimits.defaultMaxPackageBytes) {
+      throw FileSystemException(
+        'Selected book package is too large',
+        file.name,
+      );
+    }
     final bytes = file.bytes ??
         (file.path == null ? null : await File(file.path!).readAsBytes());
     if (bytes == null) {
       throw FileSystemException(
           'Selected book package has no readable data', file.name);
+    }
+    if (bytes.length > BookPackLimits.defaultMaxPackageBytes) {
+      throw FileSystemException(
+        'Selected book package is too large',
+        file.name,
+      );
     }
     return BookPackSelection(name: file.name, bytes: bytes);
   }
@@ -47,7 +62,7 @@ class FilePickerBookPackPicker implements BookPackPicker {
         // filter. Pick any local file, then let BookPackValidator validate
         // the selected package and report a useful error to the user.
         type: FileType.any,
-        withData: true,
+        withData: false,
       );
 }
 
@@ -60,6 +75,33 @@ class NoopBookRecordCleaner implements BookRecordCleaner {
 
   @override
   Future<void> deleteForBook(String libraryId) async {}
+}
+
+/// Removes the local reading history and durable dubbing artifacts for a book.
+///
+/// SQLite metadata is deleted in one transaction.  The private dubbing
+/// directory is then removed recursively so files left by an interrupted or
+/// older cleanup cannot survive a user-requested recording deletion.
+final class LocalBookRecordCleaner implements BookRecordCleaner {
+  const LocalBookRecordCleaner({
+    required this.documentsDirectory,
+    required this.shelfIndex,
+    required this.dubbingFileStore,
+  });
+
+  final Directory documentsDirectory;
+  final ShelfIndex shelfIndex;
+  final DubbingFileStore dubbingFileStore;
+
+  @override
+  Future<void> deleteForBook(String libraryId) async {
+    await shelfIndex.deleteRecordsForBook(libraryId);
+    await shelfIndex.deleteDubbingForBook(libraryId);
+    await dubbingFileStore.deleteLibrary(libraryId);
+    final directory =
+        Directory(p.join(documentsDirectory.path, 'records', libraryId));
+    if (await directory.exists()) await directory.delete(recursive: true);
+  }
 }
 
 abstract interface class ShelfLibrary {

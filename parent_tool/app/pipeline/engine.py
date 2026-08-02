@@ -377,9 +377,26 @@ class PipelineEngine:
             return success
         except Exception as exc:
             if published_root is not None:
-                self.artifacts.discard_revision(plan.book_id, published_root)
-            self.artifacts.cleanup_staging(prepared.staging_dir)
-            self._rollback(prepared, exc)
+                try:
+                    self.artifacts.discard_revision(plan.book_id, published_root)
+                except Exception:
+                    LOGGER.exception(
+                        "Failed to discard unpublished revision for %s", plan.book_id
+                    )
+            try:
+                self.artifacts.cleanup_staging(prepared.staging_dir)
+            except Exception:
+                LOGGER.exception(
+                    "Failed to clean staging directory for %s", plan.book_id
+                )
+            try:
+                self._rollback(prepared, exc)
+            except Exception:
+                LOGGER.exception(
+                    "Failed to persist rollback state for %s job %s",
+                    plan.book_id,
+                    prepared.job_id,
+                )
             raise
 
     def _rollback(self, prepared: PreparedRun, exc: Exception) -> None:

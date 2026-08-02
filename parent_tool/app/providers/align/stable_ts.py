@@ -3,12 +3,13 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from threading import Lock
 from typing import Protocol
 
 from app.models.audio import AudioWordTiming
 from app.models.errors import PipelineError
-from app.pipeline.definitions import CancellationToken
+from app.pipeline.definitions import CancellationToken, wait_for_future
 
 
 class WordAligner(Protocol):
@@ -32,6 +33,10 @@ class StableTsWordAligner:
         self._model_name = model_name
         self._model: object | None = None
         self._lock = Lock()
+        self._inference_executor = ThreadPoolExecutor(
+            max_workers=1,
+            thread_name_prefix="readalong-stable-ts",
+        )
 
     def align(
         self, wav_path: Path, language: str, cancellation: CancellationToken
@@ -39,7 +44,12 @@ class StableTsWordAligner:
         cancellation.raise_if_cancelled()
         try:
             self._ensure_ffmpeg_on_path()
-            result = self._load_model().transcribe(str(wav_path), language=language)
+            future = self._inference_executor.submit(
+                self._load_model().transcribe,
+                str(wav_path),
+                language=language,
+            )
+            result = wait_for_future(future, cancellation)
             cancellation.raise_if_cancelled()
             timings = self._timings_from_result(result)
             if not timings:
@@ -75,7 +85,13 @@ class StableTsWordAligner:
         cancellation.raise_if_cancelled()
         try:
             self._ensure_ffmpeg_on_path()
-            result = self._load_model().align(str(wav_path), text, language=language)
+            future = self._inference_executor.submit(
+                self._load_model().align,
+                str(wav_path),
+                text,
+                language=language,
+            )
+            result = wait_for_future(future, cancellation)
             cancellation.raise_if_cancelled()
             timings = self._timings_from_result(result)
             if not timings:

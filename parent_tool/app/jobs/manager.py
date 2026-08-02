@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 import logging
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor, TimeoutError as FutureTimeout
 from contextlib import contextmanager
 from collections.abc import Iterator
 from threading import RLock
@@ -30,6 +30,7 @@ class JobManager:
         *,
         executor: ThreadPoolExecutor | None = None,
         clock: Callable[[], float] = time.monotonic,
+        shutdown_timeout: float = 5.0,
     ) -> None:
         self.engine = engine
         self.jobs = jobs
@@ -38,6 +39,7 @@ class JobManager:
             max_workers=1, thread_name_prefix="readalong-pipeline"
         )
         self.clock = clock
+        self.shutdown_timeout = shutdown_timeout
         self._lock = RLock()
         self._active_job_id: str | None = None
         self._maintenance_operation: str | None = None
@@ -142,6 +144,20 @@ class JobManager:
                 self.cancel(active)
             except PipelineError:
                 pass
+            with self._lock:
+                future = self._futures.get(active)
+            if future is not None:
+                try:
+                    future.result(timeout=self.shutdown_timeout)
+                except FutureTimeout:
+                    LOGGER.warning(
+                        "Pipeline job %s did not stop within %.1fs; "
+                        "leaving its cooperative worker to finish in the background.",
+                        active,
+                        self.shutdown_timeout,
+                    )
+                    self.executor.shutdown(wait=False, cancel_futures=True)
+                    return
         self.executor.shutdown(wait=True, cancel_futures=True)
 
     @contextmanager

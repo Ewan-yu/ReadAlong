@@ -128,6 +128,16 @@ final class DubbingFileStore {
     if (await file.exists()) await file.delete();
   }
 
+  Future<StagedDubbingFileDeletion?> stageDeleteRelativeFile(
+    String relativePath,
+  ) async {
+    final source = File(resolveRelativePath(relativePath));
+    if (!await source.exists()) return null;
+    final staged = File('${source.path}.delete-${_nonce()}');
+    await source.rename(staged.path);
+    return StagedDubbingFileDeletion._(source: source, staged: staged);
+  }
+
   Future<void> deleteProject({
     required String libraryId,
     required String projectId,
@@ -136,11 +146,70 @@ final class DubbingFileStore {
     if (await directory.exists()) await directory.delete(recursive: true);
   }
 
+  Future<StagedDubbingDirectoryDeletion?> stageDeleteProject({
+    required String libraryId,
+    required String projectId,
+  }) async {
+    final source = _projectDirectory(libraryId, projectId);
+    if (!await source.exists()) return null;
+    final staged = Directory('${source.path}.delete-${_nonce()}');
+    await source.rename(staged.path);
+    return StagedDubbingDirectoryDeletion._(source: source, staged: staged);
+  }
+
+  /// Deletes every durable dubbing artifact for an imported book, including
+  /// files left behind by an older project row or an interrupted cleanup.
+  Future<void> deleteLibrary(String libraryId) async {
+    _requireSegment(libraryId, 'libraryId');
+    final directory = Directory(
+      p.join(_documentsDirectory.path, _rootName, libraryId),
+    );
+    if (await directory.exists()) await directory.delete(recursive: true);
+  }
+
   Directory _projectDirectory(String libraryId, String projectId) {
     _requireSegment(libraryId, 'libraryId');
     _requireSegment(projectId, 'projectId');
     return Directory(
         p.join(_documentsDirectory.path, _rootName, libraryId, projectId));
+  }
+}
+
+final class StagedDubbingFileDeletion {
+  const StagedDubbingFileDeletion._(
+      {required this.source, required this.staged});
+
+  final File source;
+  final File staged;
+
+  Future<void> commit() async {
+    if (await staged.exists()) await staged.delete();
+  }
+
+  Future<void> restore() async {
+    if (!await staged.exists()) return;
+    await source.parent.create(recursive: true);
+    await staged.rename(source.path);
+  }
+}
+
+final class StagedDubbingDirectoryDeletion {
+  const StagedDubbingDirectoryDeletion._({
+    required this.source,
+    required this.staged,
+  });
+
+  final Directory source;
+  final Directory staged;
+
+  Future<void> commit() async {
+    if (await staged.exists()) await staged.delete(recursive: true);
+  }
+
+  Future<void> restore() async {
+    if (!await staged.exists()) return;
+    await source.parent.create(recursive: true);
+    await staged.rename(source.path);
   }
 }
 
@@ -154,3 +223,6 @@ void _requireSegment(String? value, String name) {
     throw ArgumentError.value(value, name, '必须是非空路径片段');
   }
 }
+
+String _nonce() =>
+    '${DateTime.now().microsecondsSinceEpoch}-${Random.secure().nextInt(1 << 32)}';

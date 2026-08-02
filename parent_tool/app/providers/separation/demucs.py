@@ -6,13 +6,19 @@ import shutil
 import subprocess
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
 from platformdirs import user_cache_path
 
 from app.models.errors import PipelineError
-from app.pipeline.definitions import CancellationToken, ProgressReporter
+from app.pipeline.definitions import (
+    CancellationToken,
+    ProgressReporter,
+    wait_for_future,
+)
+from app.pipeline.processes import terminate_process
 from app.pipeline.hashing import file_sha256
 
 
@@ -41,6 +47,10 @@ class DemucsSeparationProvider:
     def __init__(self, model_cache: Path | None = None, ffmpeg: Path | None = None) -> None:
         self._model_cache = model_cache
         self._ffmpeg = ffmpeg
+        self._inference_executor = ThreadPoolExecutor(
+            max_workers=1,
+            thread_name_prefix="readalong-demucs",
+        )
 
     def separate(
         self,
@@ -94,10 +104,18 @@ class DemucsSeparationProvider:
             torch.cuda.reset_peak_memory_stats()
         progress(0.12, "正在分离人声与背景音。")
         inference_started = time.perf_counter()
-        stems = apply_model(
-            model, normalized[None], device=device, shifts=1, split=True,
-            overlap=0.25, progress=False, num_workers=0,
-        )[0] * std + mean
+        future = self._inference_executor.submit(
+            apply_model,
+            model,
+            normalized[None],
+            device=device,
+            shifts=1,
+            split=True,
+            overlap=0.25,
+            progress=False,
+            num_workers=0,
+        )
+        stems = wait_for_future(future, cancellation)[0] * std + mean
         if device == "cuda":
             torch.cuda.synchronize()
         inference_seconds = time.perf_counter() - inference_started
@@ -171,8 +189,7 @@ class DemucsSeparationProvider:
         process = subprocess.Popen([str(ffmpeg), "-y", "-i", str(source), "-ar", "48000", "-ac", "2", "-c:a", "libopus", "-b:a", "96k", str(target)], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace")
         while process.poll() is None:
             if cancellation.requested:
-                process.terminate()
-                process.wait(timeout=5)
+                terminate_process(process)
                 cancellation.raise_if_cancelled()
             time.sleep(0.05)
         _stdout, stderr = process.communicate()
