@@ -9,6 +9,26 @@ from fastapi.responses import JSONResponse
 from app.models.errors import ApiErrorResponse, PipelineError
 
 
+_PRIVATE_DETAIL_KEYS = {
+    "cache",
+    "path",
+    "source",
+    "target",
+    "ffmpeg_error",
+    "ffprobe_error",
+}
+
+
+def _public_details(details: dict[str, object]) -> dict[str, object]:
+    """Keep filesystem paths and tool stderr out of the local UI/API payload."""
+
+    return {
+        key: value
+        for key, value in details.items()
+        if key not in _PRIVATE_DETAIL_KEYS and not key.endswith("_path") and not key.endswith("_stderr")
+    }
+
+
 def install_error_handlers(app: FastAPI) -> None:
     @app.middleware("http")
     async def attach_request_id(request: Request, call_next):
@@ -22,7 +42,7 @@ def install_error_handlers(app: FastAPI) -> None:
         body = ApiErrorResponse(
             code=exc.code,
             message=exc.message,
-            details=exc.details,
+            details=_public_details(exc.details),
             request_id=request.state.request_id,
         )
         return JSONResponse(status_code=exc.status_code, content=body.model_dump(mode="json"))

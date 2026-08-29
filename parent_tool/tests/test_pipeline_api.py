@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 from pydantic import BaseModel, ConfigDict
 
 from app.config import Settings
+from app.api.errors import _public_details
 from app.main import SpaStaticFiles, create_app
 from app.models.jobs import JobStatus
 from app.models.pipeline import PipelineState, StepId, StepResult
@@ -67,6 +68,19 @@ def _wait_for_terminal(client: TestClient, job_id: str) -> dict:
             return body
         time.sleep(0.01)
     raise AssertionError("job did not finish")
+
+
+def test_public_error_details_do_not_expose_local_paths_or_tool_stderr() -> None:
+    details = _public_details(
+        {
+            "path": "C:/Users/parent/private.wav",
+            "ffmpeg_error": "failed at C:/Users/parent/private.wav",
+            "max_bytes": 123,
+            "book_id": "book-1",
+        }
+    )
+
+    assert details == {"max_bytes": 123, "book_id": "book-1"}
 
 
 def test_run_step_exposes_job_and_state(tmp_path: Path) -> None:

@@ -206,6 +206,9 @@ final class LocalDubbingRepository implements DubbingRepository {
   Future<void> deleteTake(String takeId) async {
     final take = await _shelfIndex.findDubbingTake(takeId);
     if (take == null) return;
+    // Keep the row visible if the private file cannot be removed. This makes
+    // deletion retryable instead of creating an invisible orphan on disk.
+    await _fileStore.deleteRelativeFile(take.audioRelativePath);
     await _shelfIndex.deleteDubbingTake(takeId);
     if (take.isSelected) {
       final remaining = await _shelfIndex.listDubbingTakes(
@@ -218,18 +221,17 @@ final class LocalDubbingRepository implements DubbingRepository {
         await _shelfIndex.selectDubbingTake(remaining.first.id);
       }
     }
-    await _fileStore.deleteRelativeFile(take.audioRelativePath);
   }
 
   @override
   Future<void> deleteProject(String projectId) async {
     final project = await _shelfIndex.findDubbingProject(projectId);
     if (project == null) return;
-    await _shelfIndex.deleteDubbingProject(projectId);
     await _fileStore.deleteProject(
       libraryId: project.libraryId,
       projectId: project.id,
     );
+    await _shelfIndex.deleteDubbingProject(projectId);
   }
 
   @override
@@ -287,8 +289,8 @@ final class LocalDubbingRepository implements DubbingRepository {
   Future<void> deleteMix(String mixId) async {
     final mix = await _shelfIndex.findDubbingMix(mixId);
     if (mix == null) return;
-    await _shelfIndex.deleteDubbingMix(mixId);
     await _fileStore.deleteRelativeFile(mix.audioRelativePath);
+    await _shelfIndex.deleteDubbingMix(mixId);
   }
 
   @override

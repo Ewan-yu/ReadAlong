@@ -230,9 +230,20 @@ void main() {
     final directory =
         await Directory.systemTemp.createTemp('mix_service_test_');
     addTearDown(() => directory.delete(recursive: true));
-    final takePath = '${directory.path}${p.separator}take.wav';
+    final projectDirectory = Directory(
+      p.join(directory.path, 'dubbing', 'book', 'project'),
+    );
+    await projectDirectory.create(recursive: true);
+    final takePath = p.join(
+      projectDirectory.path,
+      'takes',
+      's0001',
+      'take.wav',
+    );
+    await File(takePath).parent.create(recursive: true);
     await File(takePath).writeAsBytes([1, 2, 3]);
-    final outputPath = '${directory.path}${p.separator}work.wav';
+    final outputPath = p.join(projectDirectory.path, 'mixes', 'work.wav');
+    await File(outputPath).parent.create(recursive: true);
     final plan = DubbingMixPlan.create(
       sentenceTakes: [
         entry(id: 'take-1', sentenceId: 's0001', sequence: 1, path: takePath)
@@ -241,7 +252,7 @@ void main() {
       mode: DubbingMixMode.voiceOnly,
       timelineDuration: const Duration(seconds: 5),
     );
-    final temporary = File('${directory.path}${p.separator}.work.part.wav');
+    final temporary = File(p.join(p.dirname(outputPath), '.work.part.wav'));
     final service = FfmpegKitDubbingMixService(
       executor: _Executor(() async {
         await temporary.writeAsBytes([4, 5, 6]);
@@ -253,9 +264,9 @@ void main() {
     expect(await File(outputPath).readAsBytes(), [4, 5, 6]);
     expect(await temporary.exists(), isFalse);
 
-    final failedOutput = '${directory.path}${p.separator}failed.wav';
+    final failedOutput = p.join(projectDirectory.path, 'mixes', 'failed.wav');
     final failedTemporary =
-        File('${directory.path}${p.separator}.failed.part.wav');
+        File(p.join(p.dirname(failedOutput), '.failed.part.wav'));
     final failedPlan = DubbingMixPlan.create(
       sentenceTakes: [
         entry(id: 'take-2', sentenceId: 's0001', sequence: 1, path: takePath)

@@ -4,28 +4,29 @@ version = "0.1.2"
 description = "ReadAlong 家长端加工工具：PDF → 点读资源包(.readalongbook)"
 requires-python = ">=3.10,<3.13"
 dependencies = [
-    "fastapi>=0.115",
-    "uvicorn[standard]>=0.30",
-    "pydantic>=2.7",
-    "jsonschema>=4.22",
-    "pymupdf>=1.24",
-    "pillow>=10.3",
-    "opencv-python-headless>=4.10",
-    "platformdirs>=4.2",
-    "portalocker>=2.10",
-    "python-multipart>=0.0.9",
-    "sse-starlette>=2.1",
-    "requests>=2.32",
-    "pyspellchecker>=0.8",
+    "fastapi>=0.115,<1.0",
+    "uvicorn[standard]>=0.30,<1.0",
+    "pydantic>=2.7,<3.0",
+    "jsonschema>=4.22,<5.0",
+    "pymupdf>=1.24,<2.0",
+    "pillow>=10.3,<12.0",
+    "soundfile>=0.12,<1.0",
+    "opencv-python-headless>=4.10,<5.0",
+    "platformdirs>=4.2,<5.0",
+    "portalocker>=2.10,<4.0",
+    "python-multipart>=0.0.9,<1.0",
+    "sse-starlette>=2.1,<3.0",
+    "requests>=2.32,<3.0",
+    "pyspellchecker>=0.8,<1.0",
 ]
 
 [project.optional-dependencies]
 # GPU 相关依赖（VoxCPM/stable-ts/paddle）安装重、平台绑定，
 # 按 poc/README.md 的 conda 步骤装在 readalong 环境，不在这里声明版本。
 dev = [
-    "pytest>=8.2",
-    "httpx>=0.27",
-    "ruff>=0.5",
+    "pytest>=8.2,<9.0",
+    "httpx>=0.27,<1.0",
+    "ruff>=0.5,<1.0",
 ]
 
 [tool.ruff]

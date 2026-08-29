@@ -9,6 +9,7 @@ from pathlib import Path
 
 from app.models.errors import PipelineError
 from app.pipeline.definitions import CancellationToken
+from app.providers.process_control import terminate_process
 
 
 class FfmpegOpusTranscoder:
@@ -52,8 +53,7 @@ class FfmpegOpusTranscoder:
         )
         while process.poll() is None:
             if cancellation.requested:
-                process.terminate()
-                process.wait(timeout=5)
+                terminate_process(process)
                 cancellation.raise_if_cancelled()
             time.sleep(0.1)
         _stdout, stderr = process.communicate()
@@ -117,8 +117,7 @@ class FfmpegOpusTranscoder:
         )
         while process.poll() is None:
             if cancellation.requested:
-                process.terminate()
-                process.wait(timeout=5)
+                terminate_process(process)
                 cancellation.raise_if_cancelled()
             time.sleep(0.1)
         _stdout, stderr = process.communicate()
@@ -169,8 +168,7 @@ class FfmpegOpusTranscoder:
         )
         while process.poll() is None:
             if cancellation.requested:
-                process.terminate()
-                process.wait(timeout=5)
+                terminate_process(process)
                 cancellation.raise_if_cancelled()
             time.sleep(0.1)
         _stdout, stderr = process.communicate()

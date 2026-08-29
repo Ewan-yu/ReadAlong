@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -34,6 +35,27 @@ Uint8List _withDifferentContent(Uint8List source) {
     } else {
       changedArchive.addFile(file);
     }
+  }
+  return Uint8List.fromList(ZipEncoder().encode(changedArchive)!);
+}
+
+Uint8List _withManifestMutation(
+  Uint8List source,
+  void Function(Map<String, dynamic> manifest) mutate,
+) {
+  final sourceArchive = ZipDecoder().decodeBytes(source);
+  final changedArchive = Archive();
+  for (final file in sourceArchive) {
+    if (file.name != 'manifest.json') {
+      changedArchive.addFile(file);
+      continue;
+    }
+    final manifest = jsonDecode(
+      utf8.decode(file.content as List<int>),
+    ) as Map<String, dynamic>;
+    mutate(manifest);
+    final content = utf8.encode(jsonEncode(manifest));
+    changedArchive.addFile(ArchiveFile(file.name, content.length, content));
   }
   return Uint8List.fromList(ZipEncoder().encode(changedArchive)!);
 }
@@ -150,6 +172,20 @@ void main() {
       );
 
       expect(result.ok, isTrue, reason: '合法原音包应通过: ${result.errors}');
+    });
+
+    test('坏包：page_count 与 pages 数量不一致被拒绝', () async {
+      final result = await BookPackValidator.validateBytes(
+        _withManifestMutation(
+          _fixture('fixture_book.readalongbook'),
+          (manifest) =>
+              manifest['page_count'] = (manifest['page_count'] as int) + 1,
+        ),
+        databaseFactory: databaseFactoryFfi,
+      );
+
+      expect(result.ok, isFalse);
+      expect(result.errors, contains(contains('page_count')));
     });
 
     test('坏包：manifest 声明原音但文件缺失被拒绝', () async {

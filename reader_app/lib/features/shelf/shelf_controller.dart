@@ -7,6 +7,7 @@ import 'package:path/path.dart' as p;
 import '../../data/appdb/app_database_providers.dart';
 import '../../data/appdb/shelf_index.dart';
 import '../../data/bookpack/book_pack_importer.dart';
+import '../dubbing/dubbing_file_store.dart';
 import '../reader/alignment_repository.dart';
 import '../reader/original_audio_repository.dart';
 import '../reader/reader_repository.dart';
@@ -76,18 +77,21 @@ final shelfLibraryProvider = FutureProvider<ShelfLibrary>((ref) async {
     recordCleaner: _LocalBookRecordCleaner(
       documentsDirectory: documents,
       shelfIndex: shelfIndex,
+      dubbingFileStore: DubbingFileStore(documentsDirectory: documents),
     ),
   );
 });
 
 final class _LocalBookRecordCleaner implements BookRecordCleaner {
-  const _LocalBookRecordCleaner({
+  _LocalBookRecordCleaner({
     required this.documentsDirectory,
     required this.shelfIndex,
+    required this.dubbingFileStore,
   });
 
   final Directory documentsDirectory;
   final ShelfIndex shelfIndex;
+  final DubbingFileStore dubbingFileStore;
 
   @override
   Future<void> deleteForBook(String libraryId) async {
@@ -95,6 +99,26 @@ final class _LocalBookRecordCleaner implements BookRecordCleaner {
     final directory =
         Directory(p.join(documentsDirectory.path, 'records', libraryId));
     if (await directory.exists()) await directory.delete(recursive: true);
+
+    Object? firstFailure;
+    final projects = await shelfIndex.listDubbingProjects(libraryId);
+    for (final project in projects) {
+      try {
+        await shelfIndex.deleteDubbingProject(project.id);
+      } catch (error) {
+        firstFailure ??= error;
+        continue;
+      }
+      try {
+        await dubbingFileStore.deleteProject(
+          libraryId: project.libraryId,
+          projectId: project.id,
+        );
+      } catch (error) {
+        firstFailure ??= error;
+      }
+    }
+    if (firstFailure != null) throw firstFailure;
   }
 }
 

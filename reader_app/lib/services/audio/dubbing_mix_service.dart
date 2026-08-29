@@ -438,6 +438,10 @@ String _validateVoicePath(
   if (p.extension(path).toLowerCase() != '.wav') {
     throw const DubbingMixInputException('儿童录音必须是私有目录中的 WAV Take。');
   }
+  final privateRoot = _privateDubbingRoot(output);
+  if (!p.isWithin(privateRoot, path)) {
+    throw const DubbingMixInputException('儿童录音必须位于当前作品的私有配音目录中。');
+  }
   if (_samePath(path, source) || _isSourceAudio(path)) {
     throw const DubbingMixInputException('儿童录音不能指向 original/source.mp3。');
   }
@@ -445,6 +449,17 @@ String _validateVoicePath(
     throw const DubbingMixInputException('混音输出和输入音频必须是不同文件。');
   }
   return path;
+}
+
+String _privateDubbingRoot(String outputPath) {
+  final parts = p.split(outputPath);
+  final index = parts.lastIndexWhere(
+    (part) => part.toLowerCase() == 'dubbing',
+  );
+  if (index < 0) {
+    throw const DubbingMixInputException('混音输出必须位于私有配音目录中。');
+  }
+  return p.joinAll(parts.take(index + 1));
 }
 
 String _absolute(String value, String label) {

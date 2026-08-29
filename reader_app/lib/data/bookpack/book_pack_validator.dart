@@ -7,6 +7,7 @@ import 'package:crypto/crypto.dart';
 import 'package:sqflite/sqflite.dart' as sqflite;
 
 import 'archive_entries.dart';
+import 'book_pack_limits.dart';
 import 'schema_constants.dart';
 
 class ValidationResult {
@@ -26,7 +27,11 @@ class BookPackValidator {
   }) async {
     final errors = <String>[];
 
-    // 1. zip 解析
+    // 1. ZIP 中央目录预检必须发生在解压之前，避免 ZIP bomb 触发无界分配。
+    final zipLimitErrors = BookPackLimits.validateZipBytes(zipBytes);
+    if (zipLimitErrors.isNotEmpty) return ValidationResult.fail(zipLimitErrors);
+
+    // 2. zip 解析
     Archive archive;
     final decoder = ZipDecoder();
     try {
@@ -35,7 +40,7 @@ class BookPackValidator {
       return ValidationResult.fail(['无法解析 zip 格式: $e']);
     }
 
-    // 2. 路径逃逸和重复路径必须先于清单、必需文件校验。
+    // 3. 路径逃逸和重复路径必须先于清单、必需文件校验。
     final canonical = CanonicalArchiveEntries.fromArchive(
       archive,
       archivePaths:
@@ -46,13 +51,13 @@ class BookPackValidator {
     }
     final byName = canonical.entries;
 
-    // 3. 必需条目
+    // 4. 必需条目
     for (final entry in BookPackSchema.requiredEntries) {
       if (!byName.containsKey(entry)) errors.add('缺少必需文件: $entry');
     }
     if (errors.isNotEmpty) return ValidationResult.fail(errors);
 
-    // 4. manifest.json
+    // 5. manifest.json
     Map<String, dynamic> manifest;
     try {
       manifest =
@@ -67,30 +72,25 @@ class BookPackValidator {
     }
     if (errors.isNotEmpty) return ValidationResult.fail(errors);
 
-    final version = manifest['schema_version'] as int?;
-    if (version == null ||
+    final version = manifest['schema_version'];
+    if (version is! int ||
         !BookPackSchema.supportedSchemaVersions.contains(version)) {
       errors.add(
           '不支持的 schema_version: $version（支持: ${BookPackSchema.supportedSchemaVersions}），请升级 App');
     }
 
-    final bookId = manifest['book_id'] as String? ?? '';
-    if (!BookPackSchema.bookIdPattern.hasMatch(bookId)) {
+    final bookId = manifest['book_id'];
+    if (bookId is! String) {
+      errors.add('book_id 必须是字符串');
+    }
+    final normalizedBookId = bookId is String ? bookId : '';
+    if (!BookPackSchema.bookIdPattern.hasMatch(normalizedBookId)) {
       errors.add('book_id 格式非法: $bookId');
     }
 
-    _validateOriginalAudio(manifest, byName, errors);
+    _validateManifestShape(manifest, byName, errors);
 
-    // 5. 页面图片存在
-    for (final page
-        in ((manifest['pages'] as List?) ?? []).cast<Map<String, dynamic>>()) {
-      for (final key in ['image', 'thumbnail']) {
-        final path = page[key] as String?;
-        if (path != null && !byName.containsKey(path)) {
-          errors.add('缺少文件: $path');
-        }
-      }
-    }
+    _validateOriginalAudio(manifest, byName, errors);
 
     // 6. alignment.db 全量校验
     final dbBytes =
@@ -98,6 +98,8 @@ class BookPackValidator {
     final dbErrors = await _validateDb(
       dbBytes,
       databaseFactory ?? sqflite.databaseFactory,
+      manifest: manifest,
+      entries: byName,
     );
     errors.addAll(dbErrors);
     await _validateOriginalTimelineAlignment(
@@ -111,6 +113,131 @@ class BookPackValidator {
     return errors.isEmpty
         ? ValidationResult.pass()
         : ValidationResult.fail(errors);
+  }
+
+  static void _validateManifestShape(
+    Map<String, dynamic> manifest,
+    Map<String, ArchiveFile> byName,
+    List<String> errors,
+  ) {
+    final title = manifest['title'];
+    if (title is! String || title.trim().isEmpty) {
+      errors.add('title 必须是非空字符串');
+    }
+    final language = manifest['language'];
+    if (language != 'en') errors.add('language 只支持 en: $language');
+    final createdAt = manifest['created_at'];
+    if (createdAt is! String || DateTime.tryParse(createdAt) == null) {
+      errors.add('created_at 必须是有效时间字符串');
+    }
+
+    final generator = manifest['generator'];
+    if (generator is! Map<String, dynamic> ||
+        generator['name'] is! String ||
+        (generator['name'] as String).trim().isEmpty ||
+        generator['version'] is! String ||
+        (generator['version'] as String).trim().isEmpty) {
+      errors.add('generator 必须包含非空 name 和 version');
+    }
+    _validateImageDeclaration(manifest['page_image'], 'page_image', errors);
+    _validateImageDeclaration(manifest['thumbnail'], 'thumbnail', errors);
+
+    final pageCount = manifest['page_count'];
+    final pages = manifest['pages'];
+    if (pageCount is! int || pageCount < 1) {
+      errors.add('page_count 必须是正整数');
+    }
+    if (pages is! List) {
+      errors.add('pages 必须是数组');
+      return;
+    }
+    if (pageCount is int && pages.length != pageCount) {
+      errors.add('page_count 与 pages.length 不一致: $pageCount/${pages.length}');
+    }
+
+    final pageNumbers = <int>{};
+    for (final raw in pages) {
+      if (raw is! Map<String, dynamic>) {
+        errors.add('pages 条目必须是对象');
+        continue;
+      }
+      final pageNo = raw['page_no'];
+      if (pageNo is! int || pageNo < 1 || !pageNumbers.add(pageNo)) {
+        errors.add('页面页码非法或重复: $pageNo');
+      }
+      final width = raw['width_px'];
+      final height = raw['height_px'];
+      if (width is! int || width < 1 || height is! int || height < 1) {
+        errors.add('页面尺寸必须是正整数: page=$pageNo');
+      }
+      final image = raw['image'];
+      final thumbnail = raw['thumbnail'];
+      if (image is! String ||
+          !RegExp(r'^pages/p[0-9]{4}\.webp$').hasMatch(image)) {
+        errors.add('页面图片路径非法: $image');
+      } else if (!byName.containsKey(image)) {
+        errors.add('缺少文件: $image');
+      }
+      if (thumbnail is! String ||
+          !RegExp(r'^thumbnails/p[0-9]{4}\.jpg$').hasMatch(thumbnail)) {
+        errors.add('页面缩略图路径非法: $thumbnail');
+      } else if (!byName.containsKey(thumbnail)) {
+        errors.add('缺少文件: $thumbnail');
+      }
+      final sourceRegion = raw['source_region'];
+      if (!const {'full', 'left', 'right', 'custom'}.contains(sourceRegion)) {
+        errors.add('页面 source_region 非法: $sourceRegion');
+      }
+      _validateSourceCrop(raw['source_crop'], pageNo, errors);
+    }
+    if (pageCount is int && pageNumbers.length == pageCount) {
+      for (var pageNo = 1; pageNo <= pageCount; pageNo++) {
+        if (!pageNumbers.contains(pageNo)) {
+          errors.add('页面页码不连续，缺少: $pageNo');
+        }
+      }
+    }
+  }
+
+  static void _validateImageDeclaration(
+    Object? raw,
+    String name,
+    List<String> errors,
+  ) {
+    if (raw is! Map<String, dynamic>) {
+      errors.add('$name 必须是对象');
+      return;
+    }
+    if (raw['format'] is! String ||
+        raw['max_long_edge_px'] is! int ||
+        (raw['max_long_edge_px'] as int) < 1 ||
+        raw['quality'] is! int ||
+        (raw['quality'] as int) < 1 ||
+        (raw['quality'] as int) > 100) {
+      errors.add('$name 声明非法');
+    }
+  }
+
+  static void _validateSourceCrop(
+    Object? raw,
+    Object? pageNo,
+    List<String> errors,
+  ) {
+    if (raw == null) return;
+    if (raw is! Map<String, dynamic>) {
+      errors.add('页面 source_crop 必须是对象: page=$pageNo');
+      return;
+    }
+    final values = [raw['x'], raw['y'], raw['w'], raw['h']];
+    if (values.any((value) => value is! num) ||
+        (raw['x'] as num) < 0 ||
+        (raw['y'] as num) < 0 ||
+        (raw['w'] as num) <= 0 ||
+        (raw['h'] as num) <= 0 ||
+        (raw['x'] as num) + (raw['w'] as num) > 1 ||
+        (raw['y'] as num) + (raw['h'] as num) > 1) {
+      errors.add('页面 source_crop 越界: page=$pageNo');
+    }
   }
 
   static Future<void> _validateOriginalTimelineAlignment(
@@ -492,8 +619,10 @@ class BookPackValidator {
 
   static Future<List<String>> _validateDb(
     Uint8List dbBytes,
-    sqflite.DatabaseFactory databaseFactory,
-  ) async {
+    sqflite.DatabaseFactory databaseFactory, {
+    required Map<String, dynamic> manifest,
+    required Map<String, ArchiveFile> entries,
+  }) async {
     final errors = <String>[];
     // 写临时文件，用当前平台的数据库工厂做 SQL 级校验。
     final tmp = File(
@@ -512,6 +641,14 @@ class BookPackValidator {
           .toSet();
       for (final t in BookPackSchema.alignmentTables) {
         if (!tables.contains(t)) errors.add('alignment.db 缺少表: $t');
+      }
+
+      if (errors.isEmpty) {
+        try {
+          await _validateAlignmentIdentity(db, manifest, entries, errors);
+        } catch (error) {
+          errors.add('alignment.db schema 校验失败: $error');
+        }
       }
 
       if (errors.isEmpty) {
@@ -554,5 +691,160 @@ class BookPackValidator {
       } catch (_) {}
     }
     return errors;
+  }
+
+  static Future<void> _validateAlignmentIdentity(
+    sqflite.Database db,
+    Map<String, dynamic> manifest,
+    Map<String, ArchiveFile> entries,
+    List<String> errors,
+  ) async {
+    final bookId = manifest['book_id'];
+    final language = manifest['language'];
+    final version = manifest['schema_version'];
+    final books = await db.query('book');
+    if (books.length != 1) {
+      errors.add('alignment.db 必须且只能包含一条 book 记录');
+      return;
+    }
+    final book = books.single;
+    if (book['id'] != bookId ||
+        book['language'] != language ||
+        book['schema_version'] != version) {
+      errors.add('alignment.db book 身份与 manifest 不一致');
+    }
+
+    final pages = (manifest['pages'] as List?)
+            ?.whereType<Map<String, dynamic>>()
+            .toList(growable: false) ??
+        const <Map<String, dynamic>>[];
+    final manifestPages = {
+      for (final page in pages) page['page_no']: page,
+    };
+    final dbPages = await db.query(
+      'page',
+      columns: const [
+        'book_id',
+        'page_no',
+        'image_path',
+        'thumbnail_path',
+        'width_px',
+        'height_px',
+      ],
+      orderBy: 'page_no ASC',
+    );
+    if (dbPages.length != pages.length) {
+      errors.add('alignment.db page 数量与 manifest 不一致');
+    }
+    final seenPages = <int>{};
+    for (final row in dbPages) {
+      final pageNo = row['page_no'];
+      final expected = manifestPages[pageNo];
+      if (row['book_id'] != bookId ||
+          pageNo is! int ||
+          !seenPages.add(pageNo) ||
+          expected == null ||
+          row['image_path'] != expected['image'] ||
+          row['thumbnail_path'] != expected['thumbnail'] ||
+          row['width_px'] != expected['width_px'] ||
+          row['height_px'] != expected['height_px'] ||
+          !entries.containsKey(row['image_path']) ||
+          !entries.containsKey(row['thumbnail_path'])) {
+        errors.add('alignment.db page 与 manifest 不一致: $pageNo');
+      }
+    }
+
+    final sentences = await db.query(
+      'sentence',
+      columns: const [
+        'id',
+        'book_id',
+        'page_no',
+        'seq',
+        'text',
+        'audio_path',
+        'audio_source',
+        't_start',
+        't_end',
+      ],
+      orderBy: 'seq ASC',
+    );
+    final sentenceIds = <String>{};
+    final sequences = <int>{};
+    for (final row in sentences) {
+      final id = row['id'];
+      final pageNo = row['page_no'];
+      final seq = row['seq'];
+      final audioPath = row['audio_path'];
+      final start = (row['t_start'] as num?)?.toDouble();
+      final end = (row['t_end'] as num?)?.toDouble();
+      if (id is! String ||
+          !sentenceIds.add(id) ||
+          row['book_id'] != bookId ||
+          pageNo is! int ||
+          !manifestPages.containsKey(pageNo) ||
+          seq is! int ||
+          !sequences.add(seq) ||
+          seq < 1 ||
+          row['text'] is! String ||
+          audioPath is! String ||
+          !entries.containsKey(audioPath) ||
+          start == null ||
+          end == null ||
+          start < 0 ||
+          end <= start) {
+        errors.add('alignment.db sentence 记录非法: $id');
+      }
+      if (row['text'] is! String || (row['text'] as String).trim().isEmpty) {
+        errors.add('句子 $id text 为空');
+      }
+    }
+    final orderedSequences = sequences.toList()..sort();
+    for (var index = 0; index < orderedSequences.length; index++) {
+      if (orderedSequences[index] != index + 1) {
+        errors.add('alignment.db sentence.seq 不连续');
+        break;
+      }
+    }
+
+    final words = await db.query(
+      'word_timing',
+      columns: const ['id', 'sentence_id', 'seq', 'word', 't_start', 't_end'],
+      orderBy: 'sentence_id ASC, seq ASC',
+    );
+    final wordIds = <String>{};
+    final wordSequences = <String, List<int>>{};
+    for (final row in words) {
+      final id = row['id'];
+      final sentenceId = row['sentence_id'];
+      final seq = row['seq'];
+      final start = (row['t_start'] as num?)?.toDouble();
+      final end = (row['t_end'] as num?)?.toDouble();
+      if (id is! String ||
+          !wordIds.add(id) ||
+          sentenceId is! String ||
+          !sentenceIds.contains(sentenceId) ||
+          seq is! int ||
+          seq < 1 ||
+          row['word'] is! String ||
+          (row['word'] as String).trim().isEmpty ||
+          start == null ||
+          end == null ||
+          start < 0 ||
+          end <= start) {
+        errors.add('alignment.db word_timing 记录非法: $id');
+        continue;
+      }
+      wordSequences.putIfAbsent(sentenceId, () => []).add(seq);
+    }
+    for (final sequence in wordSequences.values) {
+      sequence.sort();
+      for (var index = 0; index < sequence.length; index++) {
+        if (sequence[index] != index + 1) {
+          errors.add('alignment.db word_timing.seq 不连续');
+          break;
+        }
+      }
+    }
   }
 }

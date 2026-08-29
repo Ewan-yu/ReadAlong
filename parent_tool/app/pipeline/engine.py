@@ -377,9 +377,21 @@ class PipelineEngine:
             return success
         except Exception as exc:
             if published_root is not None:
-                self.artifacts.discard_revision(plan.book_id, published_root)
-            self.artifacts.cleanup_staging(prepared.staging_dir)
-            self._rollback(prepared, exc)
+                try:
+                    self.artifacts.discard_revision(plan.book_id, published_root)
+                except Exception:
+                    LOGGER.exception("Failed to discard failed revision for %s", prepared.job_id)
+            try:
+                self.artifacts.cleanup_staging(prepared.staging_dir)
+            except Exception:
+                LOGGER.exception("Failed to clean staging for %s", prepared.job_id)
+            try:
+                self._rollback(prepared, exc)
+            except Exception:
+                # Preserve the real step failure. A filesystem/state failure
+                # during rollback is logged and recovered on the next startup;
+                # it must not replace the diagnostic that caused the rollback.
+                LOGGER.exception("Pipeline rollback failed for %s", prepared.job_id)
             raise
 
     def _rollback(self, prepared: PreparedRun, exc: Exception) -> None:

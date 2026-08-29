@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import sys
 import time
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -13,6 +14,7 @@ from platformdirs import user_cache_path
 
 from app.models.errors import PipelineError
 from app.pipeline.definitions import CancellationToken, ProgressReporter
+from app.providers.process_control import terminate_process
 from app.pipeline.hashing import file_sha256
 
 
@@ -20,6 +22,26 @@ _HTDEMUCS_CHECKPOINT = "955717e8-8726e21a.th"
 # Demucs filenames are `<model signature>-<checkpoint sha prefix>.th`; the
 # first part identifies the model configuration, not the downloaded bytes.
 _HTDEMUCS_SHA256_PREFIX = "8726e21a"
+
+
+class _CancellationPool:
+    """Single-worker pool that checks cancellation between Demucs chunks."""
+
+    def __init__(self, cancellation: CancellationToken) -> None:
+        self._cancellation = cancellation
+        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="demucs-chunk")
+
+    def submit(self, function, *args, **kwargs) -> Future:
+        def run():
+            self._cancellation.raise_if_cancelled()
+            result = function(*args, **kwargs)
+            self._cancellation.raise_if_cancelled()
+            return result
+
+        return self._executor.submit(run)
+
+    def shutdown(self) -> None:
+        self._executor.shutdown(wait=True, cancel_futures=True)
 
 
 @dataclass(frozen=True)
@@ -94,10 +116,21 @@ class DemucsSeparationProvider:
             torch.cuda.reset_peak_memory_stats()
         progress(0.12, "正在分离人声与背景音。")
         inference_started = time.perf_counter()
-        stems = apply_model(
-            model, normalized[None], device=device, shifts=1, split=True,
-            overlap=0.25, progress=False, num_workers=0,
-        )[0] * std + mean
+        chunk_pool = _CancellationPool(cancellation)
+        try:
+            stems = apply_model(
+                model,
+                normalized[None],
+                device=device,
+                shifts=1,
+                split=True,
+                overlap=0.25,
+                progress=False,
+                num_workers=0,
+                pool=chunk_pool,
+            )[0] * std + mean
+        finally:
+            chunk_pool.shutdown()
         if device == "cuda":
             torch.cuda.synchronize()
         inference_seconds = time.perf_counter() - inference_started
@@ -171,8 +204,7 @@ class DemucsSeparationProvider:
         process = subprocess.Popen([str(ffmpeg), "-y", "-i", str(source), "-ar", "48000", "-ac", "2", "-c:a", "libopus", "-b:a", "96k", str(target)], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace")
         while process.poll() is None:
             if cancellation.requested:
-                process.terminate()
-                process.wait(timeout=5)
+                terminate_process(process)
                 cancellation.raise_if_cancelled()
             time.sleep(0.05)
         _stdout, stderr = process.communicate()
