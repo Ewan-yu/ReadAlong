@@ -12,6 +12,8 @@ import '../reader/original_audio_models.dart';
 final class FullTakeScorer {
   const FullTakeScorer(this._provider);
 
+  static const maxScoringAudioBytes = 256 * 1024 * 1024;
+
   final ScoringProvider _provider;
 
   Future<FullTakeScoreReport> score({
@@ -19,6 +21,10 @@ final class FullTakeScorer {
     required List<OriginalAudioSentence> sentences,
     Duration contentOffset = Duration.zero,
   }) async {
+    final byteLength = await audio.length();
+    if (byteLength > maxScoringAudioBytes) {
+      throw const ScoringException('录音文件过大，暂时无法评分；录音已保留。');
+    }
     final pcm = parseWavPcm16(await audio.readAsBytes()).pcm16k;
     final results = <FullTakeSentenceScore>[];
     for (final sentence in sentences) {

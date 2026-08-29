@@ -19,6 +19,23 @@ export function unionBoxes(boxes: NormalizedBox[]): NormalizedBox {
   return { x: normalise(left), y: normalise(top), width: normalise(right - left), height: normalise(bottom - top) };
 }
 
+export function mergeSentences(sentences: OcrSentence[], ids: string[]): OcrSentence[] {
+  const selectedIds = new Set(ids);
+  const selected = sentences.filter((sentence) => selectedIds.has(sentence.id));
+  if (selected.length < 2 || new Set(selected.map((sentence) => sentence.page_no)).size !== 1) return sentences;
+  const first = selected[0];
+  const text = selected.map((sentence) => sentence.text.trim()).filter(Boolean).join(" ");
+  const merged: OcrSentence = {
+    ...first,
+    text,
+    bbox: unionBoxes(selected.map((sentence) => sentence.bbox)),
+    shared_bbox: false,
+    status: text ? "sentence" : "needs_review",
+    suspect_words: [],
+  };
+  return [...sentences.filter((sentence) => !selectedIds.has(sentence.id)), merged].sort((a, b) => a.seq - b.seq);
+}
+
 export function clampBox(box: NormalizedBox): NormalizedBox {
   const normalise = (value: number) => Number(value.toFixed(6));
   const x = Math.max(0, Math.min(0.98, box.x));

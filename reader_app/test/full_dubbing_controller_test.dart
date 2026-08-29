@@ -70,7 +70,11 @@ void main() {
     final controller = await ready();
 
     final starting = controller.startCountdown();
-    await pumpEventQueue();
+    for (var attempt = 0;
+        attempt < 20 && current().phase != FullDubbingPhase.countdown;
+        attempt++) {
+      await pumpEventQueue();
+    }
     expect(current().phase, FullDubbingPhase.countdown);
     expect(current().countdown, 3);
     await controller.cancelCountdown();
@@ -194,7 +198,11 @@ void main() {
     final controller = await ready();
 
     final starting = controller.startCountdown();
-    await pumpEventQueue();
+    for (var attempt = 0;
+        attempt < 20 && audioPlayer.loadedPaths.isEmpty;
+        attempt++) {
+      await pumpEventQueue();
+    }
 
     expect(audioPlayer.loadedPaths.last, 'original/background.ogg');
     expect(audioPlayer.volumes.last, closeTo(.35, .0001));
@@ -417,7 +425,14 @@ final class _MemoryDubbingRepository implements DubbingRepository {
         id: 'mix-1',
         projectId: projectId,
         relativePath: 'dubbing/book/$projectId/mixes/mix-1$extension',
-        absolutePath: p.join(directory.path, 'mix-1$extension'),
+        absolutePath: p.join(
+          directory.path,
+          'dubbing',
+          'book',
+          projectId,
+          'mixes',
+          'mix-1$extension',
+        ),
       );
   @override
   String resolveAudioPath(DubbingTake take) =>
@@ -435,13 +450,19 @@ final class _MemoryDubbingRepository implements DubbingRepository {
     String? sentenceId,
   }) async {
     final filename = 'take-${takes.length + 1}.wav';
-    await sourceAudio.copy(p.join(directory.path, filename));
+    final relativePath = kind == DubbingTakeKind.full
+        ? 'dubbing/book/$projectId/takes/full/$filename'
+        : 'dubbing/book/$projectId/takes/${sentenceId!}/$filename';
+    final absolutePath =
+        p.joinAll([directory.path, ...relativePath.split('/')]);
+    await File(absolutePath).parent.create(recursive: true);
+    await sourceAudio.copy(absolutePath);
     final take = DubbingTake(
       id: 'take-${takes.length + 1}',
       projectId: projectId,
       sentenceId: sentenceId,
       takeKind: kind,
-      audioRelativePath: filename,
+      audioRelativePath: relativePath,
       duration: duration,
       contentOffset: contentOffset,
       isSelected: false,

@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 from PIL import Image
 
@@ -24,13 +25,45 @@ from app.models.pipeline import StepId, StepResult
 from app.pipeline.definitions import StepRunContext
 from app.providers.ocr import OcrProvider
 
-
 _TEXT_LABELS = {"text", "paragraph_title", "vision_footnote"}
 _WORDS = re.compile(r"[A-Za-z]+(?:['’-][A-Za-z]+)*")
 _SYMBOLS_ONLY = re.compile(r"^[\W_]+$", re.UNICODE)
-_CLOSING_QUOTES = "\"”’"
-_ENGLISH_LINE = re.compile(r"[A-Za-z][A-Za-z0-9\s.,!?;:'\"’\-]*")
+_CLOSING_QUOTES = '"”’'
+_ENGLISH_LINE = re.compile(r"[A-Za-z][A-Za-z0-9\s.,!?;:'\"\-]*")
 _SENTENCE_ENDING = re.compile(r"[.!?](?:[\"”’])?$")
+_CJK = re.compile(r"[\u3400-\u9fff]")
+_ABBREVIATIONS = {
+    "a.m",
+    "apr",
+    "aug",
+    "dec",
+    "dr",
+    "e.g",
+    "etc",
+    "feb",
+    "fig",
+    "i.e",
+    "inc",
+    "jan",
+    "jr",
+    "jul",
+    "jun",
+    "mar",
+    "mr",
+    "mrs",
+    "ms",
+    "no",
+    "nov",
+    "oct",
+    "op",
+    "prof",
+    "rev",
+    "sep",
+    "sept",
+    "sr",
+    "st",
+    "vs",
+}
 
 
 class EnglishSpellChecker:
@@ -74,10 +107,12 @@ class RawBlock:
 
 class OcrStep:
     step_id = StepId.OCR
-    implementation_version = "ocr-v2"
+    implementation_version = "ocr-v3"
     params_model = OcrParams
 
-    def __init__(self, provider: OcrProvider, spell_checker: EnglishSpellChecker | None = None) -> None:
+    def __init__(
+        self, provider: OcrProvider, spell_checker: EnglishSpellChecker | None = None
+    ) -> None:
         self._provider = provider
         self._spell_checker = spell_checker or EnglishSpellChecker()
 
@@ -85,7 +120,9 @@ class OcrStep:
         try:
             pages_root = context.dependency_outputs[StepId.PAGES]
         except KeyError as exc:
-            raise PipelineError("OCR_INPUT_MISSING", "缺少已完成的页面处理结果。", status_code=409) from exc
+            raise PipelineError(
+                "OCR_INPUT_MISSING", "缺少已完成的页面处理结果。", status_code=409
+            ) from exc
         plan = self._load_plan(pages_root)
         unconfirmed_pages = [
             entry.source_pdf_page for entry in plan.pages if not entry.decision.confirmed
@@ -142,7 +179,9 @@ class OcrStep:
                             shared_bbox=len(fragments) > 1,
                             status=status,
                             suspect_words=(
-                                () if status is SentenceStatus.NEEDS_REVIEW else self._spell_checker.suspects(fragment)
+                                ()
+                                if status is SentenceStatus.NEEDS_REVIEW
+                                else self._spell_checker.suspects(fragment)
                             ),
                         )
                     )
@@ -175,7 +214,9 @@ class OcrStep:
     @staticmethod
     def _load_plan(pages_root: Path) -> PagePlan:
         try:
-            return PagePlan.model_validate_json((pages_root / "page_plan.json").read_text(encoding="utf-8"))
+            return PagePlan.model_validate_json(
+                (pages_root / "page_plan.json").read_text(encoding="utf-8")
+            )
         except (OSError, ValueError) as exc:
             raise PipelineError(
                 "OCR_INPUT_INVALID",
@@ -188,7 +229,9 @@ class OcrStep:
         try:
             records = [json.loads(line) for line in raw_jsonl.splitlines() if line.strip()]
         except json.JSONDecodeError as exc:
-            raise PipelineError("OCR_RESPONSE_INVALID", "OCR 响应不是合法 JSONL。", status_code=502) from exc
+            raise PipelineError(
+                "OCR_RESPONSE_INVALID", "OCR 响应不是合法 JSONL。", status_code=502
+            ) from exc
         if not records:
             raise PipelineError("OCR_RESPONSE_INVALID", "OCR 响应为空。", status_code=502)
         blocks: list[RawBlock] = []
@@ -258,8 +301,14 @@ class OcrStep:
         return (result,)
 
     @staticmethod
-    def _pixel_bbox(value: Any, page_width: int, page_height: int) -> tuple[float, float, float, float] | None:
-        if not isinstance(value, list) or len(value) != 4 or not all(isinstance(item, (int, float)) for item in value):
+    def _pixel_bbox(
+        value: Any, page_width: int, page_height: int
+    ) -> tuple[float, float, float, float] | None:
+        if (
+            not isinstance(value, list)
+            or len(value) != 4
+            or not all(isinstance(item, (int, float)) for item in value)
+        ):
             return None
         x1, y1, third, fourth = (float(item) for item in value)
         # Paddle layout blocks use [x1, y1, x2, y2]. Accept [x, y, width, height]
@@ -299,42 +348,110 @@ class OcrStep:
         """Keep the spoken English portion of bilingual OCR blocks, discard Chinese end matter."""
 
         lines = []
-        for line in value.splitlines():
-            matched = _ENGLISH_LINE.search(line)
-            if matched:
-                lines.append(matched.group(0).strip())
+        for raw_line in value.splitlines():
+            line = " ".join(raw_line.split()).strip()
+            if not line:
+                continue
+            if _CJK.search(line):
+                matched = _ENGLISH_LINE.search(line)
+                if not matched:
+                    continue
+                # A bilingual note may contain a single English title or example in
+                # an otherwise Chinese line. Keep the first run, matching the
+                # existing filtering policy, but do not let a smart quote truncate
+                # an all-English line (the common story-text case).
+                line = matched.group(0).strip().strip('"“”‘’')
+            lines.append(line)
         if lines:
             return " ".join(lines).strip()
         stripped = value.strip()
         return "" if re.search(r"[\u4e00-\u9fff]", stripped) else stripped
 
     @staticmethod
-    def _normalise_bbox(bbox: tuple[float, float, float, float], width: int, height: int) -> BoundingBox:
+    def _normalise_bbox(
+        bbox: tuple[float, float, float, float], width: int, height: int
+    ) -> BoundingBox:
         x, y, box_width, box_height = bbox
-        return BoundingBox(x=round(x / width, 6), y=round(y / height, 6), width=round(box_width / width, 6), height=round(box_height / height, 6))
+        return BoundingBox(
+            x=round(x / width, 6),
+            y=round(y / height, 6),
+            width=round(box_width / width, 6),
+            height=round(box_height / height, 6),
+        )
 
     @staticmethod
     def _status_for(text: str) -> SentenceStatus:
         stripped = text.strip()
-        return SentenceStatus.NEEDS_REVIEW if len(stripped) < 2 or _SYMBOLS_ONLY.fullmatch(stripped) else SentenceStatus.SENTENCE
+        return (
+            SentenceStatus.NEEDS_REVIEW
+            if len(stripped) < 2 or _SYMBOLS_ONLY.fullmatch(stripped)
+            else SentenceStatus.SENTENCE
+        )
 
     @staticmethod
     def _split_sentences(text: str) -> tuple[str, ...]:
+        text = " ".join(text.split()).strip()
         fragments: list[str] = []
         start = 0
+        quote: str | None = None
         for index, char in enumerate(text):
-            if char not in ".?!":
-                continue
-            following = index + 1
-            while following < len(text) and text[following] in _CLOSING_QUOTES:
-                following += 1
-            if following < len(text) and not text[following].isspace():
-                continue
-            fragment = text[start:following].strip()
-            if fragment:
-                fragments.append(fragment)
-            start = following
+            in_quote = quote is not None
+
+            if char in ".?!" and OcrStep._is_sentence_boundary(text, index, char, in_quote):
+                following = index + 1
+                while following < len(text) and text[following] in _CLOSING_QUOTES:
+                    following += 1
+                fragment = text[start:following].strip()
+                if fragment:
+                    fragments.append(fragment)
+                start = following
+
+            if char == "“":
+                quote = "“"
+            elif char == "”" and quote == "“":
+                quote = None
+            elif char == '"':
+                quote = None if quote == '"' else '"'
+
         tail = text[start:].strip()
         if tail:
             fragments.append(tail)
         return tuple(fragments)
+
+    @staticmethod
+    def _is_sentence_boundary(text: str, index: int, char: str, in_quote: bool) -> bool:
+        if char == ".":
+            previous = text[: index + 1]
+            match = re.search(r"([A-Za-z](?:[A-Za-z.]*)?)\.$", previous)
+            token = match.group(1).casefold() if match else ""
+            if token in _ABBREVIATIONS or (len(token) == 1 and token.isalpha()):
+                return False
+            if (
+                index > 0
+                and index + 1 < len(text)
+                and text[index - 1].isdigit()
+                and text[index + 1].isdigit()
+            ):
+                return False
+
+        following = index + 1
+        while following < len(text) and text[following] in _CLOSING_QUOTES:
+            following += 1
+        if following < len(text) and not text[following].isspace():
+            return False
+
+        # Punctuation inside a quote is a boundary when the next quoted sentence
+        # starts with a capital letter. If the quote closes and a lowercase speech
+        # tag follows ("...!" says ...), keep the tag with the spoken sentence.
+        next_non_space = following
+        while next_non_space < len(text) and text[next_non_space].isspace():
+            next_non_space += 1
+        if in_quote:
+            closed = following > index + 1
+            if next_non_space < len(text) and text[next_non_space].islower():
+                return False
+            if closed and next_non_space < len(text) and text[next_non_space].isupper():
+                return True
+            return next_non_space >= len(text) or not closed
+
+        return True

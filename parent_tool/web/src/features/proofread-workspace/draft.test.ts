@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { clampBox, renumber, splitText, unionBoxes } from "./draft";
+import { clampBox, mergeSentences, renumber, splitText, unionBoxes } from "./draft";
 
 describe("proofread draft helpers", () => {
   it("renumbers sentences after destructive edits", () => {
@@ -17,5 +17,15 @@ describe("proofread draft helpers", () => {
 
   it("provides editable fragments when splitting text", () => {
     expect(splitText("Hello dear reader today.")).toEqual(["Hello dear", "reader today."]);
+  });
+
+  it("merges selected same-page sentences in reading order", () => {
+    const result = mergeSentences([
+      { id: "s0001", seq: 1, page_no: 1, text: "Mr.", bbox: { x: 0.1, y: 0.2, width: 0.1, height: 0.1 }, shared_bbox: true, status: "sentence", suspect_words: [] },
+      { id: "s0002", seq: 2, page_no: 1, text: "Pintop is here.", bbox: { x: 0.2, y: 0.2, width: 0.2, height: 0.1 }, shared_bbox: true, status: "sentence", suspect_words: [] },
+      { id: "s0003", seq: 3, page_no: 2, text: "Next page.", bbox: { x: 0.1, y: 0.1, width: 0.2, height: 0.1 }, shared_bbox: false, status: "sentence", suspect_words: [] },
+    ], ["s0002", "s0001"]);
+    expect(result).toHaveLength(2);
+    expect(result[0]).toMatchObject({ text: "Mr. Pintop is here.", bbox: { x: 0.1, width: 0.3 }, shared_bbox: false });
   });
 });

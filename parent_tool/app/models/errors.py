@@ -22,12 +22,16 @@ class PipelineError(Exception):
         self.status_code = status_code
 
 
-_PRIVATE_DETAIL_KEYS = frozenset({
-    'path',
-    'cache',
-    'ffmpeg_error',
-    'ffprobe_error',
-})
+_PRIVATE_DETAIL_KEYS = frozenset(
+    {
+        "path",
+        "cache",
+        "source",
+        "target",
+        "ffmpeg_error",
+        "ffprobe_error",
+    }
+)
 
 
 def public_error_details(details: Mapping[str, Any]) -> dict[str, Any]:
@@ -38,7 +42,10 @@ def public_error_details(details: Mapping[str, Any]) -> dict[str, Any]:
             return {
                 key: sanitize(item)
                 for key, item in value.items()
-                if key not in _PRIVATE_DETAIL_KEYS
+                if not (
+                    key in _PRIVATE_DETAIL_KEYS
+                    or (isinstance(key, str) and key.endswith(("_path", "_stderr")))
+                )
             }
         if isinstance(value, list):
             return [sanitize(item) for item in value]

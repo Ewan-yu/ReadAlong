@@ -6,7 +6,7 @@ import 'package:path/path.dart' as p;
 
 import '../../data/appdb/shelf_index.dart';
 import '../../data/bookpack/book_pack_importer.dart';
-import '../../data/bookpack/book_pack_validator.dart';
+import '../../data/bookpack/book_pack_limits.dart';
 import '../dubbing/dubbing_file_store.dart';
 
 class BookPackSelection {
@@ -41,7 +41,11 @@ class FilePickerBookPackPicker implements BookPackPicker {
       );
     }
     final bytes = file.bytes ??
-        (file.path == null ? null : await File(file.path!).readAsBytes());
+        (file.path != null
+            ? await File(file.path!).readAsBytes()
+            : file.readStream == null
+                ? null
+                : await _readStream(file.readStream!));
     if (bytes == null) {
       throw FileSystemException(
           'Selected book package has no readable data', file.name);
@@ -55,6 +59,19 @@ class FilePickerBookPackPicker implements BookPackPicker {
     return BookPackSelection(name: file.name, bytes: bytes);
   }
 
+  static Future<Uint8List> _readStream(Stream<List<int>> stream) async {
+    final builder = BytesBuilder(copy: false);
+    var total = 0;
+    await for (final chunk in stream) {
+      total += chunk.length;
+      if (total > BookPackLimits.defaultMaxPackageBytes) {
+        throw const FormatException('Selected book package exceeds size limit');
+      }
+      builder.add(chunk);
+    }
+    return builder.takeBytes();
+  }
+
   static Future<FilePickerResult?> _pickFromPlatform() =>
       FilePicker.platform.pickFiles(
         // Android's DocumentsUI does not know the app-specific
@@ -62,6 +79,8 @@ class FilePickerBookPackPicker implements BookPackPicker {
         // filter. Pick any local file, then let BookPackValidator validate
         // the selected package and report a useful error to the user.
         type: FileType.any,
+        // Prefer a native path to avoid an eager duplicate buffer. The
+        // importer applies its own ZIP central-directory limits before decode.
         withData: false,
       );
 }

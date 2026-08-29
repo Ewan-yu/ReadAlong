@@ -14,6 +14,7 @@ type Props = {
   imageUrl: string;
   sentences: OcrSentence[];
   selectedIds: string[];
+  pendingSentenceId?: string;
   tool: Tool;
   onSelect: (id: string, additive: boolean) => void;
   onDraw: (box: OcrSentence["bbox"], splitSourceId?: string) => void;
@@ -49,7 +50,7 @@ function useContainerSize(ref: React.RefObject<HTMLDivElement | null>) {
   return size;
 }
 
-export function ProofreadStage({ imageUrl, sentences, selectedIds, tool, onSelect, onDraw, onChangeBox }: Props) {
+export function ProofreadStage({ imageUrl, sentences, selectedIds, pendingSentenceId, tool, onSelect, onDraw, onChangeBox }: Props) {
   const ref = useRef<HTMLDivElement>(null);
   const selectedShapeRef = useRef<Konva.Rect>(null);
   const transformerRef = useRef<Konva.Transformer>(null);
@@ -153,6 +154,7 @@ export function ProofreadStage({ imageUrl, sentences, selectedIds, tool, onSelec
               />
               {image && <KonvaImage image={image} {...imageRect} listening={false} />}
               {sentences.map((sentence) => {
+                if (sentence.id === pendingSentenceId) return null;
                 const active = selectedIds.includes(sentence.id);
                 const review = sentence.status === "needs_review";
                 const editable = active && canTransform;

@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict
 
 from app.config import Settings
 from app.main import SpaStaticFiles, create_app
+from app.models.errors import public_error_details
 from app.models.jobs import JobStatus
 from app.models.pipeline import PipelineState, StepId, StepResult
 from app.pipeline.definitions import StepRegistry
@@ -67,6 +68,30 @@ def _wait_for_terminal(client: TestClient, job_id: str) -> dict:
             return body
         time.sleep(0.01)
     raise AssertionError("job did not finish")
+
+
+@pytest.fixture(autouse=True)
+def reset_sse_starlette_test_state():
+    from sse_starlette.sse import AppStatus
+
+    AppStatus.should_exit = False
+    AppStatus.should_exit_event = None
+    yield
+    AppStatus.should_exit = False
+    AppStatus.should_exit_event = None
+
+
+def test_public_error_details_do_not_expose_local_paths_or_tool_stderr() -> None:
+    details = public_error_details(
+        {
+            "path": "C:/Users/parent/private.wav",
+            "ffmpeg_error": "failed at C:/Users/parent/private.wav",
+            "max_bytes": 123,
+            "book_id": "book-1",
+        }
+    )
+
+    assert details == {"max_bytes": 123, "book_id": "book-1"}
 
 
 def test_run_step_exposes_job_and_state(tmp_path: Path) -> None:
@@ -315,10 +340,12 @@ def test_second_app_instance_cannot_share_workspace(tmp_path: Path) -> None:
     first = create_app(settings=Settings(workspace_root=tmp_path))
     second = create_app(settings=Settings(workspace_root=tmp_path))
 
-    with TestClient(first):
-        with pytest.raises(RuntimeError, match="另一个 ReadAlong"):
-            with TestClient(second):
-                pass
+    with (
+        TestClient(first),
+        pytest.raises(RuntimeError, match="另一个 ReadAlong"),
+        TestClient(second),
+    ):
+        pass
 
 
 def test_lifespan_releases_instance_lock_when_setup_fails(
@@ -342,9 +369,8 @@ def test_lifespan_releases_instance_lock_when_setup_fails(
         executor_factory=lambda: (_ for _ in ()).throw(RuntimeError("executor failed")),
     )
 
-    with pytest.raises(RuntimeError, match="executor failed"):
-        with TestClient(app):
-            pass
+    with pytest.raises(RuntimeError, match="executor failed"), TestClient(app):
+        pass
 
     assert lock.released is True
 
@@ -376,7 +402,9 @@ def test_openapi_contains_typed_pipeline_paths(tmp_path: Path) -> None:
     assert "/api/books/{book_id}/original-audio/separate" in paths
     assert "/api/books/{book_id}/original-audio/source" in paths
     assert "/api/books/{book_id}/original-audio/background/disable" in paths
-    assert "/api/books/{book_id}/original-audio/candidates/{candidate_id}/assets/{asset_path}" in paths
+    assert (
+        "/api/books/{book_id}/original-audio/candidates/{candidate_id}/assets/{asset_path}" in paths
+    )
     assert "PipelineState" in schema["components"]["schemas"]
     assert "JobSnapshot" in schema["components"]["schemas"]
     assert "ApiErrorResponse" in schema["components"]["schemas"]

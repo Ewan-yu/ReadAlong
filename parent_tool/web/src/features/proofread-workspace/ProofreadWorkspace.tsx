@@ -10,13 +10,13 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerE
 import { checkProofreadText, pageAssetUrl, publishProofread, type ApiRequestError, type OcrSentence } from "../../api/client";
 import { waitForJob } from "../../api/jobs";
 import { bookStateQuery, proofreadWorkspaceQuery } from "../../api/queries";
-import { clampBox, renumber, splitText, unionBoxes } from "./draft";
+import { clampBox, mergeSentences, renumber, splitText } from "./draft";
 import { ProofreadStage } from "./ProofreadStage";
 import styles from "./ProofreadWorkspace.module.css";
 
 type Tool = "select" | "pan" | "draw" | "split";
 
-function SortableSentence({ sentence, active, onSelect }: { sentence: OcrSentence; active: boolean; onSelect: (additive: boolean) => void }) {
+function SortableSentence({ sentence, active, onSelect }: { sentence: OcrSentence; active: boolean; onSelect: () => void }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: sentence.id });
   return <article
     ref={setNodeRef}
@@ -24,7 +24,7 @@ function SortableSentence({ sentence, active, onSelect }: { sentence: OcrSentenc
     data-active={active || undefined}
     data-review={sentence.status === "needs_review" || undefined}
     style={{ transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.45 : 1 }}
-    onClick={(event) => onSelect(event.shiftKey || event.ctrlKey || event.metaKey)}
+    onClick={onSelect}
   >
     <button type="button" className={styles.dragHandle} aria-label={`拖动第 ${sentence.seq} 句排序`} {...attributes} {...listeners}><GripVertical /></button>
     <span className={styles.sequence}>{sentence.seq}</span>
@@ -46,13 +46,17 @@ export function ProofreadWorkspace() {
   const [sentences, setSentences] = useState<OcrSentence[]>([]);
   const [confirmedPages, setConfirmedPages] = useState<number[]>([]);
   const [selectedPage, setSelectedPage] = useState(1);
-  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [selectedId, setSelectedId] = useState<string>();
+  const [mergeIds, setMergeIds] = useState<string[]>([]);
   const [tool, setTool] = useState<Tool>("select");
   const [showOrder, setShowOrder] = useState(false);
   const [orderPanelHeight, setOrderPanelHeight] = useState<number>();
   const [dirty, setDirty] = useState(false);
   const [jobProgress, setJobProgress] = useState(0);
+  const [newlyAddedId, setNewlyAddedId] = useState<string>();
+  const [pendingBoxId, setPendingBoxId] = useState<string>();
   const listRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const workspace = workspaceQuery.data;
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }), useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }));
 
@@ -61,13 +65,19 @@ export function ProofreadWorkspace() {
     setSentences(workspace.sentences);
     setConfirmedPages(workspace.confirmed_pages);
     setSelectedPage(workspace.pages[0]?.page_no ?? 1);
-    setSelectedIds([]);
+    setSelectedId(undefined);
+    setMergeIds([]);
+    setNewlyAddedId(undefined);
+    setPendingBoxId(undefined);
     setDirty(false);
   }, [workspace?.ocr_revision_id, workspace?.proofread_revision_id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const page = workspace?.pages.find((item) => item.page_no === selectedPage);
   const pageSentences = useMemo(() => sentences.filter((sentence) => sentence.page_no === selectedPage), [selectedPage, sentences]);
-  const selected = sentences.find((sentence) => sentence.id === selectedIds[0]);
+  const selected = sentences.find((sentence) => sentence.id === selectedId);
+  const selectedMergeSentences = useMemo(() => sentences.filter((sentence) => mergeIds.includes(sentence.id)), [sentences, mergeIds]);
+  const canMerge = selectedMergeSentences.length >= 2 && new Set(selectedMergeSentences.map((sentence) => sentence.page_no)).size === 1;
+  const mergeHint = mergeIds.length === 0 ? "点击句子编辑；需要合并时，勾选 2 句或更多" : canMerge ? `已选 ${mergeIds.length} 句，可以合并` : "请在本页勾选至少 2 句";
   const sharedBoxSentences = useMemo(() => {
     if (!selected?.shared_bbox) return [];
     return pageSentences.filter((sentence) =>
@@ -78,10 +88,10 @@ export function ProofreadWorkspace() {
       && sentence.bbox.height === selected.bbox.height,
     );
   }, [pageSentences, selected]);
-  const pagesWithReview = useMemo(() => new Set(sentences.filter((sentence) => sentence.status === "needs_review").map((sentence) => sentence.page_no)), [sentences]);
+  const pagesWithReview = useMemo(() => new Set(sentences.filter((sentence) => sentence.status === "needs_review" || sentence.id === pendingBoxId).map((sentence) => sentence.page_no)), [pendingBoxId, sentences]);
   const confirmationBlockers = useMemo(
-    () => sentences.filter((sentence) => sentence.status === "needs_review" || sentence.suspect_words.some((word) => word.kind === "spelling")),
-    [sentences],
+    () => sentences.filter((sentence) => sentence.status === "needs_review" || sentence.id === pendingBoxId || sentence.suspect_words.some((word) => word.kind === "spelling")),
+    [pendingBoxId, sentences],
   );
   const blockingPageNos = useMemo(
     () => [...new Set(confirmationBlockers.map((sentence) => sentence.page_no))].sort((a, b) => a - b),
@@ -91,10 +101,24 @@ export function ProofreadWorkspace() {
   const allConfirmed = Boolean(workspace && workspace.pages.every((item) => confirmedPages.includes(item.page_no)));
   const canPublish = allConfirmed && confirmationBlockers.length === 0 && dirty;
 
-  const replaceSentences = (next: OcrSentence[], affectedPages?: number[]) => {
-    setSentences(renumber(next));
+  useEffect(() => {
+    if (!newlyAddedId || selectedId !== newlyAddedId) return undefined;
+    const frame = window.requestAnimationFrame(() => textareaRef.current?.focus());
+    return () => window.cancelAnimationFrame(frame);
+  }, [newlyAddedId, selectedId]);
+
+  const replaceSentences = (next: OcrSentence[], affectedPages?: number[], focusIndex?: number) => {
+    const pendingIndex = pendingBoxId ? next.findIndex((sentence) => sentence.id === pendingBoxId) : -1;
+    const newlyAddedIndex = newlyAddedId ? next.findIndex((sentence) => sentence.id === newlyAddedId) : -1;
+    const normalized = renumber(next);
+    setSentences(normalized);
     setConfirmedPages((current) => current.filter((pageNo) => !(affectedPages?.includes(pageNo) ?? true)));
+    setMergeIds([]);
+    if (pendingBoxId) setPendingBoxId(pendingIndex >= 0 ? normalized[pendingIndex]?.id : undefined);
+    if (newlyAddedId) setNewlyAddedId(newlyAddedIndex >= 0 ? normalized[newlyAddedIndex]?.id : undefined);
+    if (focusIndex !== undefined) setSelectedId(normalized[focusIndex]?.id);
     setDirty(true);
+    return normalized;
   };
   const resizeOrderPanel = (event: ReactPointerEvent<HTMLDivElement>) => {
     event.preventDefault();
@@ -111,11 +135,50 @@ export function ProofreadWorkspace() {
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", end, { once: true });
   };
-  const select = (id: string, additive = false) => setSelectedIds((current) => additive ? (current.includes(id) ? current.filter((value) => value !== id) : [...current, id]) : [id]);
+  const select = (id: string) => {
+    setSelectedId(id);
+    setMergeIds([]);
+    setNewlyAddedId(undefined);
+  };
+  const toggleMerge = (id: string) => setMergeIds((current) => current.includes(id) ? current.filter((value) => value !== id) : [...current, id]);
+  const beginManualSentence = () => {
+    const pending = pendingBoxId ? sentences.find((sentence) => sentence.id === pendingBoxId) : undefined;
+    if (pending && pending.page_no === selectedPage) {
+      setSelectedId(pending.id);
+      setNewlyAddedId(pending.id);
+      setTool("draw");
+      return;
+    }
+    if (pendingBoxId) setPendingBoxId(undefined);
+    const created: OcrSentence = {
+      id: `manual-${Date.now()}`,
+      page_no: selectedPage,
+      seq: sentences.length + 1,
+      text: "",
+      bbox: { x: 0, y: 0, width: 0.01, height: 0.01 },
+      shared_bbox: false,
+      status: "needs_review",
+      suspect_words: [],
+    };
+    const normalized = replaceSentences([...sentences, created], [selectedPage], sentences.length);
+    const id = normalized[sentences.length]?.id;
+    setSelectedId(id);
+    setNewlyAddedId(id);
+    setPendingBoxId(id);
+    setTool("draw");
+  };
+  const toggleContinuousRecording = () => {
+    if (tool === "draw") {
+      setTool("select");
+      return;
+    }
+    beginManualSentence();
+  };
   const updateSentence = (id: string, patch: Partial<OcrSentence>) => {
     const current = sentences.find((sentence) => sentence.id === id);
     if (!current) return;
-    replaceSentences(sentences.map((sentence) => sentence.id === id ? { ...sentence, ...patch } : sentence), [current.page_no]);
+    const index = sentences.findIndex((sentence) => sentence.id === id);
+    replaceSentences(sentences.map((sentence) => sentence.id === id ? { ...sentence, ...patch } : sentence), [current.page_no], index);
   };
   const draw = (bbox: OcrSentence["bbox"], splitSourceId?: string) => {
     if (splitSourceId) {
@@ -126,30 +189,35 @@ export function ProofreadWorkspace() {
         { ...sentence, text: first, shared_bbox: false, status: "sentence" as const },
         { ...sentence, id: `${sentence.id}-split`, text: second, bbox, shared_bbox: false, status: "needs_review" as const, suspect_words: [] },
       ] : [sentence]);
-      replaceSentences(updated, [source.page_no]);
-      setSelectedIds([`s${String(updated.findIndex((sentence) => sentence.id === `${source.id}-split`) + 1).padStart(4, "0")}`]);
+      const splitIndex = updated.findIndex((sentence) => sentence.id === `${source.id}-split`);
+      replaceSentences(updated, [source.page_no], splitIndex);
       setTool("select");
       return;
     }
-    const created: OcrSentence = { id: `manual-${Date.now()}`, page_no: selectedPage, seq: sentences.length + 1, text: "请填写文本", bbox, shared_bbox: false, status: "needs_review", suspect_words: [] };
-    replaceSentences([...sentences, created], [selectedPage]);
-    setSelectedIds([`s${String(sentences.length + 1).padStart(4, "0")}`]);
-    setTool("select");
+    if (pendingBoxId && selectedId === pendingBoxId) {
+      updateSentence(pendingBoxId, { bbox });
+      setPendingBoxId(undefined);
+      return;
+    }
+    const created: OcrSentence = { id: `manual-${Date.now()}`, page_no: selectedPage, seq: sentences.length + 1, text: "", bbox, shared_bbox: false, status: "needs_review", suspect_words: [] };
+    const normalized = replaceSentences([...sentences, created], [selectedPage], sentences.length);
+    setNewlyAddedId(normalized[sentences.length]?.id);
   };
   const merge = () => {
-    const selectedSentences = sentences.filter((sentence) => selectedIds.includes(sentence.id));
-    if (selectedSentences.length < 2 || new Set(selectedSentences.map((sentence) => sentence.page_no)).size !== 1) return;
-    const first = selectedSentences[0];
-    const combined: OcrSentence = { ...first, text: selectedSentences.map((sentence) => sentence.text).join(" "), bbox: unionBoxes(selectedSentences.map((sentence) => sentence.bbox)), shared_bbox: false, status: "sentence", suspect_words: [] };
-    const next = [...sentences.filter((sentence) => !selectedIds.includes(sentence.id)), combined].sort((a, b) => a.seq - b.seq);
-    replaceSentences(next, [first.page_no]);
-    setSelectedIds([`s${String(next.findIndex((sentence) => sentence === combined) + 1).padStart(4, "0")}`]);
+    if (!canMerge) return;
+    const affectedPages = [...new Set(selectedMergeSentences.map((sentence) => sentence.page_no))];
+    const next = mergeSentences(sentences, mergeIds);
+    const mergedIndex = next.findIndex((sentence) => sentence.id === selectedMergeSentences[0].id);
+    replaceSentences(next, affectedPages, mergedIndex);
+    setNewlyAddedId(undefined);
   };
   const deleteSelected = () => {
-    if (!selectedIds.length) return;
-    const affected = sentences.filter((sentence) => selectedIds.includes(sentence.id)).map((sentence) => sentence.page_no);
-    replaceSentences(sentences.filter((sentence) => !selectedIds.includes(sentence.id)), affected);
-    setSelectedIds([]);
+    if (!selectedId) return;
+    const target = sentences.find((sentence) => sentence.id === selectedId);
+    if (!target) return;
+    replaceSentences(sentences.filter((sentence) => sentence.id !== selectedId), [target.page_no]);
+    setSelectedId(undefined);
+    setNewlyAddedId(undefined);
   };
   const reorder = ({ active, over }: DragEndEvent) => {
     if (!over || active.id === over.id) return;
@@ -158,8 +226,8 @@ export function ProofreadWorkspace() {
     if (from < 0 || to < 0) return;
     const next = [...sentences];
     next.splice(to, 0, next.splice(from, 1)[0]);
-    replaceSentences(next);
-    setSelectedIds([]);
+    const focusIndex = selectedId ? next.findIndex((sentence) => sentence.id === selectedId) : undefined;
+    replaceSentences(next, undefined, focusIndex === undefined || focusIndex < 0 ? undefined : focusIndex);
   };
 
   const publish = useMutation({
@@ -182,6 +250,8 @@ export function ProofreadWorkspace() {
   }
   const error = publish.error as ApiRequestError | null;
   const pageReady = !pagesWithReview.has(selectedPage) && !pageSentences.some((sentence) => sentence.suspect_words.some((word) => word.kind === "spelling"));
+  const selectedOnPage = selectedId ? pageSentences.some((sentence) => sentence.id === selectedId) : false;
+  const isNewSentence = Boolean(selected && selected.id === newlyAddedId);
 
   return <section className={styles.page}>
     <header className={styles.header}>
@@ -194,39 +264,53 @@ export function ProofreadWorkspace() {
     <div className={styles.toolbar}>
       <button type="button" data-active={tool === "select" || undefined} onClick={() => setTool("select")}><MousePointer2 />选择文字框</button>
       <button type="button" data-active={tool === "pan" || undefined} onClick={() => setTool("pan")}><Hand />移动画布</button>
-      <button type="button" data-active={tool === "draw" || undefined} onClick={() => setTool("draw")}><PenLine />手动画框</button>
-      <button type="button" data-active={tool === "split" || undefined} disabled={selectedIds.length !== 1} onClick={() => setTool("split")}><Scissors />拆分并画第二框</button>
+      <button type="button" data-active={tool === "draw" || undefined} onClick={toggleContinuousRecording}><PenLine />{tool === "draw" ? "结束补录" : "连续补录"}</button>
+      <button type="button" data-active={tool === "split" || undefined} disabled={!selectedId} onClick={() => setTool("split")}><Scissors />拆分并画第二框</button>
       <span />
       <button type="button" data-active={showOrder || undefined} onClick={() => setShowOrder((value) => !value)}><ListOrdered />阅读顺序</button>
-      <button type="button" disabled={selectedIds.length < 2} onClick={merge}><Combine />合并句子</button>
-      <button type="button" disabled={!selectedIds.length} onClick={deleteSelected}><Trash2 />删除</button>
+      <button type="button" disabled={!canMerge} onClick={merge}><Combine />合并所选句子{canMerge ? ` (${selectedMergeSentences.length})` : ""}</button>
+      <button type="button" disabled={!selectedId} onClick={deleteSelected}><Trash2 />删除</button>
     </div>
 
     <div className={styles.workspace}>
       <aside className={styles.thumbnails} aria-label="阅读页列表">
         <div className={styles.railHeading}><strong>阅读页</strong><span>{confirmedPages.length} / {workspace.pages.length}</span></div>
-        <div className={styles.thumbnailList}>{workspace.pages.map((item) => <button type="button" key={item.page_no} data-active={item.page_no === selectedPage || undefined} onClick={() => { setSelectedPage(item.page_no); setSelectedIds([]); }}>
+        <div className={styles.thumbnailList}>{workspace.pages.map((item) => <button type="button" key={item.page_no} data-active={item.page_no === selectedPage || undefined} onClick={() => { setSelectedPage(item.page_no); setSelectedId(undefined); setMergeIds([]); setNewlyAddedId(undefined); }}>
           <img src={pageAssetUrl(bookId, workspace.pages_revision_id, item.thumbnail)} alt="" loading="lazy" />
           <span>第 {item.page_no} 页</span><i data-confirmed={confirmedPages.includes(item.page_no) || undefined}>{confirmedPages.includes(item.page_no) ? <Check /> : pagesWithReview.has(item.page_no) ? <CircleAlert /> : <span />}</i>
         </button>)}</div>
       </aside>
 
       <main className={styles.canvasColumn}>
-        <div className={styles.canvasHint}>{tool === "draw" ? "在阅读页上拖动，补画漏识别的句子框。" : tool === "split" ? "已选句子保留为第一框；在页面上拖动绘制第二个句子框。" : "点击文字框或句子列表可双向定位；Shift/Ctrl 点击可多选合并。"}<b>第 {selectedPage} 页</b></div>
-        <ProofreadStage imageUrl={pageAssetUrl(bookId, workspace.pages_revision_id, page.image)} sentences={pageSentences} selectedIds={selectedIds} tool={tool} onSelect={select} onDraw={draw} onChangeBox={(id, bbox) => updateSentence(id, { bbox })} />
+        <div className={styles.canvasHint}>{tool === "draw" ? "连续补录：拖动一个框后在右侧填写文本，可继续在本页补录下一句；点击“结束补录”完成。" : pendingBoxId && selectedId === pendingBoxId ? "已结束补录：当前句子草稿已保留；点击右侧“继续框选”完成文字框。" : tool === "split" ? "已选句子保留为第一框；在页面上拖动绘制第二个句子框。" : "点击文字框或句子列表可双向定位；同一文字框内可勾选多句后合并。"}<b>第 {selectedPage} 页</b></div>
+        <ProofreadStage imageUrl={pageAssetUrl(bookId, workspace.pages_revision_id, page.image)} sentences={pageSentences} selectedIds={selectedId ? [selectedId] : []} pendingSentenceId={pendingBoxId} tool={tool} onSelect={(id) => select(id)} onDraw={draw} onChangeBox={(id, bbox) => updateSentence(id, { bbox })} />
       </main>
 
       <aside className={styles.inspector} aria-label="句子属性">
+        <section className={styles.pageSentenceList} aria-label={`第 ${selectedPage} 页句子`}>
+          <div className={styles.pageSentenceListHeader}>
+            <div><strong>本页句子</strong><span>{mergeHint}</span></div>
+            <button type="button" disabled={!canMerge} onClick={merge}><Combine />合并{canMerge ? ` (${selectedMergeSentences.length})` : ""}</button>
+          </div>
+          <div className={styles.pageSentenceRows}>{pageSentences.map((sentence) => <div key={sentence.id} className={styles.pageSentenceRow} data-current={sentence.id === selectedId || undefined} data-merge={mergeIds.includes(sentence.id) || undefined}>
+            <input type="checkbox" checked={mergeIds.includes(sentence.id)} disabled={sentence.id === pendingBoxId} aria-label={sentence.id === pendingBoxId ? `第 ${sentence.seq} 句待框选，暂不可合并` : `选择第 ${sentence.seq} 句用于合并`} onChange={() => toggleMerge(sentence.id)} />
+            <button type="button" className={styles.pageSentenceEdit} onClick={() => select(sentence.id)}>
+              <span><b>#{sentence.seq}</b><em data-review={sentence.status === "needs_review" || undefined}>{sentence.status === "needs_review" ? "待填写" : statusLabel(sentence)}</em></span>
+              <p>{sentence.text || "新句子（待填写）"}</p>
+            </button>
+          </div>)}</div>
+        </section>
         {selected ? <>
           <div className={styles.inspectorHeading}><span>当前句子</span><strong>#{selected.seq} · 第 {selected.page_no} 页</strong></div>
           {sharedBoxSentences.length > 1 && <section className={styles.sharedBoxNotice} aria-label="同一文字框内的句子">
             <strong>同一文字框内有 {sharedBoxSentences.length} 句</strong>
-            <div>{sharedBoxSentences.map((sentence) => <button key={sentence.id} type="button" data-active={sentence.id === selected.id || undefined} onClick={() => select(sentence.id)}>#{sentence.seq} · {sentence.text}</button>)}</div>
+            <p>这些句子共用一个区域；如需合成一句，请在上方列表勾选后点击“合并”。当前句不会默认勾选。</p>
           </section>}
-          <label className={styles.textField}><span>朗读文本</span><textarea value={selected.text} onChange={(event) => updateSentence(selected.id, { text: event.target.value, status: event.target.value.trim() ? "sentence" : "needs_review", suspect_words: [] })} onBlur={(event) => { const text = event.target.value.trim(); if (text) void checkProofreadText(bookId, text).then((suspectWords) => updateSentence(selected.id, { suspect_words: suspectWords })).catch(() => undefined); }} /></label>
+          {isNewSentence && <div className={styles.newSentenceNotice}><Plus /><div><strong>{pendingBoxId === selected.id ? tool === "draw" ? "正在补录这句话" : "已结束补录" : tool === "draw" ? "连续补录中" : "已添加新句子"}</strong><span>{pendingBoxId === selected.id ? tool === "draw" ? "先在下方输入文本，再在画布上拖动框选这句话。" : "当前句子草稿已保留；点击“继续框选”完成这句话，或回到顶部点击“连续补录”添加新句子。" : tool === "draw" ? "当前句已画框，可以继续在画布上框选，或添加下一句。" : "请在下方输入文本；需要补框时点击“继续框选”。"}</span>{pendingBoxId === selected.id ? <button type="button" onClick={() => setTool("draw")}><PenLine />{tool === "draw" ? "去画布框选" : "继续框选"}</button> : tool === "draw" ? <button type="button" onClick={beginManualSentence}><Plus />添加下一句</button> : null}</div></div>}
+          <label className={styles.textField}><span>朗读文本</span><textarea ref={textareaRef} value={selected.text} placeholder="输入这一页要朗读的英文句子…" onChange={(event) => updateSentence(selected.id, { text: event.target.value, status: event.target.value.trim() ? "sentence" : "needs_review", suspect_words: [] })} onBlur={(event) => { const text = event.target.value.trim(); if (text) void checkProofreadText(bookId, text).then((suspectWords) => updateSentence(selected.id, { suspect_words: suspectWords })).catch(() => undefined); }} /></label>
           <div className={styles.status}><span data-review={selected.status === "needs_review" || undefined}>{statusLabel(selected)}</span>{selected.suspect_words.map((word) => <em key={word.word} data-proper={word.kind === "proper_noun" || undefined}>{word.word}</em>)}</div>
-          <section className={styles.boxEditor}><strong>文字框（归一化坐标）</strong>{(["x", "y", "width", "height"] as const).map((key) => <label key={key}><span>{{ x: "左", y: "上", width: "宽", height: "高" }[key]}</span><input type="number" min="0" max="1" step="0.001" value={selected.bbox[key]} onChange={(event) => updateSentence(selected.id, { bbox: clampBox({ ...selected.bbox, [key]: Number(event.target.value) }) })} /></label>)}</section>
-        </> : <div className={styles.emptyInspector}><Plus /><strong>选择一个文字框</strong><p>可编辑文本和坐标，或切换到手动画框补录句子。</p></div>}
+          {pendingBoxId !== selected.id && <section className={styles.boxEditor}><strong>文字框（归一化坐标）</strong>{(["x", "y", "width", "height"] as const).map((key) => <label key={key}><span>{{ x: "左", y: "上", width: "宽", height: "高" }[key]}</span><input type="number" min="0" max="1" step="0.001" value={selected.bbox[key]} onChange={(event) => updateSentence(selected.id, { bbox: clampBox({ ...selected.bbox, [key]: Number(event.target.value) }) })} /></label>)}</section>}
+        </> : <div className={styles.emptyInspector}><Plus /><strong>{selectedOnPage ? "选择一个文字框" : "从本页句子开始"}</strong><p>点击上方句子行进入编辑，或在当前页连续补录多句。</p><button type="button" onClick={beginManualSentence}><PenLine />在本页添加句子</button></div>}
         <section className={styles.confirmPanel}><strong>{confirmedPages.includes(selectedPage) ? "本页已确认" : "本页等待确认"}</strong><p>{pageReady ? "没有待确认项或红色拼写提示，可以快速确认。" : "先处理待确认项与红色拼写提示，再确认本页。"}</p><button type="button" disabled={!pageReady} data-confirmed={confirmedPages.includes(selectedPage) || undefined} onClick={() => { setConfirmedPages((current) => current.includes(selectedPage) ? current.filter((pageNo) => pageNo !== selectedPage) : [...current, selectedPage].sort((a, b) => a - b)); setDirty(true); }}>{confirmedPages.includes(selectedPage) ? <Check /> : <CheckCheck />}{confirmedPages.includes(selectedPage) ? "取消确认" : "确认本页"}</button></section>
       </aside>
     </div>
@@ -237,7 +321,7 @@ export function ProofreadWorkspace() {
       <div ref={listRef} className={styles.sentenceList}>
         <div style={{ height: `${virtualizer.getTotalSize()}px`, position: "relative" }}>
           <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={reorder}><SortableContext items={sentences.map((sentence) => sentence.id)} strategy={verticalListSortingStrategy}>
-            {virtualizer.getVirtualItems().map((row) => { const sentence = sentences[row.index]; return <div key={sentence.id} style={{ position: "absolute", top: 0, left: 0, width: "100%", transform: `translateY(${row.start}px)` }}><SortableSentence sentence={sentence} active={selectedIds.includes(sentence.id)} onSelect={(additive) => { setSelectedPage(sentence.page_no); select(sentence.id, additive); }} /></div>; })}
+            {virtualizer.getVirtualItems().map((row) => { const sentence = sentences[row.index]; return <div key={sentence.id} style={{ position: "absolute", top: 0, left: 0, width: "100%", transform: `translateY(${row.start}px)` }}><SortableSentence sentence={sentence} active={sentence.id === selectedId} onSelect={() => { setSelectedPage(sentence.page_no); select(sentence.id); }} /></div>; })}
           </SortableContext></DndContext>
         </div>
       </div>

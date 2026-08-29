@@ -7,6 +7,7 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import 'package:reader_app/data/appdb/shelf_index.dart';
 import 'package:reader_app/data/bookpack/book_pack_importer.dart';
+import 'package:reader_app/data/bookpack/book_pack_limits.dart';
 import 'package:reader_app/data/bookpack/book_pack_validator.dart';
 
 Uint8List _fixture(String name) {

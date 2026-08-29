@@ -7,6 +7,7 @@ import 'package:crypto/crypto.dart';
 import 'package:sqflite/sqflite.dart' as sqflite;
 
 import 'archive_entries.dart';
+import 'book_pack_limits.dart';
 import 'schema_constants.dart';
 
 class ValidationResult {
@@ -16,28 +17,6 @@ class ValidationResult {
   factory ValidationResult.pass() => const ValidationResult._(true, []);
   factory ValidationResult.fail(List<String> errors) =>
       ValidationResult._(false, List.unmodifiable(errors));
-}
-
-/// Defensive limits applied before archive contents are inflated or installed.
-///
-/// The parent tool currently accepts up to 500 MiB source audio, so the
-/// compressed package limit stays aligned with that product boundary.  The
-/// uncompressed and entry limits additionally protect devices from ZIP bombs
-/// and metadata-only archives with excessive file counts.
-final class BookPackLimits {
-  static const defaultMaxPackageBytes = 500 * 1024 * 1024;
-
-  const BookPackLimits({
-    this.maxPackageBytes = defaultMaxPackageBytes,
-    this.maxArchiveEntries = 4096,
-    this.maxSingleEntryBytes = 512 * 1024 * 1024,
-    this.maxUncompressedBytes = 1024 * 1024 * 1024,
-  });
-
-  final int maxPackageBytes;
-  final int maxArchiveEntries;
-  final int maxSingleEntryBytes;
-  final int maxUncompressedBytes;
 }
 
 /// 资源包校验器。validateBytes 是异步的（含 sqlite 全量校验）。
@@ -53,6 +32,13 @@ class BookPackValidator {
       return ValidationResult.fail([
         '资源包过大: ${zipBytes.length} 字节（上限 ${limits.maxPackageBytes}）',
       ]);
+    }
+
+    // ZIP 中央目录预检必须发生在解压之前，避免 ZIP bomb 触发无界分配。
+    final zipLimitErrors =
+        BookPackLimits.validateZipBytes(zipBytes, limits: limits);
+    if (zipLimitErrors.isNotEmpty) {
+      return ValidationResult.fail(zipLimitErrors);
     }
 
     // 1. zip 解析

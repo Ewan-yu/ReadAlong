@@ -53,7 +53,9 @@ def test_ocr_step_replays_response_and_builds_sentence_draft(tmp_path: Path) -> 
     target = book / "source.pdf"
     target.write_bytes(source.read_bytes())
     states = StateRepository(paths)
-    states.create(PipelineState.new(book_id="book-1", pdf_path="source.pdf", pdf_sha256=file_sha256(target)))
+    states.create(
+        PipelineState.new(book_id="book-1", pdf_path="source.pdf", pdf_sha256=file_sha256(target))
+    )
     response = json.dumps(
         {
             "result": {
@@ -86,7 +88,11 @@ def test_ocr_step_replays_response_and_builds_sentence_draft(tmp_path: Path) -> 
                                     "block_content": "The Frog Family",
                                     "block_bbox": [30, 215, 210, 240],
                                 },
-                                {"block_label": "number", "block_content": "4", "block_bbox": [1, 1, 10, 10]},
+                                {
+                                    "block_label": "number",
+                                    "block_content": "4",
+                                    "block_bbox": [1, 1, 10, 10],
+                                },
                                 {"block_label": "image", "block_bbox": [0, 0, 100, 100]},
                                 {"block_label": "image", "block_bbox": [210, 80, 330, 145]},
                             ]
@@ -108,7 +114,9 @@ def test_ocr_step_replays_response_and_builds_sentence_draft(tmp_path: Path) -> 
     success = _run(engine, StepId.OCR, {}, "22345678-1234-4234-8234-123456789abc")
 
     revision = book / success.output_root
-    output = OcrSentences.model_validate_json((revision / "sentences.json").read_text(encoding="utf-8"))
+    output = OcrSentences.model_validate_json(
+        (revision / "sentences.json").read_text(encoding="utf-8")
+    )
     assert (revision / "responses/p0001.jsonl").read_text(encoding="utf-8") == response
     assert [item.text for item in output.sentences] == [
         "Helo world.",
@@ -133,12 +141,29 @@ def test_ocr_step_rejects_invalid_replayed_jsonl(tmp_path: Path) -> None:
     provider = ReplayOcrProvider({"page.png": "not JSON"})
     step = OcrStep(provider, FakeSpellChecker())
 
-    try:
+    with pytest.raises(PipelineError) as caught:
         step._parse_blocks("not JSON", 100, 100)
-    except Exception as error:
-        assert getattr(error, "code", None) == "OCR_RESPONSE_INVALID"
-    else:
-        raise AssertionError("invalid JSONL should be rejected")
+    assert caught.value.code == "OCR_RESPONSE_INVALID"
+
+
+def test_sentence_parser_keeps_smart_quote_speech_and_speech_tags() -> None:
+    text = "“Pump up the tire!” says Mr. Pintop. But the robot is too strong. The tire goes bang!"
+
+    assert OcrStep._english_text(text) == text
+    assert OcrStep._split_sentences(text) == (
+        "“Pump up the tire!” says Mr. Pintop.",
+        "But the robot is too strong.",
+        "The tire goes bang!",
+    )
+
+
+def test_sentence_parser_does_not_split_common_title_abbreviations() -> None:
+    text = "Mr. Pintop is an inventor. “This robot can help me!” he says."
+
+    assert OcrStep._split_sentences(text) == (
+        "Mr. Pintop is an inventor.",
+        "“This robot can help me!” he says.",
+    )
 
 
 def test_ocr_step_rejects_unconfirmed_page_decisions(tmp_path: Path) -> None:
@@ -189,9 +214,6 @@ def test_ocr_step_rejects_unconfirmed_page_decisions(tmp_path: Path) -> None:
 
 def test_replay_provider_requires_every_page(tmp_path: Path) -> None:
     provider = ReplayOcrProvider({})
-    try:
+    with pytest.raises(PipelineError) as caught:
         provider.recognize(tmp_path / "p0001.png", object(), CancellationToken())  # type: ignore[arg-type]
-    except Exception as error:
-        assert getattr(error, "code", None) == "OCR_REPLAY_MISSING"
-    else:
-        raise AssertionError("missing recorded response should be explicit")
+    assert caught.value.code == "OCR_REPLAY_MISSING"
