@@ -1,5 +1,7 @@
 ﻿[CmdletBinding()]
-param()
+param(
+    [switch]$Restart
+)
 
 $ErrorActionPreference = 'Stop'
 
@@ -68,6 +70,26 @@ function Update-WebBuild {
     }
 }
 
+function Stop-ParentTool {
+    $occupied = @(Get-NetTCPConnection -LocalPort 8760 -State Listen -ErrorAction SilentlyContinue)
+    foreach ($listener in $occupied) {
+        $processId = [int]$listener.OwningProcess
+        $commandLine = (Get-CimInstance Win32_Process -Filter "ProcessId = $processId").CommandLine
+        if ($commandLine -notmatch 'app\.main(?::app)?') {
+            throw "8760 端口已被其他程序占用，拒绝停止进程 $processId。"
+        }
+        Stop-Process -Id $processId -Force
+    }
+
+    for ($attempt = 1; $attempt -le 20; $attempt++) {
+        if (-not (Get-NetTCPConnection -LocalPort 8760 -State Listen -ErrorAction SilentlyContinue)) {
+            return
+        }
+        Start-Sleep -Milliseconds 250
+    }
+    throw '家长端旧进程未能释放 8760 端口。'
+}
+
 try {
     if (-not (Test-Path -LiteralPath $python -PathType Leaf)) {
         throw "找不到 readalong Python 环境：`n$python`n`n请按启动指南恢复 Conda 环境后重试。"
@@ -77,6 +99,10 @@ try {
     }
 
     Update-WebBuild
+
+    if ($Restart -and (Test-ParentToolHealthy)) {
+        Stop-ParentTool
+    }
 
     if (-not (Test-ParentToolHealthy)) {
         $occupied = Get-NetTCPConnection -LocalPort 8760 -State Listen -ErrorAction SilentlyContinue
