@@ -49,8 +49,8 @@ function Test-WebBuildCurrent {
     return $null -ne $latestInput -and $built.LastWriteTimeUtc -ge $latestInput.LastWriteTimeUtc
 }
 
-function Update-WebBuild {
-    if (Test-WebBuildCurrent) {
+function Update-WebBuild([switch]$Force) {
+    if (-not $Force -and (Test-WebBuildCurrent)) {
         return
     }
 
@@ -98,7 +98,7 @@ try {
         throw "找不到家长端目录：`n$serviceRoot"
     }
 
-    Update-WebBuild
+    Update-WebBuild -Force:$Restart
 
     if ($Restart -and (Test-ParentToolHealthy)) {
         Stop-ParentTool
@@ -128,7 +128,8 @@ try {
         }
     }
 
-    Start-Process $appUrl
+    $launchUrl = "$appUrl/?build=$([DateTime]::UtcNow.Ticks)"
+    Start-Process $launchUrl
 } catch {
     Show-StartError $_.Exception.Message
     exit 1
