@@ -55,13 +55,31 @@ function Update-WebBuild([switch]$Force) {
     }
 
     $pnpm = Get-Command 'pnpm.cmd' -ErrorAction SilentlyContinue
-    if ($null -eq $pnpm) {
-        throw "家长端网页需要重新构建，但找不到 pnpm.cmd。`n`n请安装项目要求的 pnpm 后重试。"
+    if ($null -ne $pnpm) {
+        $packageManager = $pnpm.Source
+        $packageManagerArguments = @('build')
+    } else {
+        $corepack = Get-Command 'corepack.cmd' -ErrorAction SilentlyContinue
+        if ($null -eq $corepack) {
+            $corepackPath = 'C:\Program Files\nodejs\corepack.cmd'
+            if (Test-Path -LiteralPath $corepackPath -PathType Leaf) {
+                $corepack = Get-Item -LiteralPath $corepackPath
+            }
+        }
+        if ($null -eq $corepack) {
+            throw "家长端网页需要重新构建，但找不到 pnpm 或 Corepack。`n`n请安装项目要求的 Node.js/pnpm 后重试。"
+        }
+        $packageManager = if ($corepack.PSObject.Properties['Source']) {
+            $corepack.Source
+        } else {
+            $corepackPath
+        }
+        $packageManagerArguments = @('pnpm', 'build')
     }
 
     Push-Location $webRoot
     try {
-        & $pnpm.Source build
+        & $packageManager @packageManagerArguments
         if ($LASTEXITCODE -ne 0) {
             throw "家长端网页构建失败（退出码 $LASTEXITCODE）。"
         }
