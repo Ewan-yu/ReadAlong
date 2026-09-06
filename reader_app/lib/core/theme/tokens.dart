@@ -44,8 +44,8 @@ abstract final class AppSizes {
   static const readerWideLayout = 720.0;
   static const readerCollapsedStripWidth = 56.0;
   static const readerThumbnailHeight = 96.0;
-  static const readerControlPanelMinHeight = 196.0;
-  static const readerControlPanelMaxHeight = 268.0;
+  static const readerControlPanelMinHeight = 168.0;
+  static const readerControlPanelMaxHeight = 216.0;
   static const shelfCardMaxWidth = 260.0;
   static const originalAudioWideLayout = 600.0;
   static const originalAudioCoverColumn = 320.0;

@@ -93,7 +93,15 @@ final class PointReadingController
     );
     if (group.isEmpty) return;
 
-    await _playSentences(group);
+    // A shared bbox can contain multiple sentences. Tapping the artwork is
+    // the sentence-selection gesture, so start with the first sentence and
+    // let the reader controls move through the rest without requiring a
+    // recording first.
+    await _playSentences([group.first]);
+  }
+
+  Future<void> playSentence(ReaderSentence sentence) async {
+    await _playSentences([sentence]);
   }
 
   Future<void> replaySubtitleSentence() async {

@@ -121,7 +121,12 @@ class _ReaderViewState extends ConsumerState<_ReaderView>
   var _alignmentFailureShown = false;
   var _playbackFeedbackScheduled = false;
   int? _scoreDialogRecordId;
-  var _mode = _ReaderMode.point;
+  var _tapSequence = 0;
+  var _sentenceNavigationSequence = 0;
+  int? _pendingSentenceNavigationPage;
+  PointReadingBook? _orderedSentencesBook;
+  List<ReaderSentence> _orderedSentencesCache = const [];
+  var _defaultSentenceSelectionQueued = false;
   Timer? _progressSaveTimer;
 
   @override
@@ -159,10 +164,20 @@ class _ReaderViewState extends ConsumerState<_ReaderView>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.inactive ||
         state == AppLifecycleState.paused) {
-      unawaited(ref
-          .read(followReadingControllerProvider(widget.book.libraryId).notifier)
-          .handleAppBackgrounded());
+      _pendingSentenceNavigationPage = null;
+      _sentenceNavigationSequence++;
+      final sequence = ++_tapSequence;
+      unawaited(_stopReaderAudioForBackground(sequence));
     }
+  }
+
+  Future<void> _stopReaderAudioForBackground(int sequence) async {
+    final pointProvider = pointReadingControllerProvider(widget.book.libraryId);
+    final followProvider =
+        followReadingControllerProvider(widget.book.libraryId);
+    await ref.read(pointProvider.notifier).stopForPageChange();
+    if (!mounted || sequence != _tapSequence) return;
+    await ref.read(followProvider.notifier).handleAppBackgrounded();
   }
 
   void _handleTransform(int index) {
@@ -175,16 +190,17 @@ class _ReaderViewState extends ConsumerState<_ReaderView>
   }
 
   void _onPageChanged(int index) {
-    unawaited(
-      ref
-          .read(pointReadingControllerProvider(widget.book.libraryId).notifier)
-          .stopForPageChange(),
-    );
-    unawaited(
-      ref
-          .read(followReadingControllerProvider(widget.book.libraryId).notifier)
-          .stopForPageChange(),
-    );
+    final controlledNavigation = _pendingSentenceNavigationPage == index;
+    if (controlledNavigation) {
+      _pendingSentenceNavigationPage = null;
+    }
+    final sequence = ++_tapSequence;
+    if (!controlledNavigation) {
+      unawaited(_stopReaderForPageChangeAndSelectFirst(
+        sequence: sequence,
+        pageIndex: index,
+      ));
+    }
     final previous = _currentIndex;
     _zoomedPages[previous] = false;
     _transforms[previous].value = Matrix4.identity();
@@ -192,6 +208,26 @@ class _ReaderViewState extends ConsumerState<_ReaderView>
     _precacheAround(index);
     _revealThumbnail(index);
     _scheduleProgressSave();
+  }
+
+  Future<void> _stopReaderForPageChangeAndSelectFirst({
+    required int sequence,
+    required int pageIndex,
+  }) async {
+    await _stopReaderForPageChange(sequence);
+    if (!mounted || sequence != _tapSequence || pageIndex != _currentIndex) {
+      return;
+    }
+    await _selectFirstSentenceWhenReady(pageIndex);
+  }
+
+  Future<void> _stopReaderForPageChange(int sequence) async {
+    final pointProvider = pointReadingControllerProvider(widget.book.libraryId);
+    final followProvider =
+        followReadingControllerProvider(widget.book.libraryId);
+    await ref.read(pointProvider.notifier).stopForPageChange();
+    if (!mounted || sequence != _tapSequence) return;
+    await ref.read(followProvider.notifier).stopForPageChange();
   }
 
   Future<void> _restoreReadingProgress() async {
@@ -208,9 +244,63 @@ class _ReaderViewState extends ConsumerState<_ReaderView>
       setState(() => _currentIndex = target);
       _precacheAround(target);
       _revealThumbnail(target);
+      unawaited(_selectFirstSentenceWhenReady(target, replaceExisting: true));
     } on Object {
       // Progress is optional runtime data; a corrupt row must not block reading.
     }
+  }
+
+  void _scheduleDefaultSentenceSelection() {
+    if (!mounted || _defaultSentenceSelectionQueued) {
+      return;
+    }
+    final pointReading = ref
+        .read(pointReadingControllerProvider(widget.book.libraryId))
+        .valueOrNull;
+    if (pointReading == null) return;
+    final currentFollowSentence = ref
+        .read(followReadingControllerProvider(widget.book.libraryId))
+        .valueOrNull
+        ?.sentence;
+    if (currentFollowSentence != null) return;
+
+    _defaultSentenceSelectionQueued = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _defaultSentenceSelectionQueued = false;
+      if (!mounted) return;
+      unawaited(_selectFirstSentenceWhenReady(_currentIndex));
+    });
+  }
+
+  Future<void> _selectFirstSentenceWhenReady(
+    int pageIndex, {
+    bool replaceExisting = false,
+  }) async {
+    final followProvider =
+        followReadingControllerProvider(widget.book.libraryId);
+    if (!mounted || pageIndex != _currentIndex) return;
+    final current = ref.read(followProvider).valueOrNull?.sentence;
+    if (current != null && !replaceExisting) return;
+    _selectFirstSentenceForPage(pageIndex);
+  }
+
+  void _selectFirstSentenceForPage(int pageIndex) {
+    if (pageIndex < 0 || pageIndex >= widget.book.pages.length) return;
+    final pointReading = ref
+        .read(pointReadingControllerProvider(widget.book.libraryId))
+        .valueOrNull;
+    if (pointReading == null) return;
+    final sentences = pointReading.book
+        .sentencesForPage(widget.book.pages[pageIndex].pageNumber);
+    if (sentences.isEmpty) return;
+    final followProvider =
+        followReadingControllerProvider(widget.book.libraryId);
+    final current = ref.read(followProvider).valueOrNull?.sentence;
+    if (current?.id == sentences.first.id) return;
+    // Selecting the sentence must not start audio. The child can immediately
+    // use the stable toolbar, while tapping the artwork remains the explicit
+    // gesture that starts playback.
+    ref.read(followProvider.notifier).selectSentence(sentences.first);
   }
 
   void _scheduleProgressSave() {
@@ -230,6 +320,8 @@ class _ReaderViewState extends ConsumerState<_ReaderView>
 
   void _selectPage(int index) {
     if (!_pageController.hasClients || index == _currentIndex) return;
+    _pendingSentenceNavigationPage = null;
+    _sentenceNavigationSequence++;
     _pageController.animateToPage(
       index,
       duration: const Duration(milliseconds: 250),
@@ -326,10 +418,10 @@ class _ReaderViewState extends ConsumerState<_ReaderView>
         pointReadingControllerProvider(widget.book.libraryId);
     ref.listen<AsyncValue<PointReadingState>>(
       pointReadingProvider,
-      (previous, next) => _handlePointReadingFeedback(
-        previous,
-        next,
-      ),
+      (previous, next) {
+        _handlePointReadingFeedback(previous, next);
+        if (next.hasValue) _scheduleDefaultSentenceSelection();
+      },
     );
     final pointReading = ref.watch(pointReadingProvider);
     final originalAudioReady = ref.watch(
@@ -339,14 +431,33 @@ class _ReaderViewState extends ConsumerState<_ReaderView>
         followReadingControllerProvider(widget.book.libraryId);
     ref.listen<AsyncValue<FollowReadingState>>(
       followReadingProvider,
-      _handleFollowReadingFeedback,
+      (previous, next) {
+        _handleFollowReadingFeedback(previous, next);
+        if (next.hasValue) _scheduleDefaultSentenceSelection();
+      },
     );
     final followSentence = ref.watch(
       followReadingProvider.select((value) => value.valueOrNull?.sentence),
     );
-    final activeSentence = _mode == _ReaderMode.point
-        ? pointReading.valueOrNull?.activeSentence
-        : followSentence;
+    final followPhase = ref.watch(
+      followReadingProvider.select((value) => value.valueOrNull?.phase),
+    );
+    final pointState = pointReading.valueOrNull;
+    if (pointState != null) _scheduleDefaultSentenceSelection();
+    final orderedSentences = pointState == null
+        ? const <ReaderSentence>[]
+        : _orderedSentences(pointState.book);
+    final selectedSentenceIndex = followSentence == null
+        ? -1
+        : orderedSentences
+            .indexWhere((sentence) => sentence.id == followSentence.id);
+    final canPreviousSentence = selectedSentenceIndex > 0;
+    final canNextSentence = selectedSentenceIndex >= 0 &&
+        selectedSentenceIndex + 1 < orderedSentences.length;
+    final activeSentence = pointReading.valueOrNull?.activeSentence ??
+        (followPhase != null && followPhase != FollowReadingPhase.idle
+            ? followSentence
+            : null);
     final pageView = PageView.builder(
       key: const ValueKey('reader-page-view'),
       controller: _pageController,
@@ -459,14 +570,6 @@ class _ReaderViewState extends ConsumerState<_ReaderView>
               icon: const Icon(Icons.headphones_outlined),
               tooltip: '听原音',
             ),
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: AppSpacing.unit),
-            child: _ReaderModeSwitch(
-              mode: _mode,
-              onChanged: (mode) => setState(() => _mode = mode),
-            ),
-          ),
-          const SizedBox(width: AppSpacing.unit),
           SizedBox(
             width: 80,
             child: Center(
@@ -517,7 +620,7 @@ class _ReaderViewState extends ConsumerState<_ReaderView>
           }
           final compact = constraints.maxWidth < AppSizes.readerWideLayout;
           final controlPanelHeight =
-              (constraints.maxHeight * (compact ? 0.36 : 0.31))
+              (constraints.maxHeight * (compact ? 0.28 : 0.22))
                   .clamp(
                     AppSizes.readerControlPanelMinHeight,
                     AppSizes.readerControlPanelMaxHeight,
@@ -526,76 +629,56 @@ class _ReaderViewState extends ConsumerState<_ReaderView>
           return Column(
             children: [
               Expanded(child: readerArea),
-              if (_mode == _ReaderMode.point &&
-                  pointReading.valueOrNull?.subtitleSentence != null)
-                SizedBox(
-                  key: const ValueKey('point-stable-panel'),
-                  height: controlPanelHeight,
-                  child: RepaintBoundary(
-                    child: _ReaderSubtitleBand(
-                      state: pointReading.requireValue,
-                      onReplay: () => unawaited(
-                        ref
-                            .read(pointReadingProvider.notifier)
-                            .replaySubtitleSentence(),
-                      ),
-                      onFollow: () {
-                        final sentence =
-                            pointReading.valueOrNull?.subtitleSentence;
-                        if (sentence == null) return;
-                        final controller = ref.read(
-                          followReadingProvider.notifier,
-                        );
-                        controller.selectSentence(sentence);
-                        setState(() => _mode = _ReaderMode.follow);
-                        unawaited(controller.playDemonstration());
-                      },
-                      compact: compact,
-                    ),
-                  ),
-                )
-              else if (_mode == _ReaderMode.follow)
-                SizedBox(
-                  key: const ValueKey('follow-stable-panel'),
-                  height: controlPanelHeight,
-                  child: RepaintBoundary(
-                    child: Consumer(
-                      builder: (context, panelRef, _) {
-                        final followReading =
-                            panelRef.watch(followReadingProvider);
-                        return _FollowReadingPanel(
-                          state: followReading,
-                          compact: compact,
-                          onDemo: () => unawaited(panelRef
-                              .read(followReadingProvider.notifier)
-                              .playDemonstration()),
-                          onRecord: () => unawaited(panelRef
-                              .read(followReadingProvider.notifier)
-                              .startRecording()),
-                          onStop: () => unawaited(panelRef
-                              .read(followReadingProvider.notifier)
-                              .stopRecording()),
-                          onCancelPreparation: () => unawaited(panelRef
-                              .read(followReadingProvider.notifier)
-                              .cancelPreparation()),
-                          onRetry: () => unawaited(panelRef
-                              .read(followReadingProvider.notifier)
-                              .retryScoring()),
-                          onMyRecording: () => unawaited(panelRef
-                              .read(followReadingProvider.notifier)
-                              .playMyRecording()),
-                          onRepeat: () => unawaited(panelRef
-                              .read(followReadingProvider.notifier)
-                              .startRecording()),
-                          onNext: () => _nextFollowSentence(
-                            pointReading.valueOrNull,
-                            followReading.valueOrNull?.sentence,
-                          ),
-                        );
-                      },
-                    ),
+              SizedBox(
+                key: const ValueKey('follow-stable-panel'),
+                height: controlPanelHeight,
+                child: RepaintBoundary(
+                  child: Consumer(
+                    builder: (context, panelRef, _) {
+                      final followReading =
+                          panelRef.watch(followReadingProvider);
+                      return _FollowReadingPanel(
+                        state: followReading,
+                        compact: compact,
+                        pointReadingError: pointReading.hasError,
+                        pointPlaybackSentenceId: pointState?.activeSentence?.id,
+                        pointPlaybackWordIndex: pointState?.activeWordIndex,
+                        onRetryPointReading: () {
+                          _alignmentFailureShown = false;
+                          panelRef.invalidate(pointReadingProvider);
+                        },
+                        onRecord: () => unawaited(
+                          _startSelectedRecording(),
+                        ),
+                        onStop: () => unawaited(panelRef
+                            .read(followReadingProvider.notifier)
+                            .stopRecording()),
+                        onCancelPreparation: () => unawaited(panelRef
+                            .read(followReadingProvider.notifier)
+                            .cancelPreparation()),
+                        onRetry: () => unawaited(panelRef
+                            .read(followReadingProvider.notifier)
+                            .retryScoring()),
+                        onMyRecording: () => unawaited(panelRef
+                            .read(followReadingProvider.notifier)
+                            .playMyRecording()),
+                        onPrevious: () => unawaited(_navigateSentence(
+                          delta: -1,
+                          pointReading: pointState,
+                          current: followReading.valueOrNull?.sentence,
+                        )),
+                        onNext: () => unawaited(_navigateSentence(
+                          delta: 1,
+                          pointReading: pointState,
+                          current: followReading.valueOrNull?.sentence,
+                        )),
+                        canPrevious: canPreviousSentence,
+                        canNext: canNextSentence,
+                      );
+                    },
                   ),
                 ),
+              ),
             ],
           );
         },
@@ -603,28 +686,21 @@ class _ReaderViewState extends ConsumerState<_ReaderView>
     );
   }
 
-  void _handlePageTap({
+  Future<void> _handlePageTap({
     required int pageNumber,
     required Offset viewportPoint,
     required Rect imageRect,
     required TransformationController transformation,
     required PointReadingState? pointReading,
-  }) {
+  }) async {
     final normalized = viewportPointToNormalized(
       viewportPoint: viewportPoint,
       transformation: transformation,
       imageRect: imageRect,
     );
     if (normalized == null) return;
-    if (_mode == _ReaderMode.point) {
-      unawaited(
-        ref
-            .read(
-                pointReadingControllerProvider(widget.book.libraryId).notifier)
-            .playAt(pageNumber, normalized),
-      );
-      return;
-    }
+    _pendingSentenceNavigationPage = null;
+    _sentenceNavigationSequence++;
     final book = pointReading?.book;
     if (book == null) return;
     final matches = hitTestSentences(
@@ -636,42 +712,111 @@ class _ReaderViewState extends ConsumerState<_ReaderView>
       _showMessageAfterFrame('点一下绘本中的一句话，就可以开始跟读');
       return;
     }
-    final controller = ref.read(
+    final sequence = ++_tapSequence;
+    final pointController = ref.read(
+      pointReadingControllerProvider(widget.book.libraryId).notifier,
+    );
+    final followController = ref.read(
       followReadingControllerProvider(widget.book.libraryId).notifier,
     );
-    controller.selectSentence(selected);
-    unawaited(controller.playDemonstration());
+    followController.selectSentence(selected);
+    await pointController.stopForPageChange();
+    if (!mounted || sequence != _tapSequence) return;
+    unawaited(pointController.playAt(pageNumber, normalized));
   }
 
-  Future<void> _nextFollowSentence(
-    PointReadingState? pointReading,
-    ReaderSentence? current,
-  ) async {
-    if (pointReading == null || current == null) return;
-    final all = pointReading.book.sentencesByPage.values
+  Future<void> _playSelectedDemonstration() async {
+    final followProvider =
+        followReadingControllerProvider(widget.book.libraryId);
+    final sentence = ref.read(followProvider).valueOrNull?.sentence;
+    if (sentence == null) return;
+    final pointController = ref.read(
+      pointReadingControllerProvider(widget.book.libraryId).notifier,
+    );
+    final followController = ref.read(
+      followReadingControllerProvider(widget.book.libraryId).notifier,
+    );
+    await pointController.stopForPageChange();
+    if (!mounted) return;
+    await followController.playDemonstration();
+  }
+
+  Future<void> _startSelectedRecording() async {
+    final followProvider =
+        followReadingControllerProvider(widget.book.libraryId);
+    if (ref.read(followProvider).valueOrNull?.sentence == null) return;
+    final pointController = ref.read(
+      pointReadingControllerProvider(widget.book.libraryId).notifier,
+    );
+    final followController = ref.read(followProvider.notifier);
+    await pointController.stopForPageChange();
+    if (!mounted) return;
+    await followController.startRecording();
+  }
+
+  List<ReaderSentence> _orderedSentences(PointReadingBook book) {
+    if (identical(_orderedSentencesBook, book)) {
+      return _orderedSentencesCache;
+    }
+    final sorted = book.sentencesByPage.values
         .expand((sentences) => sentences)
         .toList()
       ..sort((left, right) => left.sequence.compareTo(right.sequence));
+    _orderedSentencesBook = book;
+    _orderedSentencesCache = List.unmodifiable(sorted);
+    return _orderedSentencesCache;
+  }
+
+  Future<void> _navigateSentence({
+    required int delta,
+    required PointReadingState? pointReading,
+    required ReaderSentence? current,
+  }) async {
+    if (pointReading == null || current == null) return;
+    final all = _orderedSentences(pointReading.book);
     final index = all.indexWhere((sentence) => sentence.id == current.id);
-    if (index < 0 || index + 1 >= all.length) {
-      _showMessageAfterFrame('已经是最后一句啦');
+    final targetIndex = index + delta;
+    if (index < 0 || targetIndex < 0 || targetIndex >= all.length) {
+      _showMessageAfterFrame(delta < 0 ? '已经是第一句啦' : '已经是最后一句啦');
       return;
     }
-    final next = all[index + 1];
-    final pageIndex = widget.book.pages.indexWhere(
-      (page) => page.pageNumber == next.pageNumber,
+
+    final navigationSequence = ++_sentenceNavigationSequence;
+    final target = all[targetIndex];
+    final targetPageIndex = widget.book.pages.indexWhere(
+      (page) => page.pageNumber == target.pageNumber,
     );
-    if (pageIndex >= 0 && pageIndex != _currentIndex) {
-      _selectPage(pageIndex);
-      await Future<void>.delayed(const Duration(milliseconds: 280));
-      if (!mounted) return;
-    }
-    final controller = ref.read(
+    final pointController = ref.read(
+      pointReadingControllerProvider(widget.book.libraryId).notifier,
+    );
+    final followController = ref.read(
       followReadingControllerProvider(widget.book.libraryId).notifier,
     );
-    controller.selectSentence(next);
-    unawaited(controller.playDemonstration());
+
+    if (targetPageIndex >= 0 && targetPageIndex != _currentIndex) {
+      // Stop both readers before starting the page animation. The page
+      // callback skips its normal stop for this controlled transition, so it
+      // cannot race the target sentence's playback after the animation.
+      _pendingSentenceNavigationPage = targetPageIndex;
+      final stopSequence = ++_tapSequence;
+      await _stopReaderForPageChange(stopSequence);
+      if (!_isSentenceNavigationCurrent(navigationSequence)) return;
+      if (!_pageController.hasClients) return;
+      await _pageController.animateToPage(
+        targetPageIndex,
+        duration: const Duration(milliseconds: 250),
+        curve: Curves.easeOut,
+      );
+      if (!_isSentenceNavigationCurrent(navigationSequence)) return;
+    }
+
+    if (!_isSentenceNavigationCurrent(navigationSequence)) return;
+    followController.selectSentence(target);
+    await pointController.playSentence(target);
   }
+
+  bool _isSentenceNavigationCurrent(int sequence) =>
+      mounted && sequence == _sentenceNavigationSequence;
 
   void _handlePointReadingFeedback(
     AsyncValue<PointReadingState>? previous,
@@ -679,6 +824,11 @@ class _ReaderViewState extends ConsumerState<_ReaderView>
   ) {
     if (next.hasError && !_alignmentFailureShown) {
       _alignmentFailureShown = true;
+      final error = next.error;
+      debugPrint('readalong.point_reading load failed: $error');
+      if (error is PointReadingLoadException && error.cause != null) {
+        debugPrint('readalong.point_reading cause: ${error.cause}');
+      }
       _showMessageAfterFrame('点读资源暂时不可用，请重新导入绘本');
       return;
     }
@@ -764,7 +914,7 @@ class _ReaderViewState extends ConsumerState<_ReaderView>
       followReadingControllerProvider(widget.book.libraryId).notifier,
     );
     await controller.acknowledgeResult();
-    await controller.playDemonstration();
+    await _playSelectedDemonstration();
   }
 
   Future<void> _finishScoreAndClose() => ref
@@ -799,11 +949,12 @@ class _ReaderViewState extends ConsumerState<_ReaderView>
     );
     await controller.acknowledgeResult();
     if (!mounted) return;
-    await _nextFollowSentence(
-      ref
+    await _navigateSentence(
+      delta: 1,
+      pointReading: ref
           .read(pointReadingControllerProvider(widget.book.libraryId))
           .valueOrNull,
-      sentence,
+      current: sentence,
     );
   }
 
@@ -896,114 +1047,8 @@ class _ReaderHighlightPainter extends CustomPainter {
   bool shouldRepaint(covariant _ReaderHighlightPainter oldDelegate) => false;
 }
 
-class _ReaderSubtitleBand extends StatelessWidget {
-  const _ReaderSubtitleBand({
-    required this.state,
-    required this.onReplay,
-    required this.onFollow,
-    required this.compact,
-  });
-
-  final PointReadingState state;
-  final VoidCallback onReplay;
-  final VoidCallback onFollow;
-  final bool compact;
-
-  @override
-  Widget build(BuildContext context) {
-    final sentence = state.subtitleSentence!;
-    final segments = buildSubtitleSegments(
-      sentence.text,
-      sentence.wordTimings,
-    );
-    final fontSize = compact ? 20.0 : 26.0;
-    final progress = playbackProgress(
-      state.playbackPosition,
-      state.playbackDuration,
-    );
-    return _ReaderControlPanelFrame(
-      key: const ValueKey('reader-subtitle-band'),
-      child: Padding(
-        padding: EdgeInsets.symmetric(
-          horizontal: compact ? AppSpacing.cardPadding : AppSpacing.pageMargin,
-          vertical: compact ? AppSpacing.unit : AppSpacing.cardPadding,
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Semantics(
-              label: sentence.text,
-              container: true,
-              child: ExcludeSemantics(
-                child: _SubtitleText(
-                  sentence: sentence,
-                  segments: segments,
-                  activeWordIndex: state.activeWordIndex,
-                  fontSize: fontSize,
-                ),
-              ),
-            ),
-            const SizedBox(height: AppSpacing.unit),
-            Row(
-              children: [
-                SizedBox(
-                  width: 48,
-                  child: Text(
-                    _formatPlaybackTime(state.playbackPosition),
-                    key: const ValueKey('reader-subtitle-elapsed'),
-                    style: const TextStyle(color: AppColors.textSecondary),
-                  ),
-                ),
-                Expanded(
-                  child: LinearProgressIndicator(
-                    key: const ValueKey('reader-subtitle-progress'),
-                    value: progress,
-                    minHeight: 5,
-                    color: AppColors.primary,
-                    backgroundColor: AppColors.border,
-                    borderRadius: BorderRadius.circular(3),
-                  ),
-                ),
-                SizedBox(
-                  width: 48,
-                  child: Text(
-                    _formatPlaybackTime(state.playbackDuration),
-                    key: const ValueKey('reader-subtitle-duration'),
-                    textAlign: TextAlign.end,
-                    style: const TextStyle(color: AppColors.textSecondary),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: AppSpacing.unit),
-            Wrap(
-              spacing: AppSpacing.unit,
-              runSpacing: AppSpacing.unit,
-              alignment: WrapAlignment.center,
-              children: [
-                OutlinedButton.icon(
-                  key: const ValueKey('reader-replay-sentence'),
-                  onPressed: onReplay,
-                  icon: const Icon(Icons.replay),
-                  label: Text(state.isPlaying ? '重新播放' : '重播本句'),
-                ),
-                FilledButton.icon(
-                  key: const ValueKey('reader-follow-sentence'),
-                  onPressed: onFollow,
-                  icon: const Icon(Icons.mic_none_rounded),
-                  label: const Text('跟读这句'),
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
 class _ReaderControlPanelFrame extends StatelessWidget {
-  const _ReaderControlPanelFrame({super.key, required this.child});
+  const _ReaderControlPanelFrame({required this.child});
 
   final Widget child;
 
@@ -1036,142 +1081,99 @@ class _ReaderControlPanelFrame extends StatelessWidget {
       );
 }
 
-enum _ReaderMode { point, follow }
-
-class _ReaderModeSwitch extends StatelessWidget {
-  const _ReaderModeSwitch({required this.mode, required this.onChanged});
-
-  final _ReaderMode mode;
-  final ValueChanged<_ReaderMode> onChanged;
-
-  @override
-  Widget build(BuildContext context) => Semantics(
-        label: mode == _ReaderMode.point ? '当前为点读模式' : '当前为跟读模式',
-        child: DecoratedBox(
-          decoration: BoxDecoration(
-            color: AppColors.bgAlt,
-            borderRadius: BorderRadius.circular(AppRadius.button),
-            border: Border.all(color: AppColors.border),
-          ),
-          child: Padding(
-            padding: const EdgeInsets.all(3),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                _ModeChoice(
-                  selected: mode == _ReaderMode.point,
-                  icon: Icons.touch_app_outlined,
-                  label: '点读',
-                  onPressed: () => onChanged(_ReaderMode.point),
-                ),
-                _ModeChoice(
-                  selected: mode == _ReaderMode.follow,
-                  icon: Icons.mic_none_rounded,
-                  label: '跟读',
-                  onPressed: () => onChanged(_ReaderMode.follow),
-                ),
-              ],
-            ),
-          ),
-        ),
-      );
-}
-
-class _ModeChoice extends StatelessWidget {
-  const _ModeChoice({
-    required this.selected,
-    required this.icon,
-    required this.label,
-    required this.onPressed,
-  });
-
-  final bool selected;
-  final IconData icon;
-  final String label;
-  final VoidCallback onPressed;
-
-  @override
-  Widget build(BuildContext context) => Material(
-        color: selected ? AppColors.primaryContainer : Colors.transparent,
-        borderRadius: BorderRadius.circular(AppRadius.button),
-        child: InkWell(
-          onTap: onPressed,
-          borderRadius: BorderRadius.circular(AppRadius.button),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(
-                  icon,
-                  size: 20,
-                  color: selected ? AppColors.primary : AppColors.textSecondary,
-                ),
-                const SizedBox(width: AppSpacing.unit / 2),
-                Text(
-                  label,
-                  style: TextStyle(
-                    color: selected
-                        ? AppColors.primaryDark
-                        : AppColors.textSecondary,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      );
-}
-
 class _FollowReadingPanel extends StatelessWidget {
   const _FollowReadingPanel({
     required this.state,
     required this.compact,
-    required this.onDemo,
+    required this.pointReadingError,
+    required this.pointPlaybackSentenceId,
+    required this.pointPlaybackWordIndex,
+    required this.onRetryPointReading,
     required this.onRecord,
     required this.onStop,
     required this.onCancelPreparation,
     required this.onRetry,
     required this.onMyRecording,
-    required this.onRepeat,
+    required this.onPrevious,
     required this.onNext,
+    required this.canPrevious,
+    required this.canNext,
   });
 
   final AsyncValue<FollowReadingState> state;
   final bool compact;
-  final VoidCallback onDemo;
+  final bool pointReadingError;
+  final String? pointPlaybackSentenceId;
+  final int? pointPlaybackWordIndex;
+  final VoidCallback onRetryPointReading;
   final VoidCallback onRecord;
   final VoidCallback onStop;
   final VoidCallback onCancelPreparation;
   final VoidCallback onRetry;
   final VoidCallback onMyRecording;
-  final VoidCallback onRepeat;
+  final VoidCallback onPrevious;
   final VoidCallback onNext;
+  final bool canPrevious;
+  final bool canNext;
 
   @override
-  Widget build(BuildContext context) => state.when(
-        loading: () => const _ReaderControlPanelFrame(
-          child: Padding(
-            padding: EdgeInsets.all(AppSpacing.cardPadding),
-            child: CircularProgressIndicator(),
+  Widget build(BuildContext context) {
+    if (pointReadingError) {
+      return _ReaderControlPanelFrame(
+        child: Padding(
+          padding: EdgeInsets.symmetric(
+            horizontal: compact ? AppSpacing.unit : AppSpacing.cardPadding,
+            vertical: compact ? AppSpacing.unit : AppSpacing.cardPadding,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text('点读资源暂时不可用'),
+              const SizedBox(height: AppSpacing.unit),
+              OutlinedButton.icon(
+                onPressed: onRetryPointReading,
+                icon: const Icon(Icons.refresh_rounded),
+                label: const Text('重新加载'),
+              ),
+            ],
           ),
         ),
-        error: (_, __) => const _ReaderControlPanelFrame(
-          child: Padding(
-            padding: EdgeInsets.all(AppSpacing.cardPadding),
-            child: Text('跟读功能暂时无法准备好，请稍后再试'),
-          ),
-        ),
-        data: (value) => _buildContent(context, value),
       );
+    }
+    return state.when(
+      loading: () => const _ReaderControlPanelFrame(
+        child: Padding(
+          padding: EdgeInsets.all(AppSpacing.cardPadding),
+          child: CircularProgressIndicator(),
+        ),
+      ),
+      error: (_, __) => const _ReaderControlPanelFrame(
+        child: Padding(
+          padding: EdgeInsets.all(AppSpacing.cardPadding),
+          child: Text('跟读功能暂时无法准备好，请稍后再试'),
+        ),
+      ),
+      data: (value) => _buildContent(context, value),
+    );
+  }
 
   Widget _buildContent(BuildContext context, FollowReadingState value) {
     final sentence = value.sentence;
+    final pointPlaybackActive = pointPlaybackSentenceId == sentence?.id &&
+        pointPlaybackWordIndex != null;
+    final activeWordIndex = value.phase == FollowReadingPhase.demonstrating
+        ? value.activeWordIndex
+        : pointPlaybackActive
+            ? pointPlaybackWordIndex
+            : null;
+    final panelPadding = EdgeInsets.symmetric(
+      horizontal: compact ? AppSpacing.unit : AppSpacing.cardPadding,
+      vertical: compact ? AppSpacing.unit : AppSpacing.cardPadding,
+    );
     if (sentence == null) {
-      return const _ReaderControlPanelFrame(
+      return _ReaderControlPanelFrame(
         child: Padding(
-          padding: EdgeInsets.all(AppSpacing.cardPadding),
+          padding: panelPadding,
           child: Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
@@ -1186,7 +1188,7 @@ class _FollowReadingPanel extends StatelessWidget {
     if (value.phase == FollowReadingPhase.scoring) {
       return _ReaderControlPanelFrame(
         child: Padding(
-          padding: const EdgeInsets.all(AppSpacing.cardPadding),
+          padding: panelPadding,
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -1206,17 +1208,17 @@ class _FollowReadingPanel extends StatelessWidget {
       final countdown = value.phase == FollowReadingPhase.countdown;
       return _ReaderControlPanelFrame(
         child: Padding(
-          padding: const EdgeInsets.all(AppSpacing.cardPadding),
+          padding: panelPadding,
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              _FollowSentenceText(sentence: sentence),
+              _FollowSentenceText(sentence: sentence, compact: compact),
               const SizedBox(height: AppSpacing.unit),
               Text(
                 countdown ? '${value.countdown}' : '麦克风准备中',
                 style: TextStyle(
                   color: AppColors.accent,
-                  fontSize: countdown ? 42 : 20,
+                  fontSize: countdown ? (compact ? 34 : 42) : 20,
                   fontWeight: FontWeight.w800,
                 ),
               ),
@@ -1225,10 +1227,11 @@ class _FollowReadingPanel extends StatelessWidget {
                 '看到“开始读吧”再开口，第一个字会更完整',
                 style: TextStyle(color: AppColors.textSecondary),
               ),
-              TextButton.icon(
+              IconButton(
+                key: const ValueKey('follow-cancel-preparation'),
                 onPressed: onCancelPreparation,
                 icon: const Icon(Icons.close_rounded),
-                label: const Text('取消这次'),
+                tooltip: '取消录音准备',
               ),
             ],
           ),
@@ -1243,11 +1246,11 @@ class _FollowReadingPanel extends StatelessWidget {
               : '听得很清楚，继续读吧';
       return _ReaderControlPanelFrame(
         child: Padding(
-          padding: const EdgeInsets.all(AppSpacing.cardPadding),
+          padding: panelPadding,
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              _FollowSentenceText(sentence: sentence),
+              _FollowSentenceText(sentence: sentence, compact: compact),
               const SizedBox(height: AppSpacing.unit),
               Text(
                 '${_formatPlaybackTime(value.elapsed)} / '
@@ -1264,14 +1267,18 @@ class _FollowReadingPanel extends StatelessWidget {
                         ? AppColors.accent
                         : AppColors.primaryDark),
               ),
-              const SizedBox(height: AppSpacing.cardPadding),
-              FilledButton.icon(
+              SizedBox(
+                  height: compact ? AppSpacing.unit : AppSpacing.cardPadding),
+              IconButton.filled(
                 key: const ValueKey('follow-stop-recording'),
-                style:
-                    FilledButton.styleFrom(backgroundColor: AppColors.danger),
+                constraints: const BoxConstraints.tightFor(
+                  width: 64,
+                  height: 64,
+                ),
+                style: IconButton.styleFrom(backgroundColor: AppColors.danger),
                 onPressed: onStop,
                 icon: const Icon(Icons.stop_rounded),
-                label: const Text('停止录音'),
+                tooltip: '停止录音',
               ),
             ],
           ),
@@ -1284,12 +1291,13 @@ class _FollowReadingPanel extends StatelessWidget {
       // not jump while the child is receiving feedback.
       return _ReaderControlPanelFrame(
         child: Padding(
-          padding: const EdgeInsets.all(AppSpacing.cardPadding),
+          padding: panelPadding,
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              _FollowSentenceText(sentence: sentence),
-              const SizedBox(height: AppSpacing.cardPadding),
+              _FollowSentenceText(sentence: sentence, compact: compact),
+              SizedBox(
+                  height: compact ? AppSpacing.unit : AppSpacing.cardPadding),
               const Text('评价完成啦'),
             ],
           ),
@@ -1299,16 +1307,17 @@ class _FollowReadingPanel extends StatelessWidget {
     if (value.phase == FollowReadingPhase.failed) {
       return _ReaderControlPanelFrame(
         child: Padding(
-          padding: const EdgeInsets.all(AppSpacing.cardPadding),
+          padding: panelPadding,
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              _FollowSentenceText(sentence: sentence),
+              _FollowSentenceText(sentence: sentence, compact: compact),
               const SizedBox(height: AppSpacing.unit),
               Text(value.failure ?? '分数马上来～',
                   textAlign: TextAlign.center,
                   style: const TextStyle(color: AppColors.textSecondary)),
-              const SizedBox(height: AppSpacing.cardPadding),
+              SizedBox(
+                  height: compact ? AppSpacing.unit : AppSpacing.cardPadding),
               Wrap(
                 spacing: AppSpacing.unit,
                 runSpacing: AppSpacing.unit,
@@ -1331,17 +1340,17 @@ class _FollowReadingPanel extends StatelessWidget {
     }
     return _ReaderControlPanelFrame(
       child: Padding(
-        padding: const EdgeInsets.all(AppSpacing.cardPadding),
+        padding: panelPadding,
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             _FollowSentenceText(
               sentence: sentence,
-              activeWordIndex: value.phase == FollowReadingPhase.demonstrating
-                  ? value.activeWordIndex
-                  : null,
+              activeWordIndex: activeWordIndex,
+              compact: compact,
             ),
-            const SizedBox(height: AppSpacing.cardPadding),
+            SizedBox(
+                height: compact ? AppSpacing.unit : AppSpacing.cardPadding),
             _FollowDemoProgress(
               value: value.phase == FollowReadingPhase.demonstrating
                   ? playbackProgress(
@@ -1352,34 +1361,13 @@ class _FollowReadingPanel extends StatelessWidget {
               visible: value.phase == FollowReadingPhase.demonstrating,
             ),
             const SizedBox(height: AppSpacing.unit),
-            Wrap(
-              spacing: AppSpacing.cardPadding,
-              runSpacing: AppSpacing.unit,
-              alignment: WrapAlignment.center,
-              children: [
-                OutlinedButton.icon(
-                  key: const ValueKey('follow-play-demonstration'),
-                  onPressed: value.phase == FollowReadingPhase.demonstrating
-                      ? null
-                      : onDemo,
-                  icon: Icon(value.phase == FollowReadingPhase.demonstrating
-                      ? Icons.graphic_eq_rounded
-                      : Icons.volume_up_outlined),
-                  label: Text(value.phase == FollowReadingPhase.demonstrating
-                      ? '示范播放中'
-                      : '听示范'),
-                ),
-                FilledButton.icon(
-                  key: const ValueKey('follow-start-recording'),
-                  style:
-                      FilledButton.styleFrom(backgroundColor: AppColors.accent),
-                  onPressed: value.phase == FollowReadingPhase.demonstrating
-                      ? null
-                      : onRecord,
-                  icon: const Icon(Icons.mic_none_rounded),
-                  label: const Text('开始录音'),
-                ),
-              ],
+            _ReaderSentenceNavigationBar(
+              canPrevious: canPrevious,
+              canNext: canNext,
+              recordingEnabled: value.phase != FollowReadingPhase.demonstrating,
+              onPrevious: onPrevious,
+              onRecord: onRecord,
+              onNext: onNext,
             ),
           ],
         ),
@@ -1392,15 +1380,83 @@ class _FollowSentenceText extends StatelessWidget {
   const _FollowSentenceText({
     required this.sentence,
     this.activeWordIndex,
+    this.compact = false,
   });
   final ReaderSentence sentence;
   final int? activeWordIndex;
+  final bool compact;
   @override
-  Widget build(BuildContext context) => _SubtitleText(
-        sentence: sentence,
-        segments: buildSubtitleSegments(sentence.text, sentence.wordTimings),
-        activeWordIndex: activeWordIndex,
-        fontSize: 24,
+  Widget build(BuildContext context) => Semantics(
+        label: sentence.text,
+        container: true,
+        child: ExcludeSemantics(
+          child: _SubtitleText(
+            sentence: sentence,
+            segments:
+                buildSubtitleSegments(sentence.text, sentence.wordTimings),
+            activeWordIndex: activeWordIndex,
+            fontSize: compact ? 18 : 24,
+          ),
+        ),
+      );
+}
+
+class _ReaderSentenceNavigationBar extends StatelessWidget {
+  const _ReaderSentenceNavigationBar({
+    required this.canPrevious,
+    required this.canNext,
+    required this.recordingEnabled,
+    required this.onPrevious,
+    required this.onRecord,
+    required this.onNext,
+  });
+
+  final bool canPrevious;
+  final bool canNext;
+  final bool recordingEnabled;
+  final VoidCallback onPrevious;
+  final VoidCallback onRecord;
+  final VoidCallback onNext;
+
+  @override
+  Widget build(BuildContext context) => Row(
+        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+        children: [
+          IconButton(
+            key: const ValueKey('reader-previous-sentence'),
+            onPressed: canPrevious ? onPrevious : null,
+            tooltip: '上一句',
+            constraints: const BoxConstraints.tightFor(
+              width: AppSizes.minTouchTarget,
+              height: AppSizes.minTouchTarget,
+            ),
+            icon: const Icon(Icons.arrow_back_rounded),
+          ),
+          IconButton.filled(
+            key: const ValueKey('follow-start-recording'),
+            onPressed: recordingEnabled ? onRecord : null,
+            tooltip: '开始录音',
+            constraints: const BoxConstraints.tightFor(
+              width: 64,
+              height: 64,
+            ),
+            style: IconButton.styleFrom(
+              backgroundColor: AppColors.accent,
+              foregroundColor: AppColors.bgAlt,
+            ),
+            icon: const Icon(Icons.mic_none_rounded),
+          ),
+          IconButton(
+            key: const ValueKey('reader-next-sentence'),
+            onPressed: canNext ? onNext : null,
+            tooltip: '下一句',
+            constraints: const BoxConstraints.tightFor(
+              width: AppSizes.minTouchTarget,
+              height: AppSizes.minTouchTarget,
+            ),
+            icon: const Icon(Icons.arrow_forward_rounded),
+          ),
+        ],
       );
 }
 

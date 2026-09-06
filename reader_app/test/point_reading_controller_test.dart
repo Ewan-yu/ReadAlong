@@ -230,7 +230,7 @@ void main() {
     await playing;
   });
 
-  test('共享 bbox 按 seq 连续播放并逐句更新高亮', () async {
+  test('共享 bbox 点读只播放第一句，后续句可单独播放', () async {
     book = PointReadingBook(
       libraryId: 'copy-2',
       sentences: [
@@ -243,17 +243,23 @@ void main() {
     final playing = controller.playAt(1, const Offset(0.2, 0.15));
     await pumpEventQueue();
     expect(currentState().activeSentence?.id, 'first');
+    expect(player.played.map((clip) => clip.path), ['first.ogg']);
 
     player.pending[0].complete();
+    await playing;
+    expect(currentState().activeSentence, isNull);
+
+    final next = controller.playSentence(
+      book
+          .sentencesForPage(1)
+          .singleWhere((sentence) => sentence.id == 'second'),
+    );
     await pumpEventQueue();
     expect(player.played.map((clip) => clip.path), ['first.ogg', 'second.ogg']);
     expect(currentState().activeSentence?.id, 'second');
     expect(currentState().subtitleSentence?.id, 'second');
-    expect(currentState().playbackPosition, Duration.zero);
-
     player.pending[1].complete();
-    await playing;
-    expect(currentState().activeSentence, isNull);
+    await next;
   });
 
   test('快速新点击使旧 Future 失效且旧完成不清除新高亮', () async {

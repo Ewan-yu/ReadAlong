@@ -217,7 +217,8 @@ final followReadingControllerProvider = AutoDisposeAsyncNotifierProviderFamily<
 
 final class FollowReadingController
     extends AutoDisposeFamilyAsyncNotifier<FollowReadingState, String> {
-  late final AudioRecordingService _recorder;
+  late final Future<AudioRecordingService> _recorderFuture;
+  AudioRecordingService? _recorder;
   late final SentenceAudioPlayer _player;
   late final ScoringProvider _scorer;
   late final RecordingPreparationProtocol _preparation;
@@ -230,14 +231,18 @@ final class FollowReadingController
   var _recordSequence = 0;
   var _generation = 0;
   var _disposed = false;
+  ReaderSentence? _pendingSentence;
   Duration _contentOffset = Duration.zero;
   Duration _contentLeadIn = Duration.zero;
 
   @override
-  Future<FollowReadingState> build(String libraryId) async {
+  FollowReadingState build(String libraryId) {
     _player = ref.watch(sentenceAudioPlayerProvider);
     _scorer = ref.watch(scoringProvider);
-    _recorder = await ref.watch(recordingServiceProvider.future);
+    // The reading surface should be interactive before the microphone's
+    // cleanup/initialization finishes. Recording awaits this future when the
+    // child actually presses the record button.
+    _recorderFuture = ref.watch(recordingServiceProvider.future);
     _preparation = ref.watch(recordingPreparationProtocolProvider);
     ref.onDispose(() {
       final record = state.valueOrNull?.record;
@@ -245,14 +250,21 @@ final class FollowReadingController
       _generation++;
       unawaited(_disposeTransientState(record));
     });
-    return const FollowReadingState();
+    final pendingSentence = _pendingSentence;
+    _pendingSentence = null;
+    return FollowReadingState(sentence: pendingSentence);
   }
 
   void selectSentence(ReaderSentence sentence) {
+    // The reader can resolve alignment before this async notifier has
+    // published its initial state. Keep the selection instead of dropping
+    // it, so opening a page never falls back to the "tap a sentence" prompt.
+    _pendingSentence = sentence;
     _generation++;
     unawaited(_cancelActiveRecording());
     final current = state.valueOrNull;
     if (current == null) return;
+    _pendingSentence = null;
     unawaited(_deleteRecording(current.record));
     _setState(
       FollowReadingState(sentence: sentence),
@@ -336,14 +348,19 @@ final class FollowReadingController
     try {
       await _player.stop();
       if (!_isCurrent(generation)) return;
+      final recorder = _recorder = await _recorderFuture;
+      if (!_isCurrent(generation)) {
+        await recorder.cancel();
+        return;
+      }
       await _deleteRecording(current.record);
       if (!_isCurrent(generation)) return;
-      final session = await _recorder.start(
+      final session = await recorder.start(
         libraryId: arg,
         sentenceId: sentence.id,
       );
       if (!_isCurrent(generation)) {
-        await _recorder.cancel();
+        await recorder.cancel();
         return;
       }
       _setState(current.copyWith(
@@ -376,7 +393,7 @@ final class FollowReadingController
       _contentOffset = followRecordingContentOffset(preparationElapsed);
       _contentLeadIn = followRecordingContentLeadIn(preparationElapsed);
       if (!_isCurrent(generation)) {
-        await _recorder.cancel();
+        await recorder.cancel();
         return;
       }
       _stopwatch = Stopwatch()..start();
@@ -425,7 +442,7 @@ final class FollowReadingController
       });
     } on RecordingPreparationCancelled {
       try {
-        await _recorder.cancel();
+        await _recorder?.cancel();
       } on Object {}
     } on RecordingException catch (error) {
       if (_isCurrent(generation)) _setFailure(error.message);
@@ -438,7 +455,7 @@ final class FollowReadingController
     final current = state.valueOrNull;
     if (current == null || !current.isPreparing) return;
     ++_generation;
-    await _recorder.cancel();
+    await _recorder?.cancel();
     _setState(current.copyWith(
       phase: FollowReadingPhase.idle,
       countdown: 0,
@@ -468,7 +485,11 @@ final class FollowReadingController
         level: 0,
       ));
       await _stopTimersAndLevels();
-      final audioPath = await _recorder.stop();
+      final recorder = _recorder;
+      if (recorder == null) {
+        throw const RecordingException('录音服务尚未准备好，请再试一次');
+      }
+      final audioPath = await recorder.stop();
       if (!_isCurrent(generation)) return;
       final record = FollowRecording(
         id: ++_recordSequence,
@@ -594,7 +615,7 @@ final class FollowReadingController
   Future<void> _cancelActiveRecording() async {
     await _stopTimersAndLevels();
     try {
-      await _recorder.cancel();
+      await _recorder?.cancel();
     } on Object {
       // The service may not have initialized when auto-dispose runs.
     }

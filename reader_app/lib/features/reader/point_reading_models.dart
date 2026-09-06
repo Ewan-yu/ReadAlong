@@ -181,4 +181,9 @@ final class PointReadingLoadException extends PointReadingException {
   const PointReadingLoadException(super.message, {this.cause});
 
   final Object? cause;
+
+  @override
+  String toString() => cause == null
+      ? super.toString()
+      : '$runtimeType: $message (cause: $cause)';
 }

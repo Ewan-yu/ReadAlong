@@ -445,7 +445,31 @@ void main() {
     final book = await prepareBook(tester, pageCount: 1);
     final pointBook = PointReadingBook(
       libraryId: book.libraryId,
-      sentences: [sentence(id: 'first', sequence: 1, bbox: bbox)],
+      sentences: [
+        sentence(
+          id: 'first',
+          sequence: 1,
+          text: 'My dad.',
+          clipEnd: const Duration(seconds: 2),
+          bbox: bbox,
+          wordTimings: [
+            ReaderWordTiming(
+              id: 'first-word-1',
+              sequence: 1,
+              word: 'My',
+              start: Duration.zero,
+              end: const Duration(seconds: 1),
+            ),
+            ReaderWordTiming(
+              id: 'first-word-2',
+              sequence: 2,
+              word: 'dad.',
+              start: const Duration(seconds: 1),
+              end: const Duration(seconds: 2),
+            ),
+          ],
+        ),
+      ],
     );
     final player = _WidgetAudioPlayer();
     await pumpReader(
@@ -463,6 +487,10 @@ void main() {
     );
 
     expect(player.played.map((clip) => clip.path), ['first.ogg']);
+    expect(
+      find.byKey(const ValueKey('reader-subtitle-active-word-0')),
+      findsOneWidget,
+    );
     final highlight = find.byKey(const ValueKey('reader-highlight-first'));
     expect(highlight, findsOneWidget);
     final surface = find.byKey(const ValueKey('reader-tap-surface-1'));
@@ -482,6 +510,13 @@ void main() {
     expect(actual.top, closeTo(expected.top, 0.01));
     expect(actual.width, closeTo(expected.width, 0.01));
     expect(actual.height, closeTo(expected.height, 0.01));
+
+    player.positionCallbacks.single!(const Duration(milliseconds: 1200));
+    await tester.pump();
+    expect(
+      find.byKey(const ValueKey('reader-subtitle-active-word-1')),
+      findsOneWidget,
+    );
   });
 
   testWidgets('2x 缩放和平移后点击仍命中且高亮同步变换', (tester) async {
@@ -692,7 +727,7 @@ void main() {
         find.byKey(const ValueKey('reader-highlight-second')), findsOneWidget);
   });
 
-  testWidgets('点句显示字幕并按位置更新当前词和只读进度', (tester) async {
+  testWidgets('点句直接显示跟读操作并按位置更新页面高亮', (tester) async {
     final book = await prepareBook(tester, pageCount: 1);
     final pointBook = PointReadingBook(
       libraryId: book.libraryId,
@@ -742,38 +777,233 @@ void main() {
       normalized: const Offset(0.2, 0.25),
     );
 
-    expect(find.byKey(const ValueKey('reader-subtitle-band')), findsOneWidget);
+    expect(find.byKey(const ValueKey('follow-stable-panel')), findsOneWidget);
     expect(find.bySemanticsLabel('Good night.'), findsOneWidget);
+    expect(find.text('听示范'), findsNothing);
+    expect(find.text('开始录音'), findsNothing);
+    expect(find.byTooltip('上一句'), findsOneWidget);
+    expect(find.byTooltip('开始录音'), findsOneWidget);
+    expect(find.byTooltip('下一句'), findsOneWidget);
+    expect(find.text('重播本句'), findsNothing);
+    expect(find.text('跟读这句'), findsNothing);
     expect(
-      find.byKey(const ValueKey('reader-subtitle-active-word-0')),
-      findsOneWidget,
-    );
-    expect(find.text('00:03'), findsOneWidget);
+        find.byKey(const ValueKey('reader-highlight-timed')), findsOneWidget);
 
     player.positionCallbacks.single!(const Duration(milliseconds: 1500));
     await tester.pump();
 
     expect(
-      find.byKey(const ValueKey('reader-subtitle-active-word-1')),
-      findsOneWidget,
-    );
-    expect(find.text('00:01'), findsOneWidget);
-    final progress = tester.widget<LinearProgressIndicator>(
-      find.byKey(const ValueKey('reader-subtitle-progress')),
-    );
-    expect(progress.value, closeTo(0.5, 0.000001));
+        find.byKey(const ValueKey('reader-highlight-timed')), findsOneWidget);
 
     player.pending.single.complete();
     await tester.pumpAndSettle();
-    expect(find.byKey(const ValueKey('reader-subtitle-band')), findsOneWidget);
-    expect(find.text('00:03'), findsNWidgets(2));
+    expect(find.byKey(const ValueKey('follow-stable-panel')), findsOneWidget);
+    expect(find.text('听示范'), findsNothing);
+    expect(find.text('开始录音'), findsNothing);
+    expect(find.byTooltip('开始录音'), findsOneWidget);
+  });
+
+  testWidgets('进入绘本默认选中当前页第一句并保持工具栏高度稳定', (tester) async {
+    final book = await prepareBook(tester, pageCount: 2);
+    final pointBook = PointReadingBook(
+      libraryId: book.libraryId,
+      sentences: [
+        sentence(
+          id: 'default-first',
+          sequence: 1,
+          pageNumber: 1,
+          text: 'The first sentence is ready.',
+          bbox: const NormalizedRect(x: .1, y: .2, width: .4, height: .1),
+        ),
+        sentence(
+          id: 'default-second',
+          sequence: 2,
+          pageNumber: 2,
+          text: 'The second page is ready.',
+          bbox: const NormalizedRect(x: .1, y: .2, width: .4, height: .1),
+        ),
+      ],
+    );
+    final player = _WidgetAudioPlayer();
+    await pumpReader(
+      tester,
+      book: Future.value(book),
+      pointReadingBook: Future.value(pointBook),
+      audioPlayer: player,
+    );
+    await tester.pumpAndSettle();
+
+    final followPanel = find.byKey(const ValueKey('follow-stable-panel'));
+    expect(followPanel, findsOneWidget);
+    final panelHeight = tester.getSize(followPanel).height;
+    expect(find.text('The first sentence is ready.'), findsOneWidget);
+    expect(find.byTooltip('上一句'), findsOneWidget);
+    expect(find.byTooltip('开始录音'), findsOneWidget);
+    expect(find.byTooltip('下一句'), findsOneWidget);
+    expect(player.played, isEmpty);
+
+    await tester.tap(find.byKey(const ValueKey('reader-thumbnail-2')));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('follow-stable-panel')), findsOneWidget);
+    expect(find.text('The first sentence is ready.'), findsNothing);
+    expect(find.text('The second page is ready.'), findsOneWidget);
+    expect(tester.getSize(followPanel).height, panelHeight);
+  });
+
+  testWidgets('共享点读框只播放第一句，上一句下一句无需录音即可切换', (tester) async {
+    final book = await prepareBook(tester, pageCount: 1);
+    const sharedBox = NormalizedRect(
+      x: 0.1,
+      y: 0.2,
+      width: 0.5,
+      height: 0.1,
+    );
+    final pointBook = PointReadingBook(
+      libraryId: book.libraryId,
+      sentences: [
+        sentence(
+          id: 'shared-second',
+          sequence: 2,
+          bbox: sharedBox,
+          shared: true,
+        ),
+        sentence(
+          id: 'shared-first',
+          sequence: 1,
+          bbox: sharedBox,
+          shared: true,
+        ),
+      ],
+    );
+    final player = _WidgetAudioPlayer();
+    await pumpReader(
+      tester,
+      book: Future.value(book),
+      pointReadingBook: Future.value(pointBook),
+      audioPlayer: player,
+    );
+    await tester.pumpAndSettle();
+
+    await tapNormalized(
+      tester,
+      pageNumber: 1,
+      normalized: const Offset(0.2, 0.25),
+    );
+    expect(player.played.map((clip) => clip.path), ['shared-first.ogg']);
+    expect(find.text('shared-first'), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('reader-next-sentence')));
+    await tester.pump();
+    expect(player.played.map((clip) => clip.path), [
+      'shared-first.ogg',
+      'shared-second.ogg',
+    ]);
+    expect(find.text('shared-second'), findsOneWidget);
+    expect(find.text('开始录音'), findsNothing);
+
+    await tester.tap(find.byKey(const ValueKey('reader-previous-sentence')));
+    await tester.pump();
+    expect(player.played.map((clip) => clip.path), [
+      'shared-first.ogg',
+      'shared-second.ogg',
+      'shared-first.ogg',
+    ]);
+
+    player.pending.last.complete();
+    await tester.pump();
+  });
+
+  testWidgets('上一句下一句跨页后自动切换页面并播放目标句', (tester) async {
+    final book = await prepareBook(tester, pageCount: 2);
+    final pointBook = PointReadingBook(
+      libraryId: book.libraryId,
+      sentences: [
+        sentence(
+          id: 'page-one-sentence',
+          sequence: 1,
+          pageNumber: 1,
+          bbox: const NormalizedRect(x: .1, y: .2, width: .4, height: .1),
+        ),
+        sentence(
+          id: 'page-two-sentence',
+          sequence: 2,
+          pageNumber: 2,
+          bbox: const NormalizedRect(x: .1, y: .2, width: .4, height: .1),
+        ),
+      ],
+    );
+    final player = _WidgetAudioPlayer();
+    await pumpReader(
+      tester,
+      book: Future.value(book),
+      pointReadingBook: Future.value(pointBook),
+      audioPlayer: player,
+    );
+    await tester.pumpAndSettle();
+
+    await tapNormalized(
+      tester,
+      pageNumber: 1,
+      normalized: const Offset(0.2, 0.25),
+    );
+    await tester.tap(find.byKey(const ValueKey('reader-next-sentence')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('2 / 2'), findsOneWidget);
+    expect(player.played.map((clip) => clip.path), [
+      'page-one-sentence.ogg',
+      'page-two-sentence.ogg',
+    ]);
     expect(
-      find.byKey(const ValueKey('reader-subtitle-active-word-1')),
-      findsNothing,
+      find.byKey(const ValueKey('reader-highlight-page-two-sentence')),
+      findsOneWidget,
+    );
+    expect(find.byKey(const ValueKey('follow-stable-panel')), findsOneWidget);
+
+    player.pending.last.complete();
+    await tester.pump();
+  });
+
+  testWidgets('第一句和最后一句的导航按钮按边界禁用', (tester) async {
+    final book = await prepareBook(tester, pageCount: 1);
+    final pointBook = PointReadingBook(
+      libraryId: book.libraryId,
+      sentences: [
+        sentence(
+          id: 'only-sentence',
+          sequence: 1,
+          bbox: const NormalizedRect(x: .1, y: .2, width: .4, height: .1),
+        ),
+      ],
+    );
+    await pumpReader(
+      tester,
+      book: Future.value(book),
+      pointReadingBook: Future.value(pointBook),
+    );
+    await tester.pumpAndSettle();
+    await tapNormalized(
+      tester,
+      pageNumber: 1,
+      normalized: const Offset(0.2, 0.25),
+    );
+
+    expect(
+      tester
+          .widget<IconButton>(
+            find.byKey(const ValueKey('reader-previous-sentence')),
+          )
+          .onPressed,
+      isNull,
     );
     expect(
-      find.byKey(const ValueKey('reader-subtitle-active-word-null')),
-      findsNothing,
+      tester
+          .widget<IconButton>(
+            find.byKey(const ValueKey('reader-next-sentence')),
+          )
+          .onPressed,
+      isNull,
     );
   });
 
@@ -809,6 +1039,7 @@ void main() {
       normalized: const Offset(0.2, 0.25),
     );
 
+    expect(find.byKey(const ValueKey('follow-stable-panel')), findsOneWidget);
     expect(find.text(fullText), findsOneWidget);
     expect(
       find.byKey(const ValueKey('reader-subtitle-active-word-0')),
@@ -816,7 +1047,7 @@ void main() {
     );
   });
 
-  testWidgets('翻页收起字幕且不恢复上一页内容', (tester) async {
+  testWidgets('翻页收起当前字幕但保留稳定工具栏', (tester) async {
     final book = await prepareBook(tester, pageCount: 2);
     final pointBook = PointReadingBook(
       libraryId: book.libraryId,
@@ -847,15 +1078,16 @@ void main() {
       pageNumber: 1,
       normalized: const Offset(0.2, 0.25),
     );
-    expect(find.byKey(const ValueKey('reader-subtitle-band')), findsOneWidget);
+    expect(find.byKey(const ValueKey('follow-stable-panel')), findsOneWidget);
 
     await tester.tap(find.byKey(const ValueKey('reader-thumbnail-2')));
     await tester.pumpAndSettle();
 
-    expect(find.byKey(const ValueKey('reader-subtitle-band')), findsNothing);
+    expect(find.byKey(const ValueKey('follow-stable-panel')), findsOneWidget);
+    expect(find.text('Page one sentence.'), findsNothing);
     player.positionCallbacks.single!(const Duration(milliseconds: 700));
     await tester.pump();
-    expect(find.byKey(const ValueKey('reader-subtitle-band')), findsNothing);
+    expect(find.byKey(const ValueKey('follow-stable-panel')), findsOneWidget);
   });
 
   testWidgets('360 高度下长字幕可读且不显示延后控件', (tester) async {
@@ -894,15 +1126,20 @@ void main() {
       normalized: const Offset(0.2, 0.25),
     );
 
-    expect(find.byKey(const ValueKey('reader-subtitle-band')), findsOneWidget);
+    expect(find.byKey(const ValueKey('follow-stable-panel')), findsOneWidget);
     expect(tester.takeException(), isNull);
     expect(find.text('全文播放'), findsNothing);
     expect(find.text('重播本句'), findsNothing);
+    expect(find.text('跟读这句'), findsNothing);
+    expect(find.text('听示范'), findsNothing);
     expect(find.text('开始录音'), findsNothing);
+    expect(find.byTooltip('上一句'), findsOneWidget);
+    expect(find.byTooltip('开始录音'), findsOneWidget);
+    expect(find.byTooltip('下一句'), findsOneWidget);
     expect(find.byType(Slider), findsNothing);
   });
 
-  testWidgets('点读与跟读面板等高并隔离重绘以保护低性能模拟器', (tester) async {
+  testWidgets('点读面板直接进入跟读且面板稳定', (tester) async {
     final book = await prepareBook(tester, pageCount: 1);
     final pointBook = PointReadingBook(
       libraryId: book.libraryId,
@@ -933,23 +1170,23 @@ void main() {
       normalized: const Offset(0.2, 0.25),
     );
 
-    final pointPanel = find.byKey(const ValueKey('point-stable-panel'));
-    expect(pointPanel, findsOneWidget);
-    final pointPanelHeight = tester.getSize(pointPanel).height;
+    final followPanel = find.byKey(const ValueKey('follow-stable-panel'));
+    expect(followPanel, findsOneWidget);
+    final panelHeight = tester.getSize(followPanel).height;
     expect(
-      pointPanelHeight,
+      panelHeight,
       inInclusiveRange(
         AppSizes.readerControlPanelMinHeight,
         AppSizes.readerControlPanelMaxHeight,
       ),
     );
 
-    await tester.tap(find.text('跟读'));
-    await tester.pump();
-
-    final followPanel = find.byKey(const ValueKey('follow-stable-panel'));
-    expect(followPanel, findsOneWidget);
-    expect(tester.getSize(followPanel).height, pointPanelHeight);
+    expect(find.text('点读'), findsNothing);
+    expect(find.text('跟读'), findsNothing);
+    expect(find.text('听示范'), findsNothing);
+    expect(find.text('开始录音'), findsNothing);
+    expect(find.byTooltip('开始录音'), findsOneWidget);
+    expect(tester.getSize(followPanel).height, panelHeight);
     expect(
       find.descendant(of: followPanel, matching: find.byType(RepaintBoundary)),
       findsWidgets,
