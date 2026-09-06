@@ -1,8 +1,11 @@
+import pytest
+
 from app.models.audio import AudioWordTiming
 from app.pipeline.audio_validation import (
     estimated_word_timings,
     is_suspect_duration,
     normalized_words,
+    repair_word_timings,
     scale_word_timings,
     validate_word_timings,
 )
@@ -63,3 +66,21 @@ def test_scaled_word_timings_follow_tempo_adjusted_audio() -> None:
     assert scale_word_timings(source, 1 / 0.75) == (
         AudioWordTiming(word="hello", t_start=0.4, t_end=0.8),
     )
+
+
+def test_repair_word_timings_handles_overlaps_and_short_boundaries() -> None:
+    source = (
+        AudioWordTiming(word="before", t_start=1.0, t_end=1.1),
+        AudioWordTiming(word="to", t_start=1.09, t_end=1.1),
+        AudioWordTiming(word="after", t_start=1.1, t_end=1.3),
+    )
+
+    repaired = repair_word_timings(source, minimum_duration_seconds=0.03)
+
+    assert [item.word for item in repaired] == ["before", "to", "after"]
+    assert repaired[0].t_start == pytest.approx(1.0)
+    assert repaired[0].t_end == pytest.approx(1.1)
+    assert repaired[1].t_start == pytest.approx(1.1)
+    assert repaired[1].t_end == pytest.approx(1.13)
+    assert repaired[2].t_start == pytest.approx(1.13)
+    assert repaired[2].t_end == pytest.approx(1.3)

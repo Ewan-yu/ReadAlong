@@ -6,6 +6,9 @@ import unicodedata
 from app.models.audio import AudioWordTiming
 
 
+MINIMUM_REPAIRED_WORD_DURATION_SECONDS = 0.01
+
+
 _WORDS = re.compile(r"[a-z0-9]+(?:['-][a-z0-9]+)*")
 
 
@@ -14,6 +17,32 @@ def normalized_words(text: str) -> tuple[str, ...]:
 
     normalized = unicodedata.normalize("NFKC", text).casefold().replace("’", "'")
     return tuple(_WORDS.findall(normalized))
+
+
+def repair_word_timings(
+    timings: tuple[AudioWordTiming, ...],
+    *,
+    minimum_duration_seconds: float = MINIMUM_REPAIRED_WORD_DURATION_SECONDS,
+) -> tuple[AudioWordTiming, ...]:
+    """Make model-produced word timings safe for sequential consumers.
+
+    ASR and forced-alignment engines occasionally return overlapping words or a
+    word whose end is equal to the previous word's end. The individual model
+    validates each interval, but downstream subtitle/tap-to-read consumers need
+    a monotonic sequence as well. Preserve the model's ordering and move only
+    the affected boundary forward; never construct a zero/negative interval.
+    """
+
+    if minimum_duration_seconds <= 0:
+        raise ValueError("minimum_duration_seconds must be positive")
+    repaired: list[AudioWordTiming] = []
+    previous_end = 0.0
+    for timing in timings:
+        start = max(timing.t_start, previous_end)
+        end = max(timing.t_end, start + minimum_duration_seconds)
+        repaired.append(AudioWordTiming(word=timing.word, t_start=start, t_end=end))
+        previous_end = end
+    return tuple(repaired)
 
 
 def validate_word_timings(

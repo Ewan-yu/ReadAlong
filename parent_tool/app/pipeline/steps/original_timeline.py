@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from difflib import SequenceMatcher
 
+from pydantic import ValidationError
+
 from app.models.audio import AudioWordTiming
 from app.models.errors import PipelineError
 from app.models.ocr import OcrSentence, OcrSentences
@@ -14,7 +16,7 @@ from app.models.original_timeline import (
     OriginalTimelineWord,
 )
 from app.models.pipeline import StepId, StepResult
-from app.pipeline.audio_validation import normalized_words
+from app.pipeline.audio_validation import normalized_words, repair_word_timings
 from app.pipeline.definitions import StepRunContext
 from app.pipeline.hashing import file_sha256
 from app.pipeline.paths import ensure_within
@@ -32,7 +34,7 @@ class OriginalTimelineStep:
     """Align final proofread text against the *confirmed* separated vocal stem."""
 
     step_id = StepId.ORIGINAL_TIMELINE
-    implementation_version = "original-timeline-v5"
+    implementation_version = "original-timeline-v6"
     params_model = OriginalTimelineParams
 
     def __init__(self, aligner: WordAligner, media_probe) -> None:
@@ -161,7 +163,9 @@ class OriginalTimelineStep:
                     status_code=422,
                 )
             matched = actual_words[found:found + len(expected_words)]
-            words = OriginalTimelineStep._timeline_words(expected_words, matched, previous_end)
+            words = OriginalTimelineStep._timeline_words(
+                expected_words, matched, previous_end, duration_ms=duration_ms
+            )
             if not words:
                 raise PipelineError(
                     "ORIGINAL_TIMELINE_WORD_MISMATCH",
@@ -169,17 +173,25 @@ class OriginalTimelineStep:
                     details={"sentence_id": sentence.id},
                     status_code=422,
                 )
-            output.append(
-                OriginalTimelineSentence(
-                    sentence_id=sentence.id,
-                    page_no=sentence.page_no,
-                    seq=sentence.seq,
-                    text=sentence.text,
-                    start_ms=words[0].start_ms,
-                    end_ms=words[-1].end_ms,
-                    words=words,
+            try:
+                output.append(
+                    OriginalTimelineSentence(
+                        sentence_id=sentence.id,
+                        page_no=sentence.page_no,
+                        seq=sentence.seq,
+                        text=sentence.text,
+                        start_ms=words[0].start_ms,
+                        end_ms=words[-1].end_ms,
+                        words=words,
+                    )
                 )
-            )
+            except ValidationError as exc:
+                raise PipelineError(
+                    "ORIGINAL_TIMELINE_TIMING_UNRELIABLE",
+                    "原音逐词时间边界异常，无法可靠生成歌词，请重试。",
+                    details={"sentence_id": sentence.id},
+                    status_code=422,
+                ) from exc
             previous_end = words[-1].end_ms
             cursor = found + len(expected_words)
         if not output:
@@ -189,17 +201,24 @@ class OriginalTimelineStep:
                 details={"recognized_word_count": len(actual_words)},
                 status_code=422,
             )
-        timeline = OriginalTimeline(
-            source=OriginalTimelineSource(
-                proofread_revision=proofread_revision,
-                original_audio_revision=original_audio_revision,
-                original_audio_sha256=original_audio_sha256,
-                vocal_sha256=vocal_sha256,
-            ),
-            audio_sha256=original_audio_sha256,
-            duration_ms=duration_ms,
-            sentences=tuple(output),
-        )
+        try:
+            timeline = OriginalTimeline(
+                source=OriginalTimelineSource(
+                    proofread_revision=proofread_revision,
+                    original_audio_revision=original_audio_revision,
+                    original_audio_sha256=original_audio_sha256,
+                    vocal_sha256=vocal_sha256,
+                ),
+                audio_sha256=original_audio_sha256,
+                duration_ms=duration_ms,
+                sentences=tuple(output),
+            )
+        except ValidationError as exc:
+            raise PipelineError(
+                "ORIGINAL_TIMELINE_TIMING_UNRELIABLE",
+                "原音逐词时间边界异常，无法可靠生成歌词，请重试。",
+                status_code=422,
+            ) from exc
         validate_timeline_timing_quality(timeline)
         return timeline
 
@@ -271,8 +290,13 @@ class OriginalTimelineStep:
                     "原音识别缺少校对文本中的词。",
                     status_code=422,
                 )
-            interval_start = actual[actual_start][1].t_start
-            interval_end = actual[actual_end - 1][1].t_end
+            interval_timings = tuple(item[1] for item in actual[actual_start:actual_end])
+            interval_start = interval_timings[0].t_start
+            # Use the furthest observed end when ASR word boxes overlap. The
+            # old last-word boundary could be before interval_start and create
+            # invalid weighted timings before the repair pass was reached.
+            interval_end = max(item.t_end for item in interval_timings)
+            interval_end = max(interval_end, interval_start + 0.01)
             weights = [max(1, len(word.replace("'", ""))) for word in expected[expected_start:expected_end]]
             total_weight = sum(weights)
             cursor_weight = 0
@@ -291,28 +315,24 @@ class OriginalTimelineStep:
                 "原音识别无法完整映射到校对文本。",
                 status_code=422,
             )
-        return OriginalTimelineStep._repair_short_discovery_words(
-            tuple(item for item in output if item is not None)
-        )
+        try:
+            return OriginalTimelineStep._repair_short_discovery_words(
+                tuple(item for item in output if item is not None)
+            )
+        except ValidationError as exc:
+            raise PipelineError(
+                "ORIGINAL_TIMELINE_TIMING_INVALID",
+                "原音识别返回了无效的词级时间，已跳过该句。",
+                status_code=422,
+            ) from exc
 
     @staticmethod
     def _repair_short_discovery_words(
         timings: tuple[AudioWordTiming, ...],
     ) -> tuple[AudioWordTiming, ...]:
-        """Use adjacent boundaries to repair stable-ts' occasional 10 ms word."""
+        """Repair short, overlapping or out-of-order discovery boundaries."""
 
-        repaired: list[AudioWordTiming] = []
-        for index, timing in enumerate(timings):
-            start = timing.t_start
-            end = timing.t_end
-            if end - start < .03:
-                previous_end = repaired[-1].t_end if repaired else start
-                next_start = timings[index + 1].t_start if index + 1 < len(timings) else end
-                available_start = max(previous_end, min(start, next_start - .03))
-                available_end = max(end, min(next_start, available_start + .04))
-                start, end = available_start, available_end
-            repaired.append(AudioWordTiming(word=timing.word, t_start=start, t_end=end))
-        return tuple(repaired)
+        return repair_word_timings(timings, minimum_duration_seconds=0.03)
 
     @staticmethod
     def _select_narrated_sentences(
@@ -396,6 +416,8 @@ class OriginalTimelineStep:
         expected: tuple[str, ...],
         matched: tuple[tuple[str, AudioWordTiming], ...],
         previous_end: int,
+        *,
+        duration_ms: int | None = None,
     ) -> tuple[OriginalTimelineWord, ...]:
         words: list[OriginalTimelineWord] = []
         last_end = previous_end
@@ -409,6 +431,16 @@ class OriginalTimelineStep:
                 # word and shifting later words forward instead of rejecting an
                 # otherwise usable narration timeline.
                 end = start + MINIMUM_WORD_DURATION_MS
+            if duration_ms is not None and end > duration_ms:
+                end = duration_ms
+                start = min(start, end - MINIMUM_WORD_DURATION_MS)
+                if start < last_end or end <= start:
+                    raise PipelineError(
+                        "ORIGINAL_TIMELINE_TIMING_UNRELIABLE",
+                        "原音逐词时间超出音频范围，无法可靠生成歌词，请重试。",
+                        details={"word": text},
+                        status_code=422,
+                    )
             words.append(OriginalTimelineWord(seq=index, text=text, start_ms=start, end_ms=end))
             last_end = end
         return tuple(words)

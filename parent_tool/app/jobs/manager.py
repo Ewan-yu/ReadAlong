@@ -216,6 +216,13 @@ class JobManager:
             self._publish(completed, "succeeded")
         except Exception as exc:
             cancelled = isinstance(exc, PipelineError) and exc.code == "JOB_CANCELLED"
+            if not cancelled:
+                LOGGER.exception(
+                    "Pipeline job %s failed: book=%s step=%s",
+                    job_id,
+                    prepared.plan.book_id,
+                    prepared.plan.step_id.value,
+                )
             completed_at = utc_now()
             error = self._error_info(exc)
             completed = self._finish_terminal(
@@ -300,5 +307,6 @@ class JobManager:
             return PipelineErrorInfo(code=exc.code, message=exc.message, details=exc.details)
         return PipelineErrorInfo(
             code="INTERNAL_PIPELINE_ERROR",
-            message="处理任务发生内部错误，请查看日志后重试。",
+            message="处理任务发生内部错误，系统已记录详细日志，请重试。",
+            details={"exception_type": type(exc).__name__},
         )

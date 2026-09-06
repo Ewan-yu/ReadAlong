@@ -440,5 +440,6 @@ class PipelineEngine:
             return PipelineErrorInfo(code=exc.code, message=exc.message, details=exc.details)
         return PipelineErrorInfo(
             code="INTERNAL_PIPELINE_ERROR",
-            message="处理步骤发生内部错误，请查看日志后重试。",
+            message="处理步骤发生内部错误，系统已记录详细日志，请重试。",
+            details={"exception_type": type(exc).__name__},
         )

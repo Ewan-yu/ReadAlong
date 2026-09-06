@@ -260,6 +260,31 @@ def test_builder_repairs_short_forced_alignment_boundaries() -> None:
     )
 
 
+def test_discovery_repair_handles_short_word_after_an_overlapping_boundary() -> None:
+    timings = (
+        AudioWordTiming(word="before", t_start=1.0, t_end=1.1),
+        AudioWordTiming(word="to", t_start=1.09, t_end=1.1),
+    )
+
+    repaired = OriginalTimelineStep._repair_short_discovery_words(timings)
+
+    assert repaired[-1].t_start == pytest.approx(1.1)
+    assert repaired[-1].t_end == pytest.approx(1.13)
+    assert all(item.t_end > item.t_start for item in repaired)
+
+
+def test_timeline_word_repair_keeps_tail_inside_audio_duration() -> None:
+    words = OriginalTimelineStep._timeline_words(
+        ("to",),
+        (("to", AudioWordTiming(word="to", t_start=9.99, t_end=10.0)),),
+        previous_end=0,
+        duration_ms=10_000,
+    )
+
+    assert words[0].start_ms == 9_970
+    assert words[0].end_ms == 10_000
+
+
 def test_discovery_projection_merges_fragmented_asr_word_without_losing_boundaries() -> None:
     def timing(word: str, start: float, end: float) -> tuple[str, AudioWordTiming]:
         return word, AudioWordTiming(word=word, t_start=start, t_end=end)

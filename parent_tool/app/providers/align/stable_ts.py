@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import math
 from pathlib import Path
 import sys
 from concurrent.futures import ThreadPoolExecutor
@@ -9,6 +10,7 @@ from typing import Protocol
 
 from app.models.audio import AudioWordTiming
 from app.models.errors import PipelineError
+from app.pipeline.audio_validation import MINIMUM_REPAIRED_WORD_DURATION_SECONDS, repair_word_timings
 from app.pipeline.definitions import CancellationToken, wait_for_future
 
 
@@ -127,22 +129,32 @@ class StableTsWordAligner:
 
     @staticmethod
     def _timings_from_result(result: object) -> tuple[AudioWordTiming, ...]:
-        """Normalise zero-width stable-ts boundaries before later validation."""
+        """Normalise malformed and overlapping stable-ts boundaries."""
         timings: list[AudioWordTiming] = []
         for segment in getattr(result, "segments", ()):
             for word in getattr(segment, "words", None) or ():
-                text = word.word.strip()
+                raw_text = getattr(word, "word", "")
+                if not isinstance(raw_text, str):
+                    continue
+                text = raw_text.strip()
                 if not text:
                     continue
-                start = float(word.start)
-                end = float(word.end)
-                # Export still verifies every word and all final millisecond
-                # ranges; this only prevents a one-frame ASR boundary from
-                # aborting narration discovery before forced alignment.
+                try:
+                    start = float(word.start)
+                    end = float(word.end)
+                except (AttributeError, TypeError, ValueError):
+                    continue
+                if not math.isfinite(start) or not math.isfinite(end):
+                    continue
+                start = max(0.0, start)
                 timings.append(
-                    AudioWordTiming(word=text, t_start=start, t_end=max(end, start + .01))
+                    AudioWordTiming(
+                        word=text,
+                        t_start=start,
+                        t_end=max(end, start + MINIMUM_REPAIRED_WORD_DURATION_SECONDS),
+                    )
                 )
-        return tuple(timings)
+        return repair_word_timings(tuple(timings))
 
     @staticmethod
     def _ensure_ffmpeg_on_path() -> None:

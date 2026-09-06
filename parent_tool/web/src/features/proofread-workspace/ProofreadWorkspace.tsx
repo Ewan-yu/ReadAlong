@@ -22,13 +22,13 @@ function SortableSentence({ sentence, active, onSelect }: { sentence: OcrSentenc
     ref={setNodeRef}
     className={styles.sentence}
     data-active={active || undefined}
-    data-review={sentence.status === "needs_review" || undefined}
+    data-review={sentence.status === "needs_review" || spellingWords(sentence).length > 0 || undefined}
     style={{ transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.45 : 1 }}
     onClick={onSelect}
   >
     <button type="button" className={styles.dragHandle} aria-label={`拖动第 ${sentence.seq} 句排序`} {...attributes} {...listeners}><GripVertical /></button>
     <span className={styles.sequence}>{sentence.seq}</span>
-    <div><p>{sentence.text}</p><small>第 {sentence.page_no} 页 {sentence.status === "needs_review" ? "· 待确认" : ""}</small></div>
+    <div><p>{sentence.text}</p><small>第 {sentence.page_no} 页 · {blockerReason(sentence) === "需要处理" ? "已识别" : blockerReason(sentence)}</small></div>
   </article>;
 }
 
@@ -36,6 +36,17 @@ function statusLabel(sentence: OcrSentence) {
   if (sentence.status === "needs_review") return "待确认";
   if (sentence.suspect_words.some((word) => word.kind === "spelling")) return "拼写提示";
   return "已识别";
+}
+
+function spellingWords(sentence: OcrSentence) {
+  return sentence.suspect_words.filter((word) => word.kind === "spelling");
+}
+
+function blockerReason(sentence: OcrSentence, pendingId?: string) {
+  if (sentence.id === pendingId) return sentence.text.trim() ? "待完成文字框" : "待填写文本和文字框";
+  if (sentence.status === "needs_review") return sentence.text.trim() ? "需要编辑确认" : "待填写文本";
+  const words = spellingWords(sentence).map((word) => word.word).join("、");
+  return words ? `拼写提示：${words}` : "需要处理";
 }
 
 export function ProofreadWorkspace() {
@@ -88,15 +99,12 @@ export function ProofreadWorkspace() {
       && sentence.bbox.height === selected.bbox.height,
     );
   }, [pageSentences, selected]);
-  const pagesWithReview = useMemo(() => new Set(sentences.filter((sentence) => sentence.status === "needs_review" || sentence.id === pendingBoxId).map((sentence) => sentence.page_no)), [pendingBoxId, sentences]);
+  const pagesWithReview = useMemo(() => new Set(sentences.filter((sentence) => sentence.status === "needs_review" || sentence.id === pendingBoxId || spellingWords(sentence).length > 0).map((sentence) => sentence.page_no)), [pendingBoxId, sentences]);
   const confirmationBlockers = useMemo(
-    () => sentences.filter((sentence) => sentence.status === "needs_review" || sentence.id === pendingBoxId || sentence.suspect_words.some((word) => word.kind === "spelling")),
+    () => sentences.filter((sentence) => sentence.status === "needs_review" || sentence.id === pendingBoxId || spellingWords(sentence).length > 0),
     [pendingBoxId, sentences],
   );
-  const blockingPageNos = useMemo(
-    () => [...new Set(confirmationBlockers.map((sentence) => sentence.page_no))].sort((a, b) => a - b),
-    [confirmationBlockers],
-  );
+  const currentPageBlockers = useMemo(() => confirmationBlockers.filter((sentence) => sentence.page_no === selectedPage), [confirmationBlockers, selectedPage]);
   const virtualizer = useVirtualizer({ count: sentences.length, getScrollElement: () => listRef.current, estimateSize: () => 60, overscan: 10 });
   const allConfirmed = Boolean(workspace && workspace.pages.every((item) => confirmedPages.includes(item.page_no)));
   const canPublish = allConfirmed && confirmationBlockers.length === 0 && dirty;
@@ -180,6 +188,20 @@ export function ProofreadWorkspace() {
     const index = sentences.findIndex((sentence) => sentence.id === id);
     replaceSentences(sentences.map((sentence) => sentence.id === id ? { ...sentence, ...patch } : sentence), [current.page_no], index);
   };
+  const focusBlocker = (sentence: OcrSentence) => {
+    setSelectedPage(sentence.page_no);
+    select(sentence.id);
+    if (sentence.id === pendingBoxId) {
+      setNewlyAddedId(sentence.id);
+      setTool("draw");
+    } else {
+      setTool("select");
+    }
+  };
+  const confirmSpelling = (sentence: OcrSentence) => {
+    if (!spellingWords(sentence).length) return;
+    updateSentence(sentence.id, { suspect_words: [] });
+  };
   const draw = (bbox: OcrSentence["bbox"], splitSourceId?: string) => {
     if (splitSourceId) {
       const source = sentences.find((sentence) => sentence.id === splitSourceId);
@@ -249,7 +271,7 @@ export function ProofreadWorkspace() {
     return <div className={styles.state} role="alert"><CircleAlert /><h1>OCR 校对台暂时无法打开</h1><p>{error?.message ?? "请先完成页面处理与 OCR。"}</p></div>;
   }
   const error = publish.error as ApiRequestError | null;
-  const pageReady = !pagesWithReview.has(selectedPage) && !pageSentences.some((sentence) => sentence.suspect_words.some((word) => word.kind === "spelling"));
+  const pageReady = currentPageBlockers.length === 0;
   const selectedOnPage = selectedId ? pageSentences.some((sentence) => sentence.id === selectedId) : false;
   const isNewSentence = Boolean(selected && selected.id === newlyAddedId);
 
@@ -295,7 +317,7 @@ export function ProofreadWorkspace() {
           <div className={styles.pageSentenceRows}>{pageSentences.map((sentence) => <div key={sentence.id} className={styles.pageSentenceRow} data-current={sentence.id === selectedId || undefined} data-merge={mergeIds.includes(sentence.id) || undefined}>
             <input type="checkbox" checked={mergeIds.includes(sentence.id)} disabled={sentence.id === pendingBoxId} aria-label={sentence.id === pendingBoxId ? `第 ${sentence.seq} 句待框选，暂不可合并` : `选择第 ${sentence.seq} 句用于合并`} onChange={() => toggleMerge(sentence.id)} />
             <button type="button" className={styles.pageSentenceEdit} onClick={() => select(sentence.id)}>
-              <span><b>#{sentence.seq}</b><em data-review={sentence.status === "needs_review" || undefined}>{sentence.status === "needs_review" ? "待填写" : statusLabel(sentence)}</em></span>
+              <span><b>#{sentence.seq}</b><em data-review={sentence.status === "needs_review" || spellingWords(sentence).length > 0 || undefined}>{sentence.status === "needs_review" ? "待填写" : statusLabel(sentence)}</em></span>
               <p>{sentence.text || "新句子（待填写）"}</p>
             </button>
           </div>)}</div>
@@ -311,7 +333,27 @@ export function ProofreadWorkspace() {
           <div className={styles.status}><span data-review={selected.status === "needs_review" || undefined}>{statusLabel(selected)}</span>{selected.suspect_words.map((word) => <em key={word.word} data-proper={word.kind === "proper_noun" || undefined}>{word.word}</em>)}</div>
           {pendingBoxId !== selected.id && <section className={styles.boxEditor}><strong>文字框（归一化坐标）</strong>{(["x", "y", "width", "height"] as const).map((key) => <label key={key}><span>{{ x: "左", y: "上", width: "宽", height: "高" }[key]}</span><input type="number" min="0" max="1" step="0.001" value={selected.bbox[key]} onChange={(event) => updateSentence(selected.id, { bbox: clampBox({ ...selected.bbox, [key]: Number(event.target.value) }) })} /></label>)}</section>}
         </> : <div className={styles.emptyInspector}><Plus /><strong>{selectedOnPage ? "选择一个文字框" : "从本页句子开始"}</strong><p>点击上方句子行进入编辑，或在当前页连续补录多句。</p><button type="button" onClick={beginManualSentence}><PenLine />在本页添加句子</button></div>}
-        <section className={styles.confirmPanel}><strong>{confirmedPages.includes(selectedPage) ? "本页已确认" : "本页等待确认"}</strong><p>{pageReady ? "没有待确认项或红色拼写提示，可以快速确认。" : "先处理待确认项与红色拼写提示，再确认本页。"}</p><button type="button" disabled={!pageReady} data-confirmed={confirmedPages.includes(selectedPage) || undefined} onClick={() => { setConfirmedPages((current) => current.includes(selectedPage) ? current.filter((pageNo) => pageNo !== selectedPage) : [...current, selectedPage].sort((a, b) => a - b)); setDirty(true); }}>{confirmedPages.includes(selectedPage) ? <Check /> : <CheckCheck />}{confirmedPages.includes(selectedPage) ? "取消确认" : "确认本页"}</button></section>
+        <section className={styles.confirmPanel}>
+          <div className={styles.confirmPanelHeading}>
+            <div><strong>{confirmedPages.includes(selectedPage) ? "本页已确认" : "本页等待确认"}</strong><p>{pageReady ? "没有待处理项，可以确认本页。" : `处理下面 ${currentPageBlockers.length} 句后，即可确认本页。`}</p></div>
+            {!pageReady && <span className={styles.blockerCount}>{currentPageBlockers.length} 句</span>}
+          </div>
+          {!pageReady && <div className={styles.blockerList} aria-label="本页待处理句子">
+            {currentPageBlockers.map((sentence) => {
+              const words = spellingWords(sentence);
+              const spellingHint = sentence.status !== "needs_review" && words.length > 0;
+              return <div key={sentence.id} className={styles.blockerRow}>
+                <button type="button" className={styles.blockerTarget} onClick={() => focusBlocker(sentence)}>
+                  <span><b>#{sentence.seq}</b><em>{blockerReason(sentence, pendingBoxId)}</em></span>
+                  <p>{sentence.text || "未填写文本"}</p>
+                  <small>{spellingHint ? `发现：${words.map((word) => word.word).join("、")}` : sentence.id === pendingBoxId ? "还未完成文字框，点击打开后继续框选。" : "点击打开句子并填写或确认。"}</small>
+                </button>
+                {spellingHint && <button type="button" className={styles.resolveBlocker} onClick={() => confirmSpelling(sentence)}><Check />确认拼写无误</button>}
+              </div>;
+            })}
+          </div>}
+          <button type="button" title={!pageReady ? "请先处理上面的待处理句子" : undefined} disabled={!pageReady} data-confirmed={confirmedPages.includes(selectedPage) || undefined} onClick={() => { setConfirmedPages((current) => current.includes(selectedPage) ? current.filter((pageNo) => pageNo !== selectedPage) : [...current, selectedPage].sort((a, b) => a - b)); setDirty(true); }}>{confirmedPages.includes(selectedPage) ? <Check /> : <CheckCheck />}{confirmedPages.includes(selectedPage) ? "取消确认" : "确认本页"}</button>
+        </section>
       </aside>
     </div>
 
@@ -328,7 +370,19 @@ export function ProofreadWorkspace() {
     </section></>}
 
     <footer className={styles.footer}>
-      <div className={styles.confirmSummary}><CheckCheck /><span>已确认 {confirmedPages.length} / {workspace.pages.length}</span>{!allConfirmed && <div className={styles.confirmAll}><button type="button" disabled={confirmationBlockers.length > 0} title={confirmationBlockers.length ? "请先处理待确认句与拼写提示" : "确认所有尚未确认的页面"} onClick={() => { setConfirmedPages(workspace.pages.map((item) => item.page_no)); setDirty(true); }}>全部确认</button>{confirmationBlockers.length > 0 ? <span data-blocked>还需处理 {confirmationBlockers.length} 句（第 {blockingPageNos.slice(0, 3).join("、")} 页{blockingPageNos.length > 3 ? "等" : ""}）</span> : <span data-ready>所有页面已无待确认项，可一键确认</span>}{confirmationBlockers.length > 0 && <button type="button" className={styles.jumpToBlocker} onClick={() => setSelectedPage(blockingPageNos[0])}>查看第 {blockingPageNos[0]} 页</button>}</div>}</div>
+      <div className={styles.confirmSummary}>
+        <CheckCheck /><span>已确认 {confirmedPages.length} / {workspace.pages.length}</span>
+        {(!allConfirmed || confirmationBlockers.length > 0) && <div className={styles.confirmAll}>
+          {!allConfirmed && <button type="button" disabled={confirmationBlockers.length > 0} title={confirmationBlockers.length ? "请先处理待处理句子" : "确认所有尚未确认的页面"} onClick={() => { setConfirmedPages(workspace.pages.map((item) => item.page_no)); setDirty(true); }}>全部确认</button>}
+          {confirmationBlockers.length > 0 ? <>
+            <div className={styles.pendingSummary}><CircleAlert /><strong>还有 {confirmationBlockers.length} 句需要处理</strong><span>处理后才能确认页面</span></div>
+            <div className={styles.pendingBlockers} aria-label="全部待处理句子">
+              {confirmationBlockers.slice(0, 3).map((sentence) => <button type="button" key={sentence.id} onClick={() => focusBlocker(sentence)}><b>第 {sentence.page_no} 页 · #{sentence.seq}</b><small>{blockerReason(sentence, pendingBoxId)}</small></button>)}
+              {confirmationBlockers.length > 3 && <span>还有 {confirmationBlockers.length - 3} 句</span>}
+            </div>
+          </> : <span data-ready>所有页面已无待处理项，可一键确认</span>}
+        </div>}
+      </div>
       <div><button type="button" className={styles.publish} disabled={!canPublish || publish.isPending} onClick={() => publish.mutate()}><Save />{publish.isPending ? "正在发布" : "发布校对结果"}</button><button type="button" disabled={dirty || !allConfirmed || !workspace.proofread_revision_id} onClick={() => void navigate({ to: "/books/$bookId/audio", params: { bookId } })}>进入语音生成</button></div>
     </footer>
   </section>;

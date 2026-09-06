@@ -47,6 +47,11 @@ class BlockingStep:
         return StepResult(outputs=("result.txt",))
 
 
+class UnexpectedFailureStep(BlockingStep):
+    def run(self, context, params):
+        raise RuntimeError("unexpected test failure")
+
+
 def _manager(tmp_path: Path, step: BlockingStep) -> tuple[JobManager, JobRepository]:
     paths = WorkspacePaths(tmp_path)
     states = StateRepository(paths)
@@ -174,5 +179,24 @@ def test_log_failure_does_not_fail_job(
         assert not isinstance(started, SkippedRun)
 
         assert manager.wait(started.job_id, timeout=2).status is JobStatus.SUCCEEDED
+    finally:
+        manager.shutdown()
+
+
+def test_unexpected_job_failure_is_logged_and_keeps_exception_type(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    manager, _ = _manager(tmp_path, UnexpectedFailureStep(blocking=False))
+    try:
+        started = manager.start("book-1", StepId.PAGES, {"value": "ok"})
+        assert not isinstance(started, SkippedRun)
+
+        completed = manager.wait(started.job_id, timeout=2)
+
+        assert completed.status is JobStatus.FAILED
+        assert completed.error is not None
+        assert completed.error.code == "INTERNAL_PIPELINE_ERROR"
+        assert completed.error.details == {"exception_type": "RuntimeError"}
+        assert f"Pipeline job {started.job_id} failed" in caplog.text
     finally:
         manager.shutdown()
