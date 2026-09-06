@@ -20,9 +20,19 @@ final RegExp _subtitleWordPattern = RegExp(
   r"[A-Za-z0-9]+(?:['\u2019-][A-Za-z0-9]+)*|[\u3400-\u4DBF\u4E00-\u9FFF]",
 );
 
+/// Canonical word form used for every word-sequence comparison.
+///
+/// The parent tool's `normalized_words` contract folds the typographic
+/// apostrophe (U+2019) to ASCII before it stores word timing texts, while
+/// book sentence texts keep the original punctuation. Token comparisons must
+/// fold it the same way, otherwise a sentence like ``Don't`` (U+2019 in the
+/// text, ASCII in the timing words) is wrongly rejected as a word mismatch.
+String canonicalSubtitleWord(String token) =>
+    token.toLowerCase().replaceAll('\u2019', "'");
+
 List<String> normalizedSubtitleWords(String text) => _subtitleWordPattern
     .allMatches(text)
-    .map((match) => match.group(0)!.toLowerCase())
+    .map((match) => canonicalSubtitleWord(match.group(0)!))
     .toList(growable: false);
 
 Duration clampPlaybackPosition(Duration elapsed, Duration clipDuration) {
@@ -87,7 +97,7 @@ List<SubtitleTextSegment> buildSubtitleSegments(
   for (var index = 0; index < timings.length; index++) {
     final timingWords = normalizedSubtitleWords(timings[index].word);
     if (timingWords.length != 1 ||
-        timingWords.single != matches[index].group(0)!.toLowerCase()) {
+        timingWords.single != canonicalSubtitleWord(matches[index].group(0)!)) {
       return [SubtitleTextSegment(text: text)];
     }
   }

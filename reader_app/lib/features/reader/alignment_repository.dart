@@ -9,7 +9,9 @@ import 'package:sqflite/sqflite.dart';
 
 import '../../data/appdb/app_database_providers.dart';
 import '../../data/appdb/shelf_index.dart';
+import 'alignment_database.dart';
 import 'point_reading_models.dart';
+import 'stage_trace.dart';
 import 'subtitle_timing.dart';
 
 abstract interface class PointReadingRepository {
@@ -62,16 +64,9 @@ final class LocalPointReadingRepository implements PointReadingRepository {
     try {
       database = await _tracePointReadingStage(
         'alignment_open',
-        () => databaseFactory.openDatabase(
-          alignmentPath,
-          // Point reading and original-audio playback can load the same package
-          // at the same time. Android sqflite otherwise returns one shared
-          // handle for the path, so closing either repository can invalidate the
-          // other's in-flight query.
-          options: OpenDatabaseOptions(
-            readOnly: true,
-            singleInstance: false,
-          ),
+        () => openAlignmentDatabase(
+          databaseFactory: databaseFactory,
+          databasePath: alignmentPath,
         ),
       );
       final bookRows = await _tracePointReadingStage(
@@ -154,31 +149,10 @@ final class LocalPointReadingRepository implements PointReadingRepository {
   }
 }
 
-const _alignmentStageTimeout = Duration(seconds: 10);
-
 Future<T> _tracePointReadingStage<T>(
   String stage,
   Future<T> Function() operation,
-) async {
-  final stopwatch = Stopwatch()..start();
-  developer.log('$stage:start', name: 'readalong.point_reading');
-  try {
-    final result = await operation().timeout(_alignmentStageTimeout);
-    developer.log(
-      '$stage:done:${stopwatch.elapsedMilliseconds}ms',
-      name: 'readalong.point_reading',
-    );
-    return result;
-  } on TimeoutException catch (error, stackTrace) {
-    developer.log(
-      '$stage:timeout:${stopwatch.elapsedMilliseconds}ms',
-      name: 'readalong.point_reading',
-      error: error,
-      stackTrace: stackTrace,
-    );
-    rethrow;
-  }
-}
+) => traceStage('point_reading', stage, operation);
 
 Future<Map<String, List<ReaderWordTiming>>> _loadWordTimings(
   Database database,

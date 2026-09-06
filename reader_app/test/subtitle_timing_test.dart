@@ -166,6 +166,28 @@ void main() {
     );
   });
 
+  test('排版撇号与 ASCII 撇号视为同一个词（家长端规范化契约）', () {
+    const text = '“Don’t worry,” said Frog.';
+    final timings = [
+      _word(1, "don't", 0, 400),
+      _word(2, 'worry', 400, 800),
+      _word(3, 'said', 800, 1100),
+      _word(4, 'frog', 1100, 1500),
+    ];
+
+    expect(normalizedSubtitleWords('Don’t'), ["don't"]);
+
+    final segments = buildSubtitleSegments(text, timings);
+
+    expect(segments.map((segment) => segment.text).join(), text);
+    expect(
+      segments.where((segment) => segment.wordIndex != null).map(
+            (segment) => segment.text,
+          ),
+      ["Don’t", 'worry', 'said', 'Frog'],
+    );
+  });
+
   test('空格与标点始终没有词索引，不能被当作高亮词', () {
     const text = "My grandpa's chopsticks are long.";
     final segments = buildSubtitleSegments(text, [

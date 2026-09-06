@@ -1,9 +1,9 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:developer' as developer;
 import 'dart:io';
 
 import 'package:crypto/crypto.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path/path.dart' as p;
 import 'package:sqflite/sqflite.dart';
@@ -11,7 +11,9 @@ import 'package:sqflite/sqflite.dart';
 import '../../data/appdb/app_database_providers.dart';
 import '../../data/appdb/shelf_index.dart';
 import '../../data/bookpack/schema_constants.dart';
+import 'alignment_database.dart';
 import 'original_audio_models.dart';
+import 'stage_trace.dart';
 import 'subtitle_timing.dart';
 
 abstract interface class OriginalAudioRepository {
@@ -162,7 +164,10 @@ final class LocalOriginalAudioRepository implements OriginalAudioRepository {
       );
     } on OriginalAudioLoadException {
       rethrow;
-    } on Object {
+    } on Object catch (error) {
+      // Visible in release builds too: developer.log is stripped there, and
+      // without this line a playback-page failure is completely undiagnosable.
+      debugPrint('readalong.original_audio load failed: $error');
       throw const OriginalAudioDataException();
     }
   }
@@ -233,15 +238,9 @@ final class LocalOriginalAudioRepository implements OriginalAudioRepository {
     try {
       database = await _traceOriginalAudioStage(
         'alignment_open',
-        () => databaseFactory.openDatabase(
-          path,
-          // Keep this handle independent from point reading. Android sqflite's
-          // default single-instance cache otherwise lets one repository close
-          // the other repository's connection to the same immutable package.
-          options: OpenDatabaseOptions(
-            readOnly: true,
-            singleInstance: false,
-          ),
+        () => openAlignmentDatabase(
+          databaseFactory: databaseFactory,
+          databasePath: path,
         ),
       );
       final books = await _traceOriginalAudioStage(
@@ -300,31 +299,10 @@ final class LocalOriginalAudioRepository implements OriginalAudioRepository {
   }
 }
 
-const _originalAudioStageTimeout = Duration(seconds: 10);
-
 Future<T> _traceOriginalAudioStage<T>(
   String stage,
   Future<T> Function() operation,
-) async {
-  final stopwatch = Stopwatch()..start();
-  developer.log('$stage:start', name: 'readalong.original_audio');
-  try {
-    final result = await operation().timeout(_originalAudioStageTimeout);
-    developer.log(
-      '$stage:done:${stopwatch.elapsedMilliseconds}ms',
-      name: 'readalong.original_audio',
-    );
-    return result;
-  } on TimeoutException catch (error, stackTrace) {
-    developer.log(
-      '$stage:timeout:${stopwatch.elapsedMilliseconds}ms',
-      name: 'readalong.original_audio',
-      error: error,
-      stackTrace: stackTrace,
-    );
-    rethrow;
-  }
-}
+) => traceStage('original_audio', stage, operation);
 
 Future<Map<String, dynamic>> _readObject(String path) async =>
     _decodeObject(await File(path).readAsBytes());

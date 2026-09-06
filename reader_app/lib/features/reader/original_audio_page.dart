@@ -42,7 +42,7 @@ class OriginalAudioPage extends ConsumerWidget {
   }
 }
 
-class _OriginalAudioErrorPage extends StatelessWidget {
+class _OriginalAudioErrorPage extends ConsumerWidget {
   const _OriginalAudioErrorPage({
     required this.libraryId,
     this.bookMissing = false,
@@ -52,7 +52,7 @@ class _OriginalAudioErrorPage extends StatelessWidget {
   final bool bookMissing;
 
   @override
-  Widget build(BuildContext context) => Scaffold(
+  Widget build(BuildContext context, WidgetRef ref) => Scaffold(
         appBar: _OriginalAudioAppBar(libraryId: libraryId),
         body: Center(
           child: Padding(
@@ -67,7 +67,7 @@ class _OriginalAudioErrorPage extends StatelessWidget {
                 ),
                 const SizedBox(height: AppSpacing.cardPadding),
                 Text(
-                  bookMissing ? '这本绘本暂时打不开' : '原音字幕需要重新制作',
+                  bookMissing ? '这本绘本暂时打不开' : '原音字幕暂时打不开',
                   style: const TextStyle(
                     color: AppColors.textPrimary,
                     fontSize: AppSizes.originalAudioErrorTitle,
@@ -76,13 +76,26 @@ class _OriginalAudioErrorPage extends StatelessWidget {
                 ),
                 const SizedBox(height: AppSpacing.unit),
                 Text(
-                  bookMissing ? '请返回书架后重新导入绘本' : '请让家长在制作端完成原音对齐后重新导入',
+                  bookMissing ? '请返回书架后重新导入绘本' : '设备可能正忙，请稍等片刻后重试',
                   textAlign: TextAlign.center,
                   style: const TextStyle(
                     color: AppColors.textSecondary,
                     fontSize: AppSizes.originalAudioErrorBody,
                   ),
                 ),
+                if (!bookMissing) ...[
+                  const SizedBox(height: AppSpacing.cardPadding),
+                  OutlinedButton.icon(
+                    onPressed: () {
+                      // A transient sqflite stall (typically right after an
+                      // import) recovers by itself; reloading the provider is
+                      // enough and no re-import is ever needed.
+                      ref.invalidate(originalAudioBookProvider(libraryId));
+                    },
+                    icon: const Icon(Icons.refresh),
+                    label: const Text('重试'),
+                  ),
+                ],
               ],
             ),
           ),

@@ -89,6 +89,22 @@ void main() {
     );
   });
 
+  test('排版撇号文本与 ASCII 时间线词视为一致，不再误拒导入', () async {
+    const sentenceText = '“Don’t worry,” said Frog.';
+    await _writeAlignment(bookDir, sentenceText: sentenceText);
+    await _writeReadyPackage(
+      bookDir,
+      sentenceText: sentenceText,
+      wordTexts: const ["don't", 'worry', 'said', 'frog'],
+    );
+
+    final book = await repository.loadBook('copy-1');
+
+    expect(book.sentences.single.text, sentenceText);
+    expect(book.sentences.single.words, hasLength(4));
+    expect(book.sentences.single.words.first.text, "don't");
+  });
+
   test('优先使用已校验的兼容 Ogg 播放轨', () async {
     await _writeReadyPackage(bookDir, includePlayback: true);
 
@@ -113,6 +129,7 @@ void main() {
 Future<void> _writeAlignment(
   Directory bookDir, {
   bool includeVisualOnlyLine = false,
+  String sentenceText = 'Good night.',
 }) async {
   final file = File(p.join(bookDir.path, 'align', 'alignment.db'));
   await file.parent.create(recursive: true);
@@ -137,7 +154,7 @@ Future<void> _writeAlignment(
       'id': includeVisualOnlyLine ? 's0002' : 's0001',
       'page_no': 1,
       'seq': includeVisualOnlyLine ? 2 : 1,
-      'text': 'Good night.',
+      'text': sentenceText,
     });
   } finally {
     await db.close();
@@ -150,12 +167,19 @@ Future<void> _writeReadyPackage(
   int narratedSentenceSequence = 1,
   bool includePlayback = false,
   bool unreliableTiming = false,
+  String sentenceText = 'Good night.',
+  List<String>? wordTexts,
 }) async {
   final audio = File(p.join(bookDir.path, 'original', 'source.mp3'));
   await audio.parent.create(recursive: true);
   await audio.writeAsBytes([1, 2, 3, 4]);
   const audioHash =
       '9f64a747e1b97f131fabb6b447296c9b6f0201e79fb3c5356e6c77e89b6a806a';
+  final words = (wordTexts ?? const ['Good', 'night.'])
+      .map((text) => {'text': text})
+      .toList(growable: false);
+  final sentenceStart = unreliableTiming ? 210 : 200;
+  final span = (2000 - sentenceStart) ~/ words.length;
   final timeline = {
     'schema_version': 1,
     'source': {
@@ -170,17 +194,19 @@ Future<void> _writeReadyPackage(
         'sentence_id': narratedSentenceSequence == 2 ? 's0002' : 's0001',
         'page_no': 1,
         'seq': narratedSentenceSequence,
-        'text': 'Good night.',
-        'start_ms': 200,
+        'text': sentenceText,
+        'start_ms': sentenceStart,
         'end_ms': 2000,
         'words': [
-          {
-            'seq': 1,
-            'text': 'Good',
-            'start_ms': 200,
-            'end_ms': unreliableTiming ? 210 : 1000,
-          },
-          {'seq': 2, 'text': 'night.', 'start_ms': 1000, 'end_ms': 2000},
+          for (var index = 0; index < words.length; index++)
+            {
+              'seq': index + 1,
+              'text': words[index]['text'],
+              'start_ms': sentenceStart + index * span,
+              'end_ms': unreliableTiming && index == 0
+                  ? sentenceStart + 10
+                  : sentenceStart + (index + 1) * span,
+            },
         ],
       },
     ],

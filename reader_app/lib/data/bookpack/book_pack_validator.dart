@@ -362,8 +362,12 @@ class BookPackValidator {
 
   static bool _hasMatchingWords(String sentenceText, Object? rawWords) {
     if (rawWords is! List) return false;
+    // Timing word texts arrive normalized from the parent tool (curly
+    // apostrophe folded to ASCII), sentence texts keep the book punctuation.
+    // Fold before tokenizing so ``Don't`` in text matches ``don't`` in words.
+    final normalizedText = sentenceText.replaceAll('\u2019', "'");
     final expected = _timelineWordPattern
-        .allMatches(sentenceText)
+        .allMatches(normalizedText)
         .map((match) => match.group(0)!.toLowerCase())
         .toList(growable: false);
     final actual = <String>[];
@@ -371,7 +375,7 @@ class BookPackValidator {
       if (raw is! Map<String, dynamic> || raw['text'] is! String) return false;
       actual.addAll(
         _timelineWordPattern
-            .allMatches(raw['text'] as String)
+            .allMatches((raw['text'] as String).replaceAll('\u2019', "'"))
             .map((match) => match.group(0)!.toLowerCase()),
       );
     }
