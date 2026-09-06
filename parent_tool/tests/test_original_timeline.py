@@ -345,8 +345,20 @@ def test_discovery_selects_only_ordered_narrated_lines_and_tolerates_one_asr_typ
         AudioWordTiming(word="Hello", t_start=0, t_end=.2),
         AudioWordTiming(word="world", t_start=.2, t_end=.4),
     )
-    selected = OriginalTimelineStep._select_narrated_sentences(source, recognized)
-    assert [item.id for item in selected] == ["s0001"]
+
+    sentences, projected, outcomes = OriginalTimelineStep._project_discovery_timings(
+        source.sentences, recognized
+    )
+
+    assert [item.id for item in sentences] == ["s0001"]
+    assert [timing.word for timing in projected] == ["hello", "world"]
+    assert [(item.sentence_id, item.narrated) for item in outcomes] == [
+        ("s0001", True),
+        ("s0002", False),
+    ]
+    assert outcomes[1].reason == "no_similar_match"
+    assert outcomes[1].previous_matched_id == "s0001"
+    assert outcomes[1].next_matched_id is None
 
 
 def test_discovery_tolerates_a_fragmented_asr_word_without_changing_export_text() -> None:
@@ -383,6 +395,43 @@ def test_discovery_prefers_a_complete_phrase_over_an_earlier_partial_match() -> 
     assert found == (3, 7)
 
 
+def test_discovery_prefers_same_length_replacement_over_a_shorter_prefix() -> None:
+    def timing(word: str, index: int) -> tuple[str, AudioWordTiming]:
+        return word, AudioWordTiming(word=word, t_start=index, t_end=index + 0.2)
+
+    actual = tuple(
+        timing(word, index)
+        for index, word in enumerate(("right", "into", "frog's", "net"))
+    )
+
+    found = OriginalTimelineStep._find_similar_phrase(
+        actual,
+        ("right", "into", "frog's", "mitt"),
+        0,
+    )
+
+    assert found == (0, 4)
+
+
+def test_discovery_projection_keeps_sentence_when_asr_replaces_final_word() -> None:
+    def timing(word: str, start: float, end: float) -> tuple[str, AudioWordTiming]:
+        return word, AudioWordTiming(word=word, t_start=start, t_end=end)
+
+    projected = OriginalTimelineStep._project_expected_phrase(
+        ("right", "into", "frog's", "mitt"),
+        (
+            timing("right", 78.54, 78.82),
+            timing("into", 78.94, 79.46),
+            timing("frog's", 79.48, 80.18),
+            timing("net", 80.18, 80.28),
+        ),
+    )
+
+    assert [item.word for item in projected] == ["right", "into", "frog's", "mitt"]
+    assert projected[-1].t_start == pytest.approx(80.18)
+    assert projected[-1].t_end == pytest.approx(80.28)
+
+
 def test_discovery_projection_keeps_reliable_sentences_when_one_line_is_incomplete() -> None:
     source = _sentences().model_copy(
         update={
@@ -399,7 +448,151 @@ def test_discovery_projection_keeps_reliable_sentences_when_one_line_is_incomple
         AudioWordTiming(word="night", t_start=1.1, t_end=1.4),
     )
 
-    sentences, projected = OriginalTimelineStep._project_discovery_timings(source.sentences, recognized)
+    sentences, projected, outcomes = OriginalTimelineStep._project_discovery_timings(
+        source.sentences, recognized
+    )
 
     assert [sentence.id for sentence in sentences] == ["s0002"]
     assert [timing.word for timing in projected] == ["good", "night"]
+    assert outcomes[0].reason == "projection_failed"
+    assert outcomes[0].next_matched_id == "s0002"
+
+
+def test_discovery_does_not_let_a_failed_window_swallow_the_next_sentence() -> None:
+    """A projection failure must leave the cursor before the failed window.
+
+    The old pass advanced the cursor before projecting, so one unprojectable
+    line also hid the sentence whose opening words that window had consumed.
+    """
+
+    source = _sentences().model_copy(
+        update={
+            "sentences": (
+                _sentences().sentences[0].model_copy(update={"text": "Hello little world good."}),
+                _sentences().sentences[1].model_copy(update={"text": "Night."}),
+            )
+        }
+    )
+    recognized = (
+        AudioWordTiming(word="Hello", t_start=0, t_end=.3),
+        AudioWordTiming(word="world", t_start=.3, t_end=.6),
+        AudioWordTiming(word="good", t_start=.6, t_end=.9),
+        AudioWordTiming(word="night", t_start=.9, t_end=1.2),
+    )
+
+    sentences, _, outcomes = OriginalTimelineStep._project_discovery_timings(
+        source.sentences, recognized
+    )
+
+    assert [sentence.id for sentence in sentences] == ["s0002"]
+    assert outcomes[0].narrated is False
+    assert outcomes[0].reason == "projection_failed"
+    assert outcomes[1].narrated is True
+
+
+def test_discovery_synthesises_an_asr_dropped_middle_word_from_the_gap() -> None:
+    def timing(word: str, start: float, end: float) -> tuple[str, AudioWordTiming]:
+        return word, AudioWordTiming(word=word, t_start=start, t_end=end)
+
+    projected = OriginalTimelineStep._project_expected_phrase(
+        ("hello", "little", "world"),
+        (timing("hello", 0, .3), timing("world", .6, .9)),
+    )
+
+    assert [item.word for item in projected] == ["hello", "little", "world"]
+    assert projected[1].t_start == pytest.approx(0.3)
+    assert projected[1].t_end == pytest.approx(0.6)
+
+
+def test_discovery_synthesises_dropped_words_at_window_edges() -> None:
+    def timing(word: str, start: float, end: float) -> tuple[str, AudioWordTiming]:
+        return word, AudioWordTiming(word=word, t_start=start, t_end=end)
+
+    trailing = OriginalTimelineStep._project_expected_phrase(
+        ("the", "end"),
+        (timing("the", 0, .3),),
+        after_start=1.0,
+    )
+    assert [item.word for item in trailing] == ["the", "end"]
+    assert trailing[-1].t_start == pytest.approx(0.3)
+
+    leading = OriginalTimelineStep._project_expected_phrase(
+        ("oh", "the"),
+        (timing("the", .5, .8),),
+        before_end=0.2,
+    )
+    assert [item.word for item in leading] == ["oh", "the"]
+    assert leading[0].t_start == pytest.approx(0.2)
+    assert leading[0].t_end == pytest.approx(0.5)
+
+
+def test_discovery_accepts_two_word_line_with_one_recognised_word() -> None:
+    def timing(word: str, index: int) -> tuple[str, AudioWordTiming]:
+        return word, AudioWordTiming(word=word, t_start=index, t_end=index + .2)
+
+    actual = tuple(timing(word, index) for index, word in enumerate(("frog's", "net")))
+
+    found = OriginalTimelineStep._find_similar_phrase(actual, ("frog's", "mitt"), 0)
+
+    assert found == (0, 2)
+
+
+def test_discovery_omits_sentence_when_synthesised_gap_exceeds_reader_limit() -> None:
+    """A recovered sentence must still respect the reader's 2.5 s word gap.
+
+    The omission is per sentence: the rest of the book timeline must survive
+    instead of failing the whole step at the packaging gate.
+    """
+
+    source = _sentences().model_copy(
+        update={
+            "sentences": (
+                _sentences().sentences[0].model_copy(update={"text": "One missing three."}),
+                _sentences().sentences[1],
+            )
+        }
+    )
+    recognized = (
+        AudioWordTiming(word="one", t_start=0, t_end=.3),
+        AudioWordTiming(word="three", t_start=4.0, t_end=4.3),
+        AudioWordTiming(word="Good", t_start=5.0, t_end=5.3),
+        AudioWordTiming(word="night", t_start=5.3, t_end=5.6),
+    )
+
+    sentences, _, outcomes = OriginalTimelineStep._project_discovery_timings(
+        source.sentences, recognized
+    )
+
+    assert [sentence.id for sentence in sentences] == ["s0002"]
+    assert outcomes[0].reason == "internal_gap_exceeded"
+    assert outcomes[0].next_matched_id == "s0002"
+
+
+def test_generation_report_lists_every_omission_with_reason_and_neighbours() -> None:
+    source = _sentences().model_copy(
+        update={
+            "sentences": (
+                _sentences().sentences[0],
+                _sentences().sentences[1].model_copy(update={"text": "Not narrated here."}),
+                _sentences().sentences[1].model_copy(update={"id": "s0003", "seq": 3, "text": "Good night."}),
+            )
+        }
+    )
+    recognized = (
+        AudioWordTiming(word="Hello", t_start=0, t_end=.2),
+        AudioWordTiming(word="world", t_start=.2, t_end=.4),
+        AudioWordTiming(word="Good", t_start=.8, t_end=1.1),
+        AudioWordTiming(word="night", t_start=1.1, t_end=1.4),
+    )
+
+    _, _, outcomes = OriginalTimelineStep._project_discovery_timings(source.sentences, recognized)
+    report = OriginalTimelineStep._generation_report(
+        outcomes, strategy="discovery_projection", whisper_model="tiny", recognized_word_count=4
+    )
+
+    assert report["narrated_sentence_count"] == 2
+    assert report["omitted_sentence_count"] == 1
+    assert report["omitted"][0]["sentence_id"] == "s0002"
+    assert report["omitted"][0]["reason"] == "no_similar_match"
+    assert report["omitted"][0]["previous_matched_id"] == "s0001"
+    assert report["omitted"][0]["next_matched_id"] == "s0003"

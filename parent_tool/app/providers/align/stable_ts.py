@@ -16,7 +16,12 @@ from app.pipeline.definitions import CancellationToken, wait_for_future
 
 class WordAligner(Protocol):
     def align(
-        self, wav_path: Path, language: str, cancellation: CancellationToken
+        self,
+        wav_path: Path,
+        language: str,
+        cancellation: CancellationToken,
+        *,
+        model_name: str = "tiny",
     ) -> tuple[AudioWordTiming, ...]: ...
 
     def align_script(
@@ -31,9 +36,8 @@ class WordAligner(Protocol):
 class StableTsWordAligner:
     """stable-ts wrapper that only loads Whisper when an audio job actually requests it."""
 
-    def __init__(self, model_name: str = "tiny") -> None:
-        self._model_name = model_name
-        self._model: object | None = None
+    def __init__(self) -> None:
+        self._models: dict[str, object] = {}
         self._lock = Lock()
         self._inference_executor = ThreadPoolExecutor(
             max_workers=1,
@@ -41,15 +45,25 @@ class StableTsWordAligner:
         )
 
     def align(
-        self, wav_path: Path, language: str, cancellation: CancellationToken
+        self,
+        wav_path: Path,
+        language: str,
+        cancellation: CancellationToken,
+        *,
+        model_name: str = "tiny",
     ) -> tuple[AudioWordTiming, ...]:
         cancellation.raise_if_cancelled()
         try:
             self._ensure_ffmpeg_on_path()
+            # Pin the decoding temperature: whisper's fallback schedule makes
+            # repeated runs of the same narration drift between lyric
+            # generations, which the parent tool surfaces as random missing
+            # sentences.
             future = self._inference_executor.submit(
-                self._load_model().transcribe,
+                self._load_model(model_name).transcribe,
                 str(wav_path),
                 language=language,
+                temperature=0.0,
             )
             result = wait_for_future(future, cancellation)
             cancellation.raise_if_cancelled()
@@ -88,7 +102,7 @@ class StableTsWordAligner:
         try:
             self._ensure_ffmpeg_on_path()
             future = self._inference_executor.submit(
-                self._load_model().align,
+                self._load_model("tiny").align,
                 str(wav_path),
                 text,
                 language=language,
@@ -112,20 +126,20 @@ class StableTsWordAligner:
                 status_code=422,
             ) from exc
 
-    def _load_model(self):
+    def _load_model(self, model_name: str):
         with self._lock:
-            if self._model is None:
+            if model_name not in self._models:
                 try:
                     import stable_whisper
 
-                    self._model = stable_whisper.load_model(self._model_name)
+                    self._models[model_name] = stable_whisper.load_model(model_name)
                 except Exception as exc:
                     raise PipelineError(
                         "WORD_ALIGNMENT_MODEL_LOAD_FAILED",
                         "stable-ts 模型无法加载，请检查 GPU、网络和依赖。",
                         status_code=500,
                     ) from exc
-            return self._model
+            return self._models[model_name]
 
     @staticmethod
     def _timings_from_result(result: object) -> tuple[AudioWordTiming, ...]:

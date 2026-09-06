@@ -92,6 +92,36 @@ export type OriginalAudioWorkspace = {
   lyric_sentence_count?: number | null;
   message?: string | null;
 };
+export type TimelineReviewSentence = {
+  sentence_id: string;
+  page_no: number;
+  seq: number;
+  text: string;
+  status: "matched" | "suspect_missing" | "confirmed_excluded";
+  source?: "asr" | "manual_adjusted" | "manual_added" | null;
+  start_ms?: number | null;
+  end_ms?: number | null;
+  reason?: string | null;
+  detail?: string | null;
+  previous_matched_id?: string | null;
+  next_matched_id?: string | null;
+  nearby_asr?: string[];
+};
+export type TimelineWorkspace = {
+  available: boolean;
+  status: "not_available" | "not_generated" | "processing" | "failed" | "stale" | "ready";
+  message?: string | null;
+  timeline_revision_id?: string | null;
+  alignment_strategy?: string | null;
+  whisper_model?: string | null;
+  duration_ms?: number | null;
+  matched_count: number;
+  suspect_missing_count: number;
+  confirmed_excluded_count: number;
+  sentences: TimelineReviewSentence[];
+};
+export type TimelineManualSentence = { sentence_id: string; start_ms: number; end_ms: number };
+export type WhisperModel = "tiny" | "base" | "small";
 export type ExportWorkspace = {
   ready: boolean; suggested_title: string; export_revision_id?: string | null;
   checks: Array<{ id: string; label: string; status: "pass" | "warning" | "error"; detail: string }>;
@@ -311,9 +341,47 @@ export async function separateOriginalAudio(bookId: string): Promise<{ dispositi
   return { disposition: data.disposition, jobId: data.job_id, state: data.state };
 }
 
-export async function buildOriginalAudioTimeline(bookId: string): Promise<{ disposition: string; jobId?: string; state?: PipelineState }> {
-  const response = await fetch(`/api/books/${encodeURIComponent(bookId)}/original-audio/timeline`, { method: "POST" });
+export async function buildOriginalAudioTimeline(
+  bookId: string,
+  whisperModel: WhisperModel = "tiny",
+): Promise<{ disposition: string; jobId?: string; state?: PipelineState }> {
+  const response = await fetch(`/api/books/${encodeURIComponent(bookId)}/original-audio/timeline`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ whisper_model: whisperModel }),
+  });
   if (!response.ok) await parseFetchError(response, "原音逐词字幕任务未能启动。");
+  const data = (await response.json()) as { disposition: string; job_id?: string; state?: PipelineState };
+  return { disposition: data.disposition, jobId: data.job_id, state: data.state };
+}
+
+export async function getTimelineWorkspace(bookId: string): Promise<TimelineWorkspace> {
+  const response = await fetch(`/api/books/${encodeURIComponent(bookId)}/original-audio/timeline/workspace`);
+  if (!response.ok) await parseFetchError(response, "无法读取歌词校对工作区。");
+  return (await response.json()) as TimelineWorkspace;
+}
+
+export async function updateTimelineReview(bookId: string, confirmedIds: string[]): Promise<string[]> {
+  const response = await fetch(`/api/books/${encodeURIComponent(bookId)}/original-audio/timeline/review`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ confirmed_not_narrated: confirmedIds }),
+  });
+  if (!response.ok) await parseFetchError(response, "确认不朗读没有保存成功。");
+  const data = (await response.json()) as { confirmed_not_narrated: string[] };
+  return data.confirmed_not_narrated;
+}
+
+export async function publishTimelineCorrection(
+  bookId: string,
+  manual: TimelineManualSentence[],
+): Promise<{ disposition: string; jobId?: string; state?: PipelineState }> {
+  const response = await fetch(`/api/books/${encodeURIComponent(bookId)}/original-audio/timeline`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ manual_sentences: manual }),
+  });
+  if (!response.ok) await parseFetchError(response, "歌词修正没有发布成功。");
   const data = (await response.json()) as { disposition: string; job_id?: string; state?: PipelineState };
   return { disposition: data.disposition, jobId: data.job_id, state: data.state };
 }

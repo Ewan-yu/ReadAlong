@@ -1,14 +1,48 @@
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import Field, model_validator
 
 from app.models.pipeline import FrozenModel
+
+
+class ManualTimelineSentence(FrozenModel):
+    """A parent-marked sentence boundary; text identity stays bound to proofread."""
+
+    sentence_id: str = Field(pattern=r"^s[0-9]{4,}$")
+    start_ms: int = Field(ge=0)
+    end_ms: int = Field(gt=0)
+
+    @model_validator(mode="after")
+    def has_positive_span(self) -> "ManualTimelineSentence":
+        if self.end_ms <= self.start_ms:
+            raise ValueError("manual sentence must have a positive time span")
+        return self
 
 
 class OriginalTimelineParams(FrozenModel):
     """Controls for the opt-in whole-book vocal alignment job."""
 
     language: str = Field(default="en", pattern=r"^[a-z]{2,8}$")
+    # ``tiny`` keeps the default fast; ``base``/``small`` buy recognition
+    # quality for long or noisy narrations at the cost of inference time.
+    whisper_model: Literal["tiny", "base", "small"] = "tiny"
+    # Non-empty switches the step to manual correction mode: the full,
+    # parent-reviewed sentence table replaces a fresh ASR discovery pass.
+    manual_sentences: tuple[ManualTimelineSentence, ...] = ()
+
+    @model_validator(mode="after")
+    def validates_manual_table(self) -> "OriginalTimelineParams":
+        if not self.manual_sentences:
+            return self
+        identifiers = [item.sentence_id for item in self.manual_sentences]
+        if len(set(identifiers)) != len(identifiers):
+            raise ValueError("manual sentence identifiers must be unique")
+        starts = [item.start_ms for item in self.manual_sentences]
+        if starts != sorted(starts) or len(set(starts)) != len(starts):
+            raise ValueError("manual sentences must be ordered by start time without overlap")
+        return self
 
 
 class OriginalTimelineWord(FrozenModel):

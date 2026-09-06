@@ -131,7 +131,7 @@ class PipelineEngine:
                     status_code=409,
                 )
         original_timeline_output: Path | None = None
-        if step_id is StepId.EXPORT:
+        if step_id in {StepId.EXPORT, StepId.ORIGINAL_TIMELINE}:
             timeline_state = state.steps[StepId.ORIGINAL_TIMELINE]
             if (
                 timeline_state.status is StepStatus.DONE
@@ -141,9 +141,13 @@ class PipelineEngine:
                 original_timeline_output = (
                     self.artifacts.paths.book(book_id) / timeline_state.success.output_root
                 )
-                dependency_fingerprints[StepId.ORIGINAL_TIMELINE.value] = (
-                    timeline_state.success.output_fingerprint
-                )
+                # Only EXPORT folds the timeline into its input fingerprint.
+                # For the timeline step itself this is merely the manual
+                # correction baseline and must not affect skip detection.
+                if step_id is StepId.EXPORT:
+                    dependency_fingerprints[StepId.ORIGINAL_TIMELINE.value] = (
+                        timeline_state.success.output_fingerprint
+                    )
         try:
             params = step.params_model.model_validate(raw_params)
         except ValidationError as exc:

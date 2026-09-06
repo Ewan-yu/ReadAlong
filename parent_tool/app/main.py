@@ -51,6 +51,7 @@ from app.services.audio_workspace_service import AudioWorkspaceService
 from app.services.export_workspace_service import ExportWorkspaceService
 from app.services.voice_profile_service import VoiceProfileService
 from app.services.original_audio_review_service import OriginalAudioReviewService
+from app.services.timeline_workspace_service import TimelineWorkspaceService
 
 
 ExecutorFactory = Callable[[], ThreadPoolExecutor]
@@ -151,6 +152,7 @@ def create_app(
             application.state.audio_workspace_service = AudioWorkspaceService(paths, states, artifacts)
             application.state.export_workspace_service = ExportWorkspaceService(paths, states, artifacts)
             application.state.original_audio_review_service = OriginalAudioReviewService(states, artifacts)
+            application.state.timeline_workspace_service = TimelineWorkspaceService(paths, states, artifacts)
             WorkspaceMigrationService.cleanup_pending_source(resolved_settings, settings_store)
             yield
         finally:

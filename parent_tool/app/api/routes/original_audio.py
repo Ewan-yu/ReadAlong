@@ -5,15 +5,21 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Response, status
 from fastapi.responses import FileResponse
 
-from app.api.dependencies import get_job_manager, get_original_audio_review_service
+from app.api.dependencies import get_job_manager, get_original_audio_review_service, get_timeline_workspace_service
 from app.jobs.manager import JobManager
 from app.models.errors import ApiErrorResponse
 from app.models.original_audio import OriginalAudioParams
 from app.models.original_timeline import OriginalTimelineParams
 from app.models.original_audio_workspace import OriginalAudioWorkspaceResponse
 from app.models.pipeline import RunSkippedResponse, RunStartedResponse, StepId, StepSuccess
+from app.models.timeline_workspace import (
+    TimelineReviewUpdateRequest,
+    TimelineReviewUpdateResponse,
+    TimelineWorkspaceResponse,
+)
 from app.pipeline.engine import SkippedRun
 from app.services.original_audio_review_service import OriginalAudioReviewService
+from app.services.timeline_workspace_service import TimelineWorkspaceService
 
 
 router = APIRouter(prefix="/api/books/{book_id}/original-audio", tags=["original-audio"])
@@ -58,6 +64,25 @@ def build_timeline(
         return RunSkippedResponse(state=result.state)
     response.status_code = status.HTTP_202_ACCEPTED
     return RunStartedResponse(job_id=result.job_id)
+
+
+@router.get("/timeline/workspace", response_model=TimelineWorkspaceResponse, responses=ERROR_RESPONSES)
+def get_timeline_workspace(
+    book_id: str,
+    service: Annotated[TimelineWorkspaceService, Depends(get_timeline_workspace_service)],
+) -> TimelineWorkspaceResponse:
+    """Playback-review view: proofread script joined with the lyric timeline."""
+
+    return service.workspace(book_id)
+
+
+@router.put("/timeline/review", response_model=TimelineReviewUpdateResponse, responses=ERROR_RESPONSES)
+def put_timeline_review(
+    book_id: str,
+    request: TimelineReviewUpdateRequest,
+    service: Annotated[TimelineWorkspaceService, Depends(get_timeline_workspace_service)],
+) -> TimelineReviewUpdateResponse:
+    return service.update_review(book_id, request)
 
 
 @router.get("/source", response_class=FileResponse, responses=ERROR_RESPONSES)

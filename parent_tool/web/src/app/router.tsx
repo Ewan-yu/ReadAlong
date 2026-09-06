@@ -94,6 +94,15 @@ const audioRoute = createRoute({
     "AudioGenerationPage",
   ),
 });
+const lyricsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/books/$bookId/lyrics",
+  beforeLoad: guardStep(4),
+  component: lazyRouteComponent(
+    () => import("../features/lyrics-review/LyricsReviewPage"),
+    "LyricsReviewPage",
+  ),
+});
 const exportRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/books/$bookId/export",
@@ -114,6 +123,7 @@ const routeTree = rootRoute.addChildren([
   pagesRoute,
   proofreadRoute,
   audioRoute,
+  lyricsRoute,
   exportRoute,
 ]);
 

@@ -13,6 +13,10 @@ from app.pipeline.hashing import file_sha256
 
 
 TIMELINE_PATH = "timeline/original_timeline.json"
+# Parent-tool internal diagnostics written next to the timeline in the same
+# revision.  Export deliberately copies only TIMELINE_PATH into a package, so
+# this report never becomes part of the reader-facing contract.
+GENERATION_REPORT_PATH = "timeline/generation_report.json"
 MINIMUM_WORD_DURATION_MS = 30
 MAXIMUM_INTERNAL_WORD_GAP_MS = 2_500
 

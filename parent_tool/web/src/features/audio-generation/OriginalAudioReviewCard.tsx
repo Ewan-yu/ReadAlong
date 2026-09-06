@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Link } from "@tanstack/react-router";
 import { Check, CircleAlert, Headphones, LoaderCircle, Pause, Play, RefreshCw, Save, Waves, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
@@ -10,6 +11,7 @@ import {
   originalAudioSourceUrl,
   separateOriginalAudio,
   type JobSnapshot,
+  type WhisperModel,
 } from "../../api/client";
 import { waitForJob } from "../../api/jobs";
 import { bookStateQuery, originalAudioWorkspaceQuery } from "../../api/queries";
@@ -89,6 +91,7 @@ export function OriginalAudioReviewCard({ bookId }: { bookId: string }) {
   const [timelineJob, setTimelineJob] = useState<JobSnapshot>();
   const [resumedTimelineJobId, setResumedTimelineJobId] = useState<string>();
   const resumedTimelineJobs = useRef(new Set<string>());
+  const [whisperModel, setWhisperModel] = useState<WhisperModel>("tiny");
   const audio = useRef<HTMLAudioElement>(null);
   const dialog = useRef<HTMLDialogElement>(null);
   const workspace = query.data;
@@ -111,7 +114,7 @@ export function OriginalAudioReviewCard({ bookId }: { bookId: string }) {
   const buildTimeline = useMutation({
     mutationFn: async () => {
       setTimelineJob(undefined);
-      const run = await buildOriginalAudioTimeline(bookId);
+      const run = await buildOriginalAudioTimeline(bookId, whisperModel);
       if (run.jobId) await waitForJob(run.jobId, setTimelineJob);
     },
     onSuccess: refresh,
@@ -180,7 +183,30 @@ export function OriginalAudioReviewCard({ bookId }: { bookId: string }) {
     {isTimelineRunning && <div className={styles.progress} role="status" aria-live="polite"><LoaderCircle className={styles.spin} /><div><strong>{timelineJob?.message ?? "正在提交原音歌词任务…"}</strong><span>自动识别实际朗读句，再生成逐词时间线；可以留在当前页等待。</span><i><em style={{ transform: `scaleX(${timelineJob?.progress ?? 0})` }} /></i></div><b>{Math.round((timelineJob?.progress ?? 0) * 100)}%</b></div>}
     <div className={styles.actions}>
       {ready && <button type="button" className={styles.review} onClick={() => setOpen(true)}><Headphones />试听分离结果</button>}
-      {workspace.status === "confirmed" && <button type="button" className={styles.review} disabled={isBusy} onClick={() => buildTimeline.mutate()}><Waves className={isTimelineRunning ? styles.spin : undefined} />{isTimelineRunning ? "正在生成歌词" : workspace.lyric_sentence_count ? "重新生成逐词歌词" : "生成逐词歌词"}</button>}
+      {workspace.status === "confirmed" && (
+        <>
+          <label className={styles.modelSelect} title="识别模型越强越慢；长绘本或缺句多时可选更准的模型">
+            <span>识别模型</span>
+            <select value={whisperModel} disabled={isBusy} onChange={(event) => setWhisperModel(event.target.value as WhisperModel)}>
+              <option value="tiny">快速（tiny）</option>
+              <option value="base">更准（base）</option>
+              <option value="small">最准（small，慢）</option>
+            </select>
+          </label>
+          <button
+            type="button"
+            className={styles.review}
+            disabled={isBusy}
+            onClick={() => {
+              if (workspace.lyric_sentence_count && !window.confirm("重新生成会覆盖现有歌词时间线（包括手工修正），确定继续吗？")) return;
+              buildTimeline.mutate();
+            }}
+          ><Waves className={isTimelineRunning ? styles.spin : undefined} />{isTimelineRunning ? "正在生成歌词" : workspace.lyric_sentence_count ? "重新生成逐词歌词" : "生成逐词歌词"}</button>
+        </>
+      )}
+      {workspace.lyric_sentence_count ? (
+        <Link className={styles.lyricsLink} to="/books/$bookId/lyrics" params={{ bookId }}>校对歌词（{workspace.lyric_sentence_count} 句）</Link>
+      ) : null}
       <button type="button" disabled={isBusy} onClick={() => separate.mutate()}><RefreshCw className={isBusy ? styles.spin : undefined} />{workspace.status === "not_processed" ? "开始分离" : "重新分离"}</button>
     </div>
     <dialog ref={dialog} className={styles.dialog} onCancel={(event) => { event.preventDefault(); setOpen(false); }} onClick={(event) => { if (event.target === dialog.current) setOpen(false); }}>
