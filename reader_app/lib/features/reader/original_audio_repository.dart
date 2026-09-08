@@ -234,7 +234,7 @@ final class LocalOriginalAudioRepository implements OriginalAudioRepository {
     if (!File(path).existsSync()) {
       throw const OriginalAudioDataException('Alignment database is missing');
     }
-    Database? database;
+    AlignmentDatabase? database;
     try {
       database = await _traceOriginalAudioStage(
         'alignment_open',

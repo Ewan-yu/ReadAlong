@@ -60,7 +60,7 @@ final class LocalPointReadingRepository implements PointReadingRepository {
       throw const PointReadingLoadException('Alignment database is missing');
     }
 
-    Database? database;
+    AlignmentDatabase? database;
     try {
       database = await _tracePointReadingStage(
         'alignment_open',
@@ -105,7 +105,7 @@ final class LocalPointReadingRepository implements PointReadingRepository {
           .toList(growable: false);
       final wordTimings = await _tracePointReadingStage(
         'word_timing_query',
-        () => _loadWordTimings(database!, baseSentences),
+        () => _loadWordTimings(database!.database, baseSentences),
       );
       final sentences = baseSentences
           .map(
