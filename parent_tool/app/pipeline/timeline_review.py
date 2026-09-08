@@ -3,11 +3,16 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import threading
 from pathlib import Path
 from typing import Iterable
 
 REVIEW_FILE_NAME = "timeline_review.json"
 REVIEW_SCHEMA_VERSION = 1
+
+# The correction job thread and API requests mutate the same store; without
+# serialisation one side's read-modify-write silently drops the other's.
+_STORE_LOCK = threading.Lock()
 
 
 def review_path(workspace_dir: Path) -> Path:
@@ -33,15 +38,17 @@ def load_confirmed_ids(workspace_dir: Path) -> set[str]:
 
 
 def replace_confirmed_ids(workspace_dir: Path, ids: Iterable[str]) -> tuple[str, ...]:
-    confirmed = tuple(sorted(set(ids)))
-    _write_review(workspace_dir, confirmed)
-    return confirmed
+    with _STORE_LOCK:
+        confirmed = tuple(sorted(set(ids)))
+        _write_review(workspace_dir, confirmed)
+        return confirmed
 
 
 def union_confirmed_ids(workspace_dir: Path, ids: Iterable[str]) -> tuple[str, ...]:
-    confirmed = tuple(sorted(load_confirmed_ids(workspace_dir) | set(ids)))
-    _write_review(workspace_dir, confirmed)
-    return confirmed
+    with _STORE_LOCK:
+        confirmed = tuple(sorted(load_confirmed_ids(workspace_dir) | set(ids)))
+        _write_review(workspace_dir, confirmed)
+        return confirmed
 
 
 def _write_review(workspace_dir: Path, confirmed: tuple[str, ...]) -> None:

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
+from collections import OrderedDict
 from pathlib import Path
 from typing import Mapping
 
@@ -26,6 +28,34 @@ def file_sha256(path: Path, *, chunk_size: int = 1024 * 1024) -> str:
         while chunk := stream.read(chunk_size):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+_SHA256_CACHE_LIMIT = 32
+_SHA256_CACHE: OrderedDict[tuple[str, int, int], str] = OrderedDict()
+_SHA256_CACHE_LOCK = threading.Lock()
+
+
+def file_sha256_cached(path: Path) -> str:
+    """Hash a file, reusing the previous result while its stat is unchanged.
+
+    Meant for repeat verification of large, rarely mutated media (e.g. the
+    original MP3 behind every audio Range request from the browser player).
+    A changed size or mtime invalidates the entry, so a mutated file is
+    re-hashed and detected exactly like before.
+    """
+    stat = path.stat()
+    key = (str(path.resolve()), stat.st_mtime_ns, stat.st_size)
+    with _SHA256_CACHE_LOCK:
+        cached = _SHA256_CACHE.get(key)
+        if cached is not None:
+            _SHA256_CACHE.move_to_end(key)
+            return cached
+    value = file_sha256(path)
+    with _SHA256_CACHE_LOCK:
+        _SHA256_CACHE[key] = value
+        while len(_SHA256_CACHE) > _SHA256_CACHE_LIMIT:
+            _SHA256_CACHE.popitem(last=False)
+    return value
 
 
 def input_fingerprint(

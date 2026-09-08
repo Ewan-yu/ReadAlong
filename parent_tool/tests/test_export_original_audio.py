@@ -436,3 +436,119 @@ def test_confirmed_background_is_packaged_and_changes_export_fingerprint(
     after = engine.plan("book-1", StepId.EXPORT, {})
     assert isinstance(after, SkippedRun)
     assert before.input_fingerprint == success.input_fingerprint
+
+
+def _install_timeline_revision(
+    paths: WorkspacePaths,
+    states: StateRepository,
+    artifacts: ArtifactStore,
+    *,
+    revision_id: str,
+    sentences_count: int = 2,
+) -> str:
+    """Publish a handcrafted timeline revision and return its file hash."""
+    from app.models.original_timeline import (
+        OriginalTimeline,
+        OriginalTimelineSentence,
+        OriginalTimelineSource,
+        OriginalTimelineWord,
+    )
+    from app.models.pipeline import StepState, StepStatus, StepSuccess
+    from app.pipeline.original_timeline import GENERATION_REPORT_PATH, TIMELINE_PATH
+
+    timeline = OriginalTimeline(
+        source=OriginalTimelineSource(
+            proofread_revision="r-proofread-12345678",
+            original_audio_revision="r-original-12345678",
+            original_audio_sha256="a" * 64,
+            vocal_sha256="b" * 64,
+        ),
+        sentences=tuple(
+            OriginalTimelineSentence(
+                sentence_id=f"s{index + 1:04d}",
+                page_no=1,
+                seq=index + 1,
+                text=f"Line {index + 1}.",
+                start_ms=index * 1_000,
+                end_ms=index * 1_000 + 700,
+                words=(
+                    OriginalTimelineWord(seq=1, text="line", start_ms=index * 1_000, end_ms=index * 1_000 + 700),
+                ),
+            )
+            for index in range(sentences_count)
+        ),
+        audio_sha256="a" * 64,
+        duration_ms=10_000,
+    )
+    staging = paths.book("book-1") / ".runs" / "44345678-1234-4234-8234-123456789abc"
+    (staging / "timeline").mkdir(parents=True, exist_ok=True)
+    (staging / TIMELINE_PATH).write_text(timeline.model_dump_json(indent=2), encoding="utf-8")
+    (staging / GENERATION_REPORT_PATH).write_text("{}", encoding="utf-8")
+    outputs, fingerprint = artifacts.build_manifest(staging, (TIMELINE_PATH, GENERATION_REPORT_PATH))
+    output_root = artifacts.publish("book-1", StepId.ORIGINAL_TIMELINE, revision_id, staging)
+
+    def mutate(updated) -> None:
+        updated.steps[StepId.ORIGINAL_TIMELINE] = StepState(
+            status=StepStatus.DONE,
+            success=StepSuccess(
+                revision_id=revision_id,
+                output_root=output_root,
+                params_hash="0" * 64,
+                input_fingerprint="0" * 64,
+                output_fingerprint=fingerprint,
+                outputs=outputs,
+                completed_at=utc_now(),
+            ),
+        )
+
+    states.update("book-1", mutate)
+    return file_sha256(paths.book("book-1") / output_root / TIMELINE_PATH)
+
+
+def test_bundle_check_rejects_package_with_stale_timeline(tmp_path: Path) -> None:
+    from app.models.pipeline import PipelineState
+    from app.services.export_workspace_service import TimelineIdentity
+
+    paths = WorkspacePaths(tmp_path)
+    states = StateRepository(paths)
+    artifacts = ArtifactStore(paths)
+    book = paths.book("book-1")
+    book.mkdir(parents=True)
+    states.create(PipelineState.new(book_id="book-1", pdf_path="source.pdf", pdf_sha256="a" * 64, original_audio_path="original_audio.mp3", original_audio_sha256="b" * 64))
+
+    timeline_sha = _install_timeline_revision(
+        paths, states, artifacts, revision_id="r-timeline-00000001"
+    )
+    state = states.load("book-1")
+    identity = ExportWorkspaceService(paths, states, artifacts)._original_timeline_ready(
+        "book-1", state, [], has_original_audio=True
+    )
+    assert identity == TimelineIdentity(sha256=timeline_sha, sentence_count=2)
+
+    source = {
+        "path": "original/source.mp3",
+        "mime_type": "audio/mpeg",
+        "size_bytes": 10,
+        "sha256": "b" * 64,
+        "duration_ms": 12_345,
+    }
+    fresh = dict(source, alignment_status="ready", timeline_sha256=timeline_sha, timeline_sentence_count=2)
+    stale_hash = dict(fresh, timeline_sha256="c" * 64)
+    stale_count = dict(fresh, timeline_sentence_count=1)
+    no_timeline_keys = dict(source, alignment_status="ready")
+
+    assert ExportWorkspaceService._matches_original_audio(fresh, _audio_info(), timeline_identity=identity)
+    assert not ExportWorkspaceService._matches_original_audio(stale_hash, _audio_info(), timeline_identity=identity)
+    assert not ExportWorkspaceService._matches_original_audio(stale_count, _audio_info(), timeline_identity=identity)
+    assert not ExportWorkspaceService._matches_original_audio(no_timeline_keys, _audio_info(), timeline_identity=identity)
+    # No current lyrics: a package that still claims ready lyrics is equally stale.
+    assert not ExportWorkspaceService._matches_original_audio(fresh, _audio_info(), timeline_identity=None)
+    assert ExportWorkspaceService._matches_original_audio(
+        dict(source, alignment_status="raw"), _audio_info(), timeline_identity=None
+    )
+
+
+def _audio_info():
+    from app.models.export_workspace import ExportOriginalAudioInfo
+
+    return ExportOriginalAudioInfo(size_bytes=10, sha256="b" * 64, duration_ms=12_345)

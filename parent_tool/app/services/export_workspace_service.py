@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path, PurePosixPath
+from typing import NamedTuple
 
 from app.models.audio import AudioGenerationReport
 from app.models.errors import PipelineError
@@ -19,6 +20,13 @@ from app.pipeline.hashing import file_sha256
 from app.pipeline.original_timeline import TIMELINE_PATH
 from app.pipeline.paths import WorkspacePaths, ensure_within
 from app.pipeline.state_repository import StateRepository
+
+
+class TimelineIdentity(NamedTuple):
+    """Identity of the current lyric timeline revision."""
+
+    sha256: str
+    sentence_count: int
 
 
 class ExportWorkspaceService:
@@ -51,7 +59,7 @@ class ExportWorkspaceService:
             state.source.original_audio_sha256,
             checks,
         )
-        timeline_ready = self._original_timeline_ready(
+        timeline_identity = self._original_timeline_ready(
             book_id, state, checks, original_audio is not None
         )
         page_count = (
@@ -124,14 +132,14 @@ class ExportWorkspaceService:
                     if not self._matches_original_audio(
                         packaged_original,
                         original_audio,
-                        timeline_ready=timeline_ready,
+                        timeline_identity=timeline_identity,
                     ):
                         checks.append(
                             ExportCheck(
                                 id="bundle",
                                 label="资源包校验",
                                 status="warning",
-                                detail="现有资源包尚未包含当前原音，请重新生成。",
+                                detail="现有资源包尚未包含当前原音或最新歌词，请重新导出。",
                             )
                         )
                         export_revision_id = None
@@ -396,19 +404,23 @@ class ExportWorkspaceService:
         state,
         checks: list[ExportCheck],
         has_original_audio: bool,
-    ) -> bool:
-        """Expose the optional lyric capability without blocking a raw-MP3 export."""
+    ) -> TimelineIdentity | None:
+        """Expose the optional lyric capability without blocking a raw-MP3 export.
+
+        Returns the identity (file hash + sentence count) of the *current*
+        timeline revision so the bundle check can detect a package that still
+        embeds lyrics from an older generation or manual correction.
+        """
         if not has_original_audio:
-            return False
+            return None
         step = state.steps[StepId.ORIGINAL_TIMELINE]
         if step.status is StepStatus.DONE and step.success is not None:
             if self._verify(book_id, StepId.ORIGINAL_TIMELINE, step.success):
+                timeline_path = (
+                    self.paths.book(book_id) / step.success.output_root / TIMELINE_PATH
+                )
                 try:
-                    timeline = json.loads(
-                        (
-                            self.paths.book(book_id) / step.success.output_root / TIMELINE_PATH
-                        ).read_text(encoding="utf-8")
-                    )
+                    timeline = json.loads(timeline_path.read_text(encoding="utf-8"))
                     count = len(timeline["sentences"])
                     if not count:
                         raise ValueError
@@ -421,7 +433,7 @@ class ExportWorkspaceService:
                             detail="歌词产物不可用；本次导出只保留原音 MP3。",
                         )
                     )
-                    return False
+                    return None
                 detail = (
                     f"已生成 {count} 句逐词歌词，阅读端会开放原音欣赏与配音。"
                     if isinstance(count, int)
@@ -432,7 +444,7 @@ class ExportWorkspaceService:
                         id="original-timeline", label="原音逐词歌词", status="pass", detail=detail
                     )
                 )
-                return True
+                return TimelineIdentity(sha256=file_sha256(timeline_path), sentence_count=count)
             checks.append(
                 ExportCheck(
                     id="original-timeline",
@@ -441,7 +453,7 @@ class ExportWorkspaceService:
                     detail="歌词产物不可用；本次导出只保留原音 MP3。",
                 )
             )
-            return False
+            return None
         if step.status is StepStatus.RUNNING:
             checks.append(
                 ExportCheck(
@@ -451,7 +463,7 @@ class ExportWorkspaceService:
                     detail="歌词正在生成；完成后刷新本页再导出即可开放原音欣赏。",
                 )
             )
-            return False
+            return None
         if step.status is StepStatus.FAILED:
             checks.append(
                 ExportCheck(
@@ -461,7 +473,7 @@ class ExportWorkspaceService:
                     detail="歌词尚未生成成功；资源包仍会保留原音 MP3，但阅读端不会开放原音歌词。",
                 )
             )
-            return False
+            return None
         checks.append(
             ExportCheck(
                 id="original-timeline",
@@ -470,25 +482,39 @@ class ExportWorkspaceService:
                 detail="尚未生成歌词；资源包仍会保留原音 MP3。",
             )
         )
-        return False
+        return None
 
     @staticmethod
     def _matches_original_audio(
         packaged: object,
         source: ExportOriginalAudioInfo,
         *,
-        timeline_ready: bool,
+        timeline_identity: TimelineIdentity | None,
     ) -> bool:
+        """A package is current only if it embeds the *current* lyrics.
+
+        The MP3 rarely changes after review, so comparing only the audio let a
+        stale package pass after a lyric regeneration or manual correction.
+        The packaged timeline hash and sentence count must match the current
+        revision whenever lyrics are ready.
+        """
         if not isinstance(packaged, dict):
             return False
         try:
-            return (
+            if not (
                 packaged["path"] == source.path
                 and packaged["mime_type"] == "audio/mpeg"
                 and int(packaged["size_bytes"]) == source.size_bytes
                 and packaged["sha256"] == source.sha256
                 and int(packaged["duration_ms"]) > 0
-                and packaged["alignment_status"] == ("ready" if timeline_ready else "raw")
+            ):
+                return False
+            if timeline_identity is None:
+                return packaged["alignment_status"] == "raw"
+            return (
+                packaged["alignment_status"] == "ready"
+                and packaged["timeline_sha256"] == timeline_identity.sha256
+                and int(packaged["timeline_sentence_count"]) == timeline_identity.sentence_count
             )
         except (KeyError, TypeError, ValueError):
             return False

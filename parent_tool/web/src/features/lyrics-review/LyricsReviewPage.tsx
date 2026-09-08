@@ -16,7 +16,7 @@ import {
   Undo2,
   Wand2,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, type Ref, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   originalAudioSourceUrl,
@@ -65,6 +65,117 @@ function stateBadge(view: ReturnType<typeof draftRows>[number]) {
   if (view.state === "excluded") return { label: "不朗读（已确认）", tone: "muted" };
   return { label: "疑似缺失", tone: "warn" };
 }
+
+type RowHandlers = {
+  onSeek: (startMs: number) => void;
+  onPlayRange: (startMs: number, endMs: number) => void;
+  onEdit: (row: TimelineReviewSentence) => void;
+  onRemove: (row: TimelineReviewSentence) => void;
+  onRestore: (row: TimelineReviewSentence) => void;
+  onConfirmSkip: (row: TimelineReviewSentence) => void;
+  onUnconfirmSkip: (row: TimelineReviewSentence) => void;
+  onFixPush: (issue: DraftIssue) => void;
+  onFixShortenOther: (issue: DraftIssue) => void;
+};
+
+/**
+ * Memoised so the 4 Hz playhead update only re-renders the rows whose active
+ * state changed, not the whole sentence list of a long book.
+ */
+const SentenceRow = memo(function SentenceRow({
+  view,
+  issue,
+  active,
+  flash,
+  canShortenOther,
+  busy,
+  handlers,
+  rowRef,
+}: {
+  view: ReturnType<typeof draftRows>[number];
+  issue?: DraftIssue;
+  active: boolean;
+  flash: boolean;
+  canShortenOther: boolean;
+  busy: boolean;
+  handlers: RowHandlers;
+  rowRef?: Ref<HTMLDivElement>;
+}) {
+  const badge = stateBadge(view);
+  const boundaries = view.boundaries;
+  const row = view.row;
+  return (
+    <div
+      id={`lyrics-row-${row.sentence_id}`}
+      ref={rowRef}
+      className={styles.row}
+      data-state={view.state}
+      data-change={view.change ?? undefined}
+      data-active={active || undefined}
+      data-flash={flash || undefined}
+    >
+      <div className={styles.rowMeta}>
+        <b data-tone={badge.tone}>{badge.label}</b>
+        <span>{row.sentence_id} · 第 {row.page_no} 页</span>
+        <span>{boundaries ? `${formatClock(boundaries.start_ms)} – ${formatClock(boundaries.end_ms)}` : "—"}</span>
+      </div>
+      <p
+        className={styles.rowText}
+        role="button"
+        tabIndex={0}
+        title="点击把播放位置跳到本句开头"
+        onClick={() => boundaries && handlers.onSeek(boundaries.start_ms)}
+        onKeyDown={(event) => {
+          if ((event.key === "Enter" || event.key === " ") && boundaries) {
+            event.preventDefault();
+            handlers.onSeek(boundaries.start_ms);
+          }
+        }}
+      >
+        {row.text}
+      </p>
+      {issue?.otherId && (
+        <div className={styles.rowConflict} role="status">
+          <CircleAlert />
+          <span>与 {issue.otherId} 的标注重叠 {((issue.overlapMs ?? 0) / 1000) > 0 ? `${((issue.overlapMs ?? 0) / 1000).toFixed(1)} 秒` : ""}，可一键修正：</span>
+          <button type="button" onClick={() => handlers.onFixPush(issue)}>本句起点顺延</button>
+          {canShortenOther && (
+            <button type="button" onClick={() => handlers.onFixShortenOther(issue)}>把 {issue.otherId} 终点提前</button>
+          )}
+        </div>
+      )}
+      {view.state === "missing" && <p className={styles.rowHint}>{omitHint(row)}</p>}
+      <div className={styles.rowActions}>
+        {boundaries && (
+          <>
+            <button type="button" onClick={() => handlers.onPlayRange(boundaries.start_ms, boundaries.end_ms)}><Play />试听本句</button>
+            <button type="button" onClick={() => handlers.onEdit(row)}><PencilLine />调整时间</button>
+            {view.change === "added" || row.status !== "matched" ? (
+              <button type="button" onClick={() => handlers.onRemove(row)}><Trash2 />不纳入</button>
+            ) : (
+              <button type="button" onClick={() => handlers.onRemove(row)}><Trash2 />移除</button>
+            )}
+          </>
+        )}
+        {view.state === "removed" && (
+          <button type="button" onClick={() => handlers.onRestore(row)}><Undo2 />恢复</button>
+        )}
+        {view.state === "missing" && (
+          <>
+            <button type="button" onClick={() => handlers.onEdit(row)}><PencilLine />补录时间</button>
+            <button type="button" disabled={busy} onClick={() => handlers.onConfirmSkip(row)}><EyeOff />原音不读这句</button>
+          </>
+        )}
+        {view.state === "excluded" && (
+          <>
+            <button type="button" disabled={busy} onClick={() => handlers.onUnconfirmSkip(row)}><Undo2 />取消不朗读</button>
+            <button type="button" onClick={() => handlers.onEdit(row)}><PencilLine />补录时间</button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+});
 
 /** Seconds-based time field: free typing, commits on blur/Enter, snaps to 0.1s. */
 function TimeInput({ valueMs, onCommit }: { valueMs: number; onCommit: (ms: number) => void }) {
@@ -119,6 +230,9 @@ export function LyricsReviewPage() {
   const audioRef = useRef<HTMLAudioElement>(null);
   const rangeRef = useRef<number | undefined>(undefined);
   const activeRef = useRef<HTMLDivElement>(null);
+  // Handlers read the live playhead from a ref so their identity stays stable
+  // and memoised rows are not re-rendered by the 4 Hz timeupdate tick.
+  const nowRef = useRef(0);
 
   // The revision id is the draft's reset boundary, mirroring the proofread page.
   useEffect(() => {
@@ -127,7 +241,9 @@ export function LyricsReviewPage() {
     setDraft((current) =>
       !current || current.baseRevision !== revision ? buildDraft(workspace) : current,
     );
-    setPublishedNotice(undefined);
+    // The published notice deliberately survives the post-publish refetch: the
+    // revision change would otherwise clear the "please re-export" hint in the
+    // same render that shows it. It is cleared by the next edit instead.
   }, [workspace?.timeline_revision_id, workspace?.status]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const views = useMemo(() => (workspace && draft ? draftRows(workspace, draft) : []), [draft, workspace]);
@@ -188,6 +304,7 @@ export function LyricsReviewPage() {
   const publish = useMutation({
     mutationFn: async () => {
       if (!workspace || !draft) throw new Error("校对数据尚未加载。");
+      setPublishedNotice(undefined);
       setPublishJob(undefined);
       const run = await publishTimelineCorrection(bookId, toManualTable(workspace, draft));
       if (run.jobId) await waitForJob(run.jobId, setPublishJob);
@@ -215,6 +332,7 @@ export function LyricsReviewPage() {
     if (!node) return;
     node.currentTime = ms / 1000;
     setNowMs(ms);
+    nowRef.current = ms;
   };
   const playRange = (startMs: number, endMs: number) => {
     const node = audioRef.current;
@@ -225,12 +343,14 @@ export function LyricsReviewPage() {
   };
 
   const setEntry = (row: TimelineReviewSentence, startMs: number, endMs: number) => {
+    setPublishedNotice(undefined);
     setDraft((current) => {
       if (!current) return current;
       return { ...current, entries: { ...current.entries, [row.sentence_id]: { start_ms: startMs, end_ms: endMs } } };
     });
   };
   const removeEntry = (row: TimelineReviewSentence) => {
+    setPublishedNotice(undefined);
     setDraft((current) => {
       if (!current) return current;
       const entries = { ...current.entries };
@@ -249,10 +369,11 @@ export function LyricsReviewPage() {
 
   const openEditor = (row: TimelineReviewSentence) => {
     const existing = draft?.entries[row.sentence_id];
+    const position = Math.floor(nowRef.current);
     setEditing({
       row,
-      startMs: existing?.start_ms ?? Math.floor(nowMs),
-      endMs: existing?.end_ms ?? Math.min(Math.floor(nowMs) + 2000, workspace?.duration_ms ?? 2000),
+      startMs: existing?.start_ms ?? position,
+      endMs: existing?.end_ms ?? Math.min(position + 2000, workspace?.duration_ms ?? 2000),
     });
   };
   const confirmEditor = () => {
@@ -283,6 +404,26 @@ export function LyricsReviewPage() {
     const end = mine.start_ms;
     setEntry(otherRow, Math.max(0, Math.min(other.start_ms, end - minSpanMs(otherRow))), end);
   };
+
+  // Rebuilt only when the draft/workspace/review state changes — never on the
+  // playhead tick — so memoised rows keep skipping 4 Hz re-renders.
+  const rowHandlers = useMemo<RowHandlers>(
+    () => ({
+      onSeek: (startMs) => seek(startMs),
+      onPlayRange: (startMs, endMs) => playRange(startMs, endMs),
+      onEdit: (row) => openEditor(row),
+      onRemove: (row) => removeEntry(row),
+      onRestore: (row) => {
+        if (row.start_ms != null && row.end_ms != null) setEntry(row, row.start_ms, row.end_ms);
+      },
+      onConfirmSkip: (row) => review.mutate([...confirmedIds, row.sentence_id]),
+      onUnconfirmSkip: (row) => review.mutate(confirmedIds.filter((id) => id !== row.sentence_id)),
+      onFixPush: (issue) => fixByPushingStart(issue),
+      onFixShortenOther: (issue) => fixByShorteningOther(issue),
+    }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [draft, workspace, confirmedIds, review],
+  );
 
   // Neighbour context for the editing dialog, based on included sentences.
   const editingIndex = editing ? includedViews.findIndex((item) => item.row.sentence_id === editing.row.sentence_id) : -1;
@@ -353,6 +494,7 @@ export function LyricsReviewPage() {
             const node = event.currentTarget;
             const current = node.currentTime * 1000;
             setNowMs(current);
+            nowRef.current = current;
             if (rangeRef.current != null && current >= rangeRef.current) {
               rangeRef.current = undefined;
               node.pause();
@@ -418,83 +560,22 @@ export function LyricsReviewPage() {
     </div>
 
     <main className={styles.list} aria-label="歌词句子">
-      {visible.map((item) => {
-        const badge = stateBadge(item);
-        const boundaries = item.boundaries;
-        const rowIssue = issuesByRow.get(item.row.sentence_id);
-        return <div
+      {visible.map((item) => (
+        <SentenceRow
           key={item.row.sentence_id}
-          id={`lyrics-row-${item.row.sentence_id}`}
-          ref={views[activeIndex] === item ? activeRef : undefined}
-          className={styles.row}
-          data-state={item.state}
-          data-change={item.change ?? undefined}
-          data-active={views[activeIndex] === item || undefined}
-          data-flash={flashId === item.row.sentence_id || undefined}
-        >
-          <div className={styles.rowMeta}>
-            <b data-tone={badge.tone}>{badge.label}</b>
-            <span>{item.row.sentence_id} · 第 {item.row.page_no} 页</span>
-            <span>{boundaries ? `${formatClock(boundaries.start_ms)} – ${formatClock(boundaries.end_ms)}` : "—"}</span>
-          </div>
-          <p
-            className={styles.rowText}
-            role="button"
-            tabIndex={0}
-            title="点击把播放位置跳到本句开头"
-            onClick={() => boundaries && seek(boundaries.start_ms)}
-            onKeyDown={(event) => {
-              if ((event.key === "Enter" || event.key === " ") && boundaries) {
-                event.preventDefault();
-                seek(boundaries.start_ms);
-              }
-            }}
-          >
-            {item.row.text}
-          </p>
-          {rowIssue?.otherId && (
-            <div className={styles.rowConflict} role="status">
-              <CircleAlert />
-              <span>与 {rowIssue.otherId} 的标注重叠 {(rowIssue.overlapMs ?? 0) / 1000 > 0 ? `${((rowIssue.overlapMs ?? 0) / 1000).toFixed(1)} 秒` : ""}，可一键修正：</span>
-              <button type="button" onClick={() => fixByPushingStart(rowIssue)}>本句起点顺延</button>
-              {rowIssue.otherId && draft?.entries[rowIssue.otherId] && (
-                <button type="button" onClick={() => fixByShorteningOther(rowIssue)}>把 {rowIssue.otherId} 终点提前</button>
-              )}
-            </div>
+          rowRef={views[activeIndex] === item ? activeRef : undefined}
+          view={item}
+          issue={issuesByRow.get(item.row.sentence_id)}
+          active={views[activeIndex] === item}
+          flash={flashId === item.row.sentence_id}
+          canShortenOther={Boolean(
+            issuesByRow.get(item.row.sentence_id)?.otherId &&
+              draft?.entries[issuesByRow.get(item.row.sentence_id)!.otherId!],
           )}
-          {item.state === "missing" && (
-            <p className={styles.rowHint}>{omitHint(item.row)}</p>
-          )}
-          <div className={styles.rowActions}>
-            {boundaries && (
-              <>
-                <button type="button" onClick={() => playRange(boundaries.start_ms, boundaries.end_ms)}><Play />试听本句</button>
-                <button type="button" onClick={() => openEditor(item.row)}><PencilLine />调整时间</button>
-                {item.change === "added" || item.row.status !== "matched" ? (
-                  <button type="button" onClick={() => removeEntry(item.row)}><Trash2 />不纳入</button>
-                ) : (
-                  <button type="button" onClick={() => removeEntry(item.row)}><Trash2 />移除</button>
-                )}
-              </>
-            )}
-            {item.state === "removed" && (
-              <button type="button" onClick={() => item.row.start_ms != null && item.row.end_ms != null && setEntry(item.row, item.row.start_ms, item.row.end_ms)}><Undo2 />恢复</button>
-            )}
-            {item.state === "missing" && (
-              <>
-                <button type="button" onClick={() => openEditor(item.row)}><PencilLine />补录时间</button>
-                <button type="button" disabled={review.isPending} onClick={() => review.mutate([...confirmedIds, item.row.sentence_id])}><EyeOff />原音不读这句</button>
-              </>
-            )}
-            {item.state === "excluded" && (
-              <>
-                <button type="button" disabled={review.isPending} onClick={() => review.mutate(confirmedIds.filter((id) => id !== item.row.sentence_id))}><Undo2 />取消不朗读</button>
-                <button type="button" onClick={() => openEditor(item.row)}><PencilLine />补录时间</button>
-              </>
-            )}
-          </div>
-        </div>;
-      })}
+          busy={review.isPending}
+          handlers={rowHandlers}
+        />
+      ))}
       {!visible.length && <div className={styles.empty}>当前筛选没有句子。</div>}
     </main>
 

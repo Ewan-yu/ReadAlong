@@ -226,9 +226,12 @@ class OriginalAudioReviewService:
         path = (root / state.source.original_audio_path).resolve(strict=False)
         if not path.is_relative_to(root) or not path.is_file():
             raise PipelineError("ORIGINAL_AUDIO_MISSING", "原音文件不存在。", status_code=404)
-        from app.pipeline.hashing import file_sha256
+        from app.pipeline.hashing import file_sha256_cached
 
-        if file_sha256(path) != state.source.original_audio_sha256:
+        # The browser player verifies the MP3 with several Range requests per
+        # seek; the cached stat-keyed hash keeps each of them cheap while still
+        # detecting a mutated file on the next request.
+        if file_sha256_cached(path) != state.source.original_audio_sha256:
             raise PipelineError(
                 "ORIGINAL_AUDIO_HASH_MISMATCH", "原音文件已变化，请重新导入。", status_code=409
             )

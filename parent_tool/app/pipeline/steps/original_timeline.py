@@ -832,11 +832,27 @@ class OriginalTimelineStep:
         tolerance = 3 if len(expected) >= 4 else (2 if len(expected) == 3 else 1)
         lower = max(1, len(expected) - tolerance)
         upper = min(len(actual) - cursor, len(expected) + tolerance)
+        words = [word for word, _ in actual]
+        expected_set = set(expected)
+        # Acceptance needs at least this many words shared with the expected
+        # phrase (matching blocks are shared words), which is a cheap necessary
+        # condition: SequenceMatcher is pure Python and dominated the scan cost
+        # whenever unmatched word-list sentences forced repeated full passes.
+        required_exact = 1 if len(expected) == 2 else max(2, round(len(expected) * .6))
         for index in range(cursor, len(actual)):
             for length in range(lower, upper + 1):
-                candidate = tuple(word for word, _ in actual[index:index + length])
-                if len(candidate) != length:
+                window = words[index:index + length]
+                if len(window) != length:
                     continue
+                shared = 0
+                for word in window:
+                    if word in expected_set:
+                        shared += 1
+                        if shared >= required_exact:
+                            break
+                if shared < required_exact:
+                    continue
+                candidate = tuple(window)
                 matcher = SequenceMatcher(a=expected, b=candidate, autojunk=False)
                 ratio = matcher.ratio()
                 exact = sum(block.size for block in matcher.get_matching_blocks())
