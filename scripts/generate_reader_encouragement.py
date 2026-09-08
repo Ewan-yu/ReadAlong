@@ -31,10 +31,43 @@ ANCHOR_TEXT = (
     "也可以慢慢地再读一次。准备好了吗？让我们开心地开始吧！"
 )
 CLIPS = {
-    "keep_trying.wav": "没关系，慢慢来。你已经读得很认真了，再试一次，一定会更棒！",
-    "good_job.wav": "读得真不错！你的声音越来越清楚了，继续加油！",
-    "great_job.wav": "太棒啦！你读得又清楚又自信，给你一颗闪亮的小星星！",
+    "keep_trying.wav": "再试一次吧！",
+    "good_job.wav": "真不错，继续哦！",
+    "great_job.wav": "太棒啦！",
 }
+
+
+def _trim_silence(path: Path, head_keep_s: float = 0.08, tail_keep_s: float = 0.1) -> None:
+    """Remove long lead-in/out pauses VoxCPM sometimes leaves in a clip."""
+    import contextlib
+    import struct
+    import wave
+
+    with contextlib.closing(wave.open(str(path))) as reader:
+        params = reader.getparams()
+        samples = struct.unpack(
+            f"<{params.nframes}h", reader.readframes(params.nframes)
+        )
+    window = params.framerate // 50  # 20 ms
+    rms = [
+        (sum(x * x for x in samples[i : i + window]) / window) ** 0.5
+        for i in range(0, len(samples) - window, window)
+    ]
+    if not rms:
+        return
+    threshold = max(rms) * 0.02
+    first = next(i for i, value in enumerate(rms) if value > threshold)
+    last = len(rms) - 1 - next(
+        i for i, value in enumerate(reversed(rms)) if value > threshold
+    )
+    head = max(0, first * window - int(head_keep_s * params.framerate))
+    tail = min(
+        len(samples), (last + 1) * window + int(tail_keep_s * params.framerate)
+    )
+    trimmed = samples[head:tail]
+    with contextlib.closing(wave.open(str(path), "wb")) as writer:
+        writer.setparams(params)
+        writer.writeframes(struct.pack(f"<{len(trimmed)}h", *trimmed))
 
 
 def main() -> None:
@@ -55,7 +88,9 @@ def main() -> None:
         )
         for filename, text in CLIPS.items():
             print(f"Generating {filename}…", flush=True)
-            provider.synthesize(text, clone, OUTPUT / filename, cancellation)
+            target = OUTPUT / filename
+            provider.synthesize(text, clone, target, cancellation)
+            _trim_silence(target)
     finally:
         ANCHOR.unlink(missing_ok=True)
 

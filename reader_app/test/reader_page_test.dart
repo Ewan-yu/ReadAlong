@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -16,7 +17,12 @@ import 'package:reader_app/features/reader/reader_models.dart';
 import 'package:reader_app/features/reader/reader_page.dart';
 import 'package:reader_app/features/reader/reader_repository.dart';
 import 'package:reader_app/features/reader/sentence_audio_player.dart';
+import 'package:reader_app/services/recording/recording_preparation.dart';
+import 'package:reader_app/services/recording/recording_service.dart';
 import 'package:reader_app/services/scoring/score_models.dart';
+import 'package:reader_app/services/scoring/scoring_provider.dart';
+import 'package:reader_app/services/scoring/xfyun_ise_provider.dart'
+    show scoringProvider;
 
 const _png =
     'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
@@ -52,6 +58,66 @@ final class _WidgetAudioPlayer implements SentenceAudioPlayer {
   @override
   Future<void> dispose() async {
     disposeCalls++;
+  }
+}
+
+final class _WidgetRecorder implements AudioRecordingService {
+  _WidgetRecorder(this.path, {this.stopError});
+
+  final String path;
+  final Object? stopError;
+
+  @override
+  Future<RecordingSession> start({
+    required String libraryId,
+    required String sentenceId,
+  }) async =>
+      RecordingSession(path: path, levels: const Stream.empty());
+
+  @override
+  Future<String> stop() async {
+    final error = stopError;
+    if (error != null) throw error;
+    return path;
+  }
+
+  @override
+  Future<void> cancel() async {}
+
+  @override
+  Future<void> dispose() async {}
+}
+
+final class _WidgetScorer implements ScoringProvider {
+  @override
+  String get name => 'widget-test';
+
+  @override
+  Future<bool> isConfigured() async => true;
+
+  @override
+  Future<ScoreResult> score({
+    required Uint8List pcm16k,
+    required String refText,
+  }) async =>
+      const ScoreResult(
+        childScore: 90,
+        provider: 'widget-test',
+        accuracy: 90,
+        fluency: 90,
+        integrity: 90,
+      );
+}
+
+final class _ImmediatePreparation implements RecordingPreparationProtocol {
+  @override
+  Future<Duration> run({
+    required bool Function() isActive,
+    required void Function(RecordingPreparationUpdate update) onUpdate,
+  }) async {
+    onUpdate(const RecordingPreparationUpdate.stabilizing());
+    onUpdate(const RecordingPreparationUpdate.countdown(3));
+    return Duration.zero;
   }
 }
 
@@ -127,6 +193,7 @@ void main() {
     Size size = const Size(1280, 800),
     Future<PointReadingBook>? pointReadingBook,
     SentenceAudioPlayer? audioPlayer,
+    List<Override> overrides = const [],
   }) async {
     final effectivePlayer = audioPlayer ?? _WidgetAudioPlayer();
     await tester.binding.setSurfaceSize(size);
@@ -144,6 +211,7 @@ void main() {
                 )),
           ),
           sentenceAudioPlayerProvider.overrideWith((_) => effectivePlayer),
+          ...overrides,
         ],
         child: MaterialApp(
           theme: buildAppTheme(),
@@ -1196,5 +1264,132 @@ void main() {
       findsNothing,
     );
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('空闲工具栏一键重播当前句示范音', (tester) async {
+    final book = await prepareBook(tester, pageCount: 1);
+    final pointBook = PointReadingBook(
+      libraryId: book.libraryId,
+      sentences: [
+        sentence(
+          id: 'replay-me',
+          sequence: 1,
+          text: 'Play it again.',
+          clipEnd: const Duration(seconds: 2),
+          bbox: const NormalizedRect(x: .1, y: .2, width: .4, height: .1),
+        ),
+      ],
+    );
+    final player = _WidgetAudioPlayer();
+    await pumpReader(
+      tester,
+      book: Future.value(book),
+      pointReadingBook: Future.value(pointBook),
+      audioPlayer: player,
+    );
+    await tester.pumpAndSettle();
+
+    await tapNormalized(
+      tester,
+      pageNumber: 1,
+      normalized: const Offset(0.2, 0.25),
+    );
+    player.pending.single.complete();
+    await tester.pumpAndSettle();
+    expect(player.played, hasLength(1));
+
+    await tester.tap(find.byKey(const ValueKey('follow-replay-demonstration')));
+    await tester.pump();
+
+    expect(player.played, hasLength(2));
+    expect(player.played.last.path, 'replay-me.ogg');
+    expect(player.played.last.start, Duration.zero);
+    expect(player.played.last.end, const Duration(seconds: 2));
+    // 播放示范期间重播与录音按钮同时禁用，避免重复触发。
+    expect(
+      tester
+          .widget<IconButton>(
+            find.byKey(const ValueKey('follow-replay-demonstration')),
+          )
+          .onPressed,
+      isNull,
+    );
+    expect(
+      tester
+          .widget<IconButton>(
+            find.byKey(const ValueKey('follow-start-recording')),
+          )
+          .onPressed,
+      isNull,
+    );
+  });
+
+  testWidgets('录音态停止按钮完整固定在面板内不被裁切', (tester) async {
+    final book = await prepareBook(tester, pageCount: 1);
+    // 注入停止失败,让收尾走失败分支:定时器已取消且不触发任何真实文件
+    // IO(评分链路的 readAsBytes 在 fake async 测试里永远无法完成)。
+    final recorder = _WidgetRecorder(
+      p.join(tempDir.path, 'follow-take.wav'),
+      stopError: const RecordingException('录音没有保存成功，请再试一次'),
+    );
+    final pointBook = PointReadingBook(
+      libraryId: book.libraryId,
+      sentences: [
+        sentence(
+          id: 'record-me',
+          sequence: 1,
+          text: 'A long sentence that wraps to multiple lines in the panel.',
+          bbox: const NormalizedRect(x: .1, y: .2, width: .4, height: .1),
+        ),
+      ],
+    );
+    final player = _WidgetAudioPlayer();
+    await pumpReader(
+      tester,
+      book: Future.value(book),
+      pointReadingBook: Future.value(pointBook),
+      audioPlayer: player,
+      overrides: [
+        recordingServiceProvider.overrideWith((_) async => recorder),
+        scoringProvider.overrideWithValue(_WidgetScorer()),
+        recordingPreparationProtocolProvider
+            .overrideWithValue(_ImmediatePreparation()),
+        followQuickPreparationProtocolProvider
+            .overrideWithValue(_ImmediatePreparation()),
+      ],
+    );
+    await tester.pumpAndSettle();
+
+    await tapNormalized(
+      tester,
+      pageNumber: 1,
+      normalized: const Offset(0.2, 0.25),
+    );
+    player.pending.single.complete();
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const ValueKey('follow-start-recording')));
+    // 单帧推进让录音阶段渲染完成，但不推进到 7 秒自动收尾。
+    await tester.pump(const Duration(milliseconds: 100));
+
+    final panelRect = tester.getRect(
+      find.byKey(const ValueKey('follow-stable-panel')),
+    );
+    final stopRect = tester.getRect(
+      find.byKey(const ValueKey('follow-stop-recording')),
+    );
+    expect(stopRect.width, 64);
+    expect(stopRect.top, greaterThanOrEqualTo(panelRect.top));
+    expect(stopRect.bottom, lessThanOrEqualTo(panelRect.bottom));
+
+    // 推进超过自动收尾上限,让 7 秒定时器真实触发:录音 UI 收起、
+    // 面板进入评分态。注入的停止失败让链路停在评分分支,不触发真实文件 IO。
+    await tester.pump(const Duration(seconds: 8));
+
+    expect(
+      find.byKey(const ValueKey('follow-stop-recording')),
+      findsNothing,
+    );
+    expect(find.text('录音已收到，正在评分…'), findsOneWidget);
   });
 }

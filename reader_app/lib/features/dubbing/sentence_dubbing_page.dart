@@ -390,8 +390,13 @@ class _GuidedControls extends StatelessWidget {
         ? null
         : _MessageStrip(message: state.failure!, error: true);
     final secondary = <Widget>[
+      // 每次录音数量变化都会重建此区块：录完一句（0→1）后“我的录音”默认
+      // 展开，孩子可直接点回听；没有录音时保持折叠，不干扰单主操作引导。
       ExpansionTile(
-        key: ValueKey('sentence-takes-${state.sentence.id}'),
+        key: ValueKey(
+          'sentence-takes-${state.sentence.id}-${state.takes.length}',
+        ),
+        initiallyExpanded: state.takes.isNotEmpty,
         tilePadding: EdgeInsets.zero,
         childrenPadding: EdgeInsets.zero,
         leading: const Icon(Icons.library_music_outlined),

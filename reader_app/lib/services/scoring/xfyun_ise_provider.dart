@@ -1,8 +1,9 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:typed_data';
+import 'dart:math' as math;
 
 import 'package:crypto/crypto.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:web_socket_channel/io.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
@@ -14,6 +15,85 @@ import 'scoring_provider.dart';
 
 const _iseHost = 'ise-api.xfyun.cn';
 const _isePath = '/v2/open-ise';
+
+/// Silence that does not participate in evaluation still has to be uploaded
+/// at the engine's required real-time pace, so every trimmed second removes a
+/// full second from the child-visible scoring wait.
+const _scoringSilenceHeadMargin = Duration(milliseconds: 200);
+const _scoringSilenceTailMargin = Duration(milliseconds: 300);
+const _scoringRmsSpeechFloor = 300;
+const _scoringMinTrimmedAudio = Duration(milliseconds: 500);
+
+/// Removes leading/trailing silence around the first and last audible speech
+/// frame while keeping short safety margins. The speech floor adapts to the
+/// take itself: Android's AGC amplifies quiet-room noise above any fixed
+/// absolute floor, which real-device scoring showed leaves the automatic
+/// trailing silence untrimmed. A take without clearly louder speech (noise
+/// only) is returned unchanged — never risk cutting content.
+Uint8List trimPcm16kSilence(Uint8List pcm16k) {
+  const bytesPerSample = 2;
+  const samplesPerFrame = 320; // 16 kHz × 20 ms frame.
+  const bytesPerFrame = samplesPerFrame * bytesPerSample;
+  const bytesPerMillisecond = 32; // 16 kHz × 16-bit mono.
+  final minTrimmedBytes =
+      _scoringMinTrimmedAudio.inMilliseconds * bytesPerMillisecond;
+  if (pcm16k.length <= minTrimmedBytes) return pcm16k;
+  final view = ByteData.sublistView(pcm16k);
+  final frameCount = pcm16k.length ~/ bytesPerFrame;
+  final frameRms = List<double>.filled(frameCount, 0);
+  for (var frame = 0; frame < frameCount; frame++) {
+    var sumSquares = 0;
+    final base = frame * bytesPerFrame;
+    for (var offset = 0; offset < bytesPerFrame; offset += bytesPerSample) {
+      final sample = view.getInt16(base + offset, Endian.little);
+      sumSquares += sample * sample;
+    }
+    frameRms[frame] = math.sqrt(sumSquares / samplesPerFrame);
+  }
+  // A loud reference from the take's own loudest frames. Speech after AGC
+  // sits far above room noise, so a fraction of it re-draws the noise floor.
+  final loudness = _percentile(frameRms, 0.9);
+  final floor = math.max(
+    _scoringRmsSpeechFloor.toDouble(),
+    loudness * 0.12,
+  );
+  var firstSpeech = -1;
+  var lastSpeech = -1;
+  for (var frame = 0; frame < frameCount; frame++) {
+    if (frameRms[frame] >= floor) {
+      if (firstSpeech < 0) firstSpeech = frame;
+      lastSpeech = frame;
+    }
+  }
+  if (firstSpeech < 0) return pcm16k;
+  final headFrames = _scoringSilenceHeadMargin.inMilliseconds ~/ 20;
+  final tailFrames = _scoringSilenceTailMargin.inMilliseconds ~/ 20;
+  final minFrames = minTrimmedBytes ~/ bytesPerFrame;
+  var startFrame = firstSpeech - headFrames;
+  var endFrame = lastSpeech + 1 + tailFrames;
+  if (endFrame - startFrame < minFrames) {
+    endFrame = startFrame + minFrames;
+  }
+  startFrame = startFrame.clamp(0, frameCount);
+  endFrame = endFrame.clamp(0, frameCount);
+  if (endFrame - startFrame < minFrames) {
+    startFrame = (endFrame - minFrames).clamp(0, frameCount);
+  }
+  final start = startFrame * bytesPerFrame;
+  final end = endFrame * bytesPerFrame;
+  if (start == 0 && end >= pcm16k.length) return pcm16k;
+  return Uint8List.sublistView(pcm16k, start, end);
+}
+
+double _percentile(List<double> values, double fraction) {
+  if (values.isEmpty) return 0;
+  final sorted = List<double>.of(values)..sort();
+  final index = (sorted.length - 1) * fraction;
+  final lower = index.floor();
+  final upper = index.ceil();
+  if (lower == upper) return sorted[lower];
+  return sorted[lower] + (sorted[upper] - sorted[lower]) * (index - lower);
+}
 
 typedef XfyunChannelConnector = WebSocketChannel Function(Uri uri);
 typedef XfyunDelay = Future<void> Function(Duration duration);
@@ -56,10 +136,21 @@ final class XfyunIseProvider implements ScoringProvider, IseConnectionProbe {
     if (pcm16k.isEmpty || refText.trim().isEmpty) {
       throw const ScoringException('录音或参考文本为空');
     }
+    // The engine paces uploads in real time, so trim the automatic trailing
+    // silence before connecting; otherwise it adds its full duration to the
+    // child-visible wait on every take.
+    final trimmed = trimPcm16kSilence(pcm16k);
+    final stopwatch = Stopwatch()..start();
     final xml = await _request(
       credentials: credentials,
-      pcm16k: pcm16k,
+      pcm16k: trimmed,
       refText: refText.trim(),
+    );
+    stopwatch.stop();
+    debugPrint(
+      'readalong.ise timing: audio=${pcm16k.length ~/ 32}ms '
+      'trimmed=${trimmed.length ~/ 32}ms upload+eval='
+      '${stopwatch.elapsedMilliseconds}ms',
     );
     return parseXfyunIseXml(xml);
   }

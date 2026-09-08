@@ -63,8 +63,7 @@ final class BookPackLimits {
     var cursor = centralDirectoryOffset;
     var totalUncompressed = 0;
     for (var index = 0; index < entryCount; index++) {
-      if (cursor > bytes.length - 46 ||
-          _u32(bytes, cursor) != 0x02014b50) {
+      if (cursor > bytes.length - 46 || _u32(bytes, cursor) != 0x02014b50) {
         return ['ZIP 中央目录条目 $index 损坏'];
       }
       final flags = _u16(bytes, cursor + 8);
@@ -86,8 +85,7 @@ final class BookPackLimits {
             '资源包单文件过大: $uncompressed 字节（上限 ${limits.maxSingleEntryBytes}）',
           );
         }
-        if (totalUncompressed >
-            limits.maxUncompressedBytes - uncompressed) {
+        if (totalUncompressed > limits.maxUncompressedBytes - uncompressed) {
           errors.add(
             '资源包解压后过大（上限 ${limits.maxUncompressedBytes} 字节）',
           );
@@ -102,8 +100,7 @@ final class BookPackLimits {
 
   static int _findEndOfCentralDirectory(Uint8List bytes) {
     if (bytes.length < 22) return -1;
-    final start =
-        bytes.length > 22 + 0xffff ? bytes.length - 22 - 0xffff : 0;
+    final start = bytes.length > 22 + 0xffff ? bytes.length - 22 - 0xffff : 0;
     for (var offset = bytes.length - 22; offset >= start; offset--) {
       if (_u32(bytes, offset) == 0x06054b50) {
         final commentLength = _u16(bytes, offset + 20);

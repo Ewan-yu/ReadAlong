@@ -302,7 +302,8 @@ final class LocalOriginalAudioRepository implements OriginalAudioRepository {
 Future<T> _traceOriginalAudioStage<T>(
   String stage,
   Future<T> Function() operation,
-) => traceStage('original_audio', stage, operation);
+) =>
+    traceStage('original_audio', stage, operation);
 
 Future<Map<String, dynamic>> _readObject(String path) async =>
     _decodeObject(await File(path).readAsBytes());

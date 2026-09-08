@@ -44,6 +44,20 @@ final recordingPreparationProtocolProvider =
   (_) => const TimedRecordingPreparationProtocol(),
 );
 
+/// Follow reading keeps the child-learning 3-2-1 rhythm only for the first
+/// take of a reading session. Consecutive takes already know the drill, so
+/// they fall back to the mandatory microphone stabilization alone: the WAV
+/// still captures everything from recorder start and the content zero keeps
+/// the whole lead-in, so a child who speaks early is never cut.
+final followQuickPreparationProtocolProvider =
+    Provider<RecordingPreparationProtocol>(
+  (_) => const TimedRecordingPreparationProtocol(
+    stabilization: Duration(milliseconds: 650),
+    beatDuration: Duration.zero,
+    countdownBeats: 0,
+  ),
+);
+
 /// Sentence dubbing starts capture before playing the demonstration. By the
 /// time the child has listened, Android's microphone is already stable, so a
 /// single short hand-off beat is enough instead of repeating 3-2-1 every time.

@@ -650,6 +650,9 @@ class _ReaderViewState extends ConsumerState<_ReaderView>
                         onRecord: () => unawaited(
                           _startSelectedRecording(),
                         ),
+                        onDemonstration: () => unawaited(
+                          _playSelectedDemonstration(),
+                        ),
                         onStop: () => unawaited(panelRef
                             .read(followReadingProvider.notifier)
                             .stopRecording()),
@@ -1048,9 +1051,14 @@ class _ReaderHighlightPainter extends CustomPainter {
 }
 
 class _ReaderControlPanelFrame extends StatelessWidget {
-  const _ReaderControlPanelFrame({required this.child});
+  const _ReaderControlPanelFrame({required this.child, this.footer});
 
   final Widget child;
+
+  /// Pinned below the scrollable area. The recording stop button and the
+  /// preparation cancel button must never be clipped when a long sentence
+  /// pushes the flexible content past the fixed panel height.
+  final Widget? footer;
 
   @override
   Widget build(BuildContext context) => DecoratedBox(
@@ -1069,14 +1077,35 @@ class _ReaderControlPanelFrame extends StatelessWidget {
           ],
         ),
         child: LayoutBuilder(
-          builder: (context, constraints) => SingleChildScrollView(
-            primary: false,
-            physics: const ClampingScrollPhysics(),
-            child: ConstrainedBox(
-              constraints: BoxConstraints(minHeight: constraints.maxHeight),
-              child: Center(child: child),
-            ),
-          ),
+          builder: (context, constraints) {
+            Widget scrollableArea(BoxConstraints constraints) =>
+                SingleChildScrollView(
+                  primary: false,
+                  physics: const ClampingScrollPhysics(),
+                  child: ConstrainedBox(
+                    constraints:
+                        BoxConstraints(minHeight: constraints.maxHeight),
+                    child: Center(child: child),
+                  ),
+                );
+            final pinnedFooter = footer;
+            if (pinnedFooter == null) {
+              return scrollableArea(constraints);
+            }
+            return Column(
+              children: [
+                Expanded(
+                  child: LayoutBuilder(
+                    builder: (context, inner) => scrollableArea(inner),
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.only(bottom: AppSpacing.unit),
+                  child: pinnedFooter,
+                ),
+              ],
+            );
+          },
         ),
       );
 }
@@ -1090,6 +1119,7 @@ class _FollowReadingPanel extends StatelessWidget {
     required this.pointPlaybackWordIndex,
     required this.onRetryPointReading,
     required this.onRecord,
+    required this.onDemonstration,
     required this.onStop,
     required this.onCancelPreparation,
     required this.onRetry,
@@ -1107,6 +1137,7 @@ class _FollowReadingPanel extends StatelessWidget {
   final int? pointPlaybackWordIndex;
   final VoidCallback onRetryPointReading;
   final VoidCallback onRecord;
+  final VoidCallback onDemonstration;
   final VoidCallback onStop;
   final VoidCallback onCancelPreparation;
   final VoidCallback onRetry;
@@ -1207,6 +1238,12 @@ class _FollowReadingPanel extends StatelessWidget {
     if (value.isPreparing) {
       final countdown = value.phase == FollowReadingPhase.countdown;
       return _ReaderControlPanelFrame(
+        footer: IconButton(
+          key: const ValueKey('follow-cancel-preparation'),
+          onPressed: onCancelPreparation,
+          icon: const Icon(Icons.close_rounded),
+          tooltip: '取消录音准备',
+        ),
         child: Padding(
           padding: panelPadding,
           child: Column(
@@ -1227,12 +1264,6 @@ class _FollowReadingPanel extends StatelessWidget {
                 '看到“开始读吧”再开口，第一个字会更完整',
                 style: TextStyle(color: AppColors.textSecondary),
               ),
-              IconButton(
-                key: const ValueKey('follow-cancel-preparation'),
-                onPressed: onCancelPreparation,
-                icon: const Icon(Icons.close_rounded),
-                tooltip: '取消录音准备',
-              ),
             ],
           ),
         ),
@@ -1245,6 +1276,17 @@ class _FollowReadingPanel extends StatelessWidget {
               ? '读完后停一下，会自动结束'
               : '听得很清楚，继续读吧';
       return _ReaderControlPanelFrame(
+        footer: IconButton.filled(
+          key: const ValueKey('follow-stop-recording'),
+          constraints: const BoxConstraints.tightFor(
+            width: 64,
+            height: 64,
+          ),
+          style: IconButton.styleFrom(backgroundColor: AppColors.danger),
+          onPressed: onStop,
+          icon: const Icon(Icons.stop_rounded),
+          tooltip: '停止录音',
+        ),
         child: Padding(
           padding: panelPadding,
           child: Column(
@@ -1266,19 +1308,6 @@ class _FollowReadingPanel extends StatelessWidget {
                     color: !value.heardSpeech
                         ? AppColors.accent
                         : AppColors.primaryDark),
-              ),
-              SizedBox(
-                  height: compact ? AppSpacing.unit : AppSpacing.cardPadding),
-              IconButton.filled(
-                key: const ValueKey('follow-stop-recording'),
-                constraints: const BoxConstraints.tightFor(
-                  width: 64,
-                  height: 64,
-                ),
-                style: IconButton.styleFrom(backgroundColor: AppColors.danger),
-                onPressed: onStop,
-                icon: const Icon(Icons.stop_rounded),
-                tooltip: '停止录音',
               ),
             ],
           ),
@@ -1364,8 +1393,11 @@ class _FollowReadingPanel extends StatelessWidget {
             _ReaderSentenceNavigationBar(
               canPrevious: canPrevious,
               canNext: canNext,
+              demonstrationEnabled:
+                  value.phase != FollowReadingPhase.demonstrating,
               recordingEnabled: value.phase != FollowReadingPhase.demonstrating,
               onPrevious: onPrevious,
+              onDemonstration: onDemonstration,
               onRecord: onRecord,
               onNext: onNext,
             ),
@@ -1405,16 +1437,20 @@ class _ReaderSentenceNavigationBar extends StatelessWidget {
   const _ReaderSentenceNavigationBar({
     required this.canPrevious,
     required this.canNext,
+    required this.demonstrationEnabled,
     required this.recordingEnabled,
     required this.onPrevious,
+    required this.onDemonstration,
     required this.onRecord,
     required this.onNext,
   });
 
   final bool canPrevious;
   final bool canNext;
+  final bool demonstrationEnabled;
   final bool recordingEnabled;
   final VoidCallback onPrevious;
+  final VoidCallback onDemonstration;
   final VoidCallback onRecord;
   final VoidCallback onNext;
 
@@ -1431,6 +1467,20 @@ class _ReaderSentenceNavigationBar extends StatelessWidget {
               height: AppSizes.minTouchTarget,
             ),
             icon: const Icon(Icons.arrow_back_rounded),
+          ),
+          IconButton.filled(
+            key: const ValueKey('follow-replay-demonstration'),
+            onPressed: demonstrationEnabled ? onDemonstration : null,
+            tooltip: '重播本句示范',
+            constraints: const BoxConstraints.tightFor(
+              width: 64,
+              height: 64,
+            ),
+            style: IconButton.styleFrom(
+              backgroundColor: AppColors.primaryContainer,
+              foregroundColor: AppColors.primaryDark,
+            ),
+            icon: const Icon(Icons.volume_up_rounded),
           ),
           IconButton.filled(
             key: const ValueKey('follow-start-recording'),

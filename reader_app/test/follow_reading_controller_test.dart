@@ -99,6 +99,19 @@ final class _ImmediatePreparation implements RecordingPreparationProtocol {
   }
 }
 
+final class _CountingPreparation implements RecordingPreparationProtocol {
+  var calls = 0;
+
+  @override
+  Future<Duration> run({
+    required bool Function() isActive,
+    required void Function(RecordingPreparationUpdate update) onUpdate,
+  }) async {
+    calls++;
+    return Duration.zero;
+  }
+}
+
 Uint8List _wav() {
   const pcm = [0, 0, 1, 0];
   final bytes = Uint8List(44 + pcm.length);
@@ -157,6 +170,8 @@ void main() {
         sentenceAudioPlayerProvider.overrideWithValue(player),
         scoringProvider.overrideWithValue(_FakeScorer()),
         recordingPreparationProtocolProvider
+            .overrideWithValue(_ImmediatePreparation()),
+        followQuickPreparationProtocolProvider
             .overrideWithValue(_ImmediatePreparation()),
       ],
     );
@@ -330,6 +345,42 @@ void main() {
     subscription = null;
     await pumpEventQueue();
     expect(await File(secondPath).exists(), isFalse);
+  });
+
+  test('首次跟读走完整 3-2-1，同会话连续录音改用快速准备', () async {
+    final fullPreparation = _CountingPreparation();
+    final quickPreparation = _CountingPreparation();
+    final quickContainer = ProviderContainer(
+      overrides: [
+        recordingServiceProvider.overrideWith((_) async => recorder),
+        sentenceAudioPlayerProvider.overrideWithValue(player),
+        scoringProvider.overrideWithValue(_FakeScorer()),
+        recordingPreparationProtocolProvider.overrideWithValue(fullPreparation),
+        followQuickPreparationProtocolProvider
+            .overrideWithValue(quickPreparation),
+      ],
+    );
+    addTearDown(quickContainer.dispose);
+
+    final subscription = quickContainer.listen(
+      followReadingControllerProvider('book-copy'),
+      (_, __) {},
+      fireImmediately: true,
+    );
+    addTearDown(subscription.close);
+    await quickContainer
+        .read(followReadingControllerProvider('book-copy').future);
+    final controller = quickContainer
+        .read(followReadingControllerProvider('book-copy').notifier);
+    controller.selectSentence(_sentence('sentence-one'));
+
+    await controller.startRecording();
+    await controller.stopRecording();
+    await controller.acknowledgeResult();
+    await controller.startRecording();
+
+    expect(fullPreparation.calls, 1);
+    expect(quickPreparation.calls, 1);
   });
 
   test('Android 切到后台会取消隐形录音并保留当前句', () async {

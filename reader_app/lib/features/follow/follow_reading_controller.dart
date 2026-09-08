@@ -222,6 +222,7 @@ final class FollowReadingController
   late final SentenceAudioPlayer _player;
   late final ScoringProvider _scorer;
   late final RecordingPreparationProtocol _preparation;
+  late final RecordingPreparationProtocol _quickPreparation;
   StreamSubscription<RecordingLevel>? _levels;
   Timer? _limitTimer;
   Timer? _silenceTimer;
@@ -231,6 +232,7 @@ final class FollowReadingController
   var _recordSequence = 0;
   var _generation = 0;
   var _disposed = false;
+  var _rehearsedCountdown = false;
   ReaderSentence? _pendingSentence;
   Duration _contentOffset = Duration.zero;
   Duration _contentLeadIn = Duration.zero;
@@ -244,6 +246,7 @@ final class FollowReadingController
     // child actually presses the record button.
     _recorderFuture = ref.watch(recordingServiceProvider.future);
     _preparation = ref.watch(recordingPreparationProtocolProvider);
+    _quickPreparation = ref.watch(followQuickPreparationProtocolProvider);
     ref.onDispose(() {
       final record = state.valueOrNull?.record;
       _disposed = true;
@@ -377,7 +380,11 @@ final class FollowReadingController
         activeWordIndex: null,
         failure: null,
       ));
-      final preparationElapsed = await _preparation.run(
+      // The 3-2-1 rhythm teaches the pacing once; consecutive takes in the
+      // same reading session only need the mandatory microphone stabilization.
+      final preparation =
+          _rehearsedCountdown ? _quickPreparation : _preparation;
+      final preparationElapsed = await preparation.run(
         isActive: () => _isCurrent(generation),
         onUpdate: (update) {
           final latest = state.valueOrNull;
@@ -390,6 +397,7 @@ final class FollowReadingController
           ));
         },
       );
+      _rehearsedCountdown = true;
       _contentOffset = followRecordingContentOffset(preparationElapsed);
       _contentLeadIn = followRecordingContentLeadIn(preparationElapsed);
       if (!_isCurrent(generation)) {

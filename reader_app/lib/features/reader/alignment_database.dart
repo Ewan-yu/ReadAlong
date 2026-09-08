@@ -52,7 +52,9 @@ void _sweepStaleTempCopies() {
   if (!directory.existsSync()) return;
   for (final entity in directory.listSync()) {
     final name = p.basename(entity.path);
-    if (entity is File && name.startsWith('ra_alignment_') && name.endsWith('.db')) {
+    if (entity is File &&
+        name.startsWith('ra_alignment_') &&
+        name.endsWith('.db')) {
       try {
         entity.deleteSync();
       } on Object {

@@ -152,7 +152,8 @@ final class LocalPointReadingRepository implements PointReadingRepository {
 Future<T> _tracePointReadingStage<T>(
   String stage,
   Future<T> Function() operation,
-) => traceStage('point_reading', stage, operation);
+) =>
+    traceStage('point_reading', stage, operation);
 
 Future<Map<String, List<ReaderWordTiming>>> _loadWordTimings(
   Database database,
