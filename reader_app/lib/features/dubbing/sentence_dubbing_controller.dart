@@ -260,6 +260,9 @@ final class SentenceDubbingController
         current.isBusy ||
         index < 0 ||
         index >= current.original.sentences.length) return;
+    // A score may still be in flight for the previous sentence. Its database
+    // write remains valid, but its completion must not repaint this sentence.
+    ++_generation;
     final takes = await _repository.listTakes(current.project.id,
         sentenceId: current.original.sentences[index].id);
     final allTakes = await _repository.listTakes(current.project.id);
@@ -486,7 +489,12 @@ final class SentenceDubbingController
       try {
         await File(path).delete();
       } on Object {}
-      await _score(take, current.sentence.text, generation);
+      // The Take is durable at this point. Do not make the child wait for a
+      // network score before allowing the next sentence; scoring updates this
+      // Take in the background and is guarded by the generation token below.
+      await _repository.selectTake(take.id);
+      await _refreshAfterScore();
+      unawaited(_score(take, current.sentence.text, generation));
     } on RecordingException catch (error) {
       if (_isCurrent(generation)) _fail(error.message);
     } on Object {
@@ -610,6 +618,8 @@ final class SentenceDubbingController
   Future<void> deleteTake(String takeId) async {
     final current = state.valueOrNull;
     if (current == null || current.isBusy) return;
+    // Invalidate a score that may still be uploading before deleting its Take.
+    ++_generation;
     await _repository.deleteTake(takeId);
     final remaining = await _repository.listTakes(
       current.project.id,

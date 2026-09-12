@@ -54,7 +54,8 @@ void main() {
   tearDown(() async {
     subscription?.close();
     container.dispose();
-    await pumpEventQueue();
+    await pumpEventQueue(times: 20);
+    await Future<void>.delayed(const Duration(milliseconds: 50));
     await originalPlayer.close();
     if (await temporary.exists()) await temporary.delete(recursive: true);
   });
@@ -84,6 +85,7 @@ void main() {
     expect(events.take(2), ['recorder.start', 'original.play']);
 
     await controller.stopRecording();
+    await Future<void>.delayed(const Duration(milliseconds: 50));
 
     expect(current().phase, SentenceDubbingPhase.result);
     expect(current().completedSentenceCount, 1);
@@ -114,7 +116,7 @@ void main() {
     for (var attempt = 0;
         attempt < 10 && !originalPlayer.playbackStarted;
         attempt++) {
-      await pumpEventQueue();
+      await pumpEventQueue(times: 20);
     }
     expect(current().phase, SentenceDubbingPhase.demonstrating);
 
@@ -135,10 +137,10 @@ void main() {
     for (var attempt = 0;
         attempt < 10 && !originalPlayer.playbackStarted;
         attempt++) {
-      await pumpEventQueue();
+      await pumpEventQueue(times: 20);
     }
     originalPlayer.emit(const Duration(milliseconds: 800));
-    await pumpEventQueue();
+    await pumpEventQueue(times: 20);
     expect(current().phase, SentenceDubbingPhase.demonstrating);
     expect(current().activeWordIndex, isNull);
 
@@ -146,6 +148,7 @@ void main() {
     await starting;
     expect(current().phase, SentenceDubbingPhase.recording);
     await controller.stopRecording();
+    await pumpEventQueue(times: 20);
   });
 
   test('示范音焦点提前中断时不会误导孩子直接开始录音', () async {
@@ -156,10 +159,10 @@ void main() {
     for (var attempt = 0;
         attempt < 10 && !originalPlayer.playbackStarted;
         attempt++) {
-      await pumpEventQueue();
+      await pumpEventQueue(times: 20);
     }
     originalPlayer.emit(const Duration(milliseconds: 300));
-    await pumpEventQueue();
+    await pumpEventQueue(times: 20);
     originalPlayer.interrupt();
     await starting;
 
@@ -181,6 +184,7 @@ void main() {
     expect(originalPlayer.pauseCalls, 1);
     expect(current().sentence.start, const Duration(seconds: 2));
     await controller.stopRecording();
+    await pumpEventQueue(times: 20);
   });
 
   test('逐句示范复用整首绝对时钟，不再叠加固定视觉延迟', () async {
@@ -189,25 +193,26 @@ void main() {
     originalPlayer.holdPlayback = true;
 
     final starting = controller.startRecording();
-    await pumpEventQueue();
+    await pumpEventQueue(times: 20);
     expect(current().phase, SentenceDubbingPhase.demonstrating);
     for (var attempt = 0;
         attempt < 10 && !originalPlayer.playbackStarted;
         attempt++) {
-      await pumpEventQueue();
+      await pumpEventQueue(times: 20);
     }
     expect(originalPlayer.playbackStarted, isTrue);
 
     originalPlayer.emit(const Duration(milliseconds: 1900));
-    await pumpEventQueue();
+    await pumpEventQueue(times: 20);
     expect(current().activeWordIndex, isNull);
     originalPlayer.emit(const Duration(seconds: 2));
-    await pumpEventQueue();
+    await pumpEventQueue(times: 20);
     expect(current().activeWordIndex, 0);
 
     originalPlayer.emit(const Duration(milliseconds: 3650));
     await starting;
     await controller.stopRecording();
+    await pumpEventQueue(times: 20);
   });
 
   test('首次打开逐句页面不等待耗时的麦克风清理', () async {
@@ -238,7 +243,7 @@ void main() {
       delayedRecorder.complete(recorder);
       lease.close();
       isolated.dispose();
-      await pumpEventQueue();
+      await pumpEventQueue(times: 20);
     }
   });
 
@@ -246,8 +251,10 @@ void main() {
     final controller = await ready();
     await controller.startRecording();
     await controller.stopRecording();
+    await pumpEventQueue(times: 20);
     await controller.startRecording();
     await controller.stopRecording();
+    await pumpEventQueue(times: 20);
 
     expect(current().takes, hasLength(2));
     final selected = current().takes.singleWhere((take) => take.isSelected);
@@ -512,7 +519,7 @@ final class _OriginalPlayer implements OriginalAudioPlayer {
     _playing.add(true);
     if (holdPlayback) return _playback!.future;
     _positions.add(seeked.last);
-    await pumpEventQueue();
+    await pumpEventQueue(times: 20);
     _positions.add(const Duration(seconds: 10));
     _playing.add(false);
     _playback!.complete();
@@ -651,6 +658,7 @@ final class _Repository implements DubbingRepository {
     String? scoreError,
   }) async {
     final index = takes.indexWhere((take) => take.id == takeId);
+    if (index < 0) return;
     takes[index] = _copyTake(
       takes[index],
       scoreStatus: status,
