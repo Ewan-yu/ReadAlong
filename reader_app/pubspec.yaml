@@ -45,6 +45,9 @@ flutter:
 # The Flutter 3.24 / AGP 8.1 template needs the mutually-compatible 5.1
 # platform set. Keep the Android plugin on the latest 1.2 line: 1.2.6 adds
 # an idempotent Bluetooth receiver teardown, fixing Android lifecycle races.
+# (Spike note 2026-09-12: 1.3.1 also carries a stream-stop deadlock fix but
+# startStream still yields zero data on the Android 16 test device, so the
+# pin stays on the production-validated 1.2.6 AGC behaviour.)
 dependency_overrides:
   record_android: 1.2.6
   record_platform_interface: 1.1.0

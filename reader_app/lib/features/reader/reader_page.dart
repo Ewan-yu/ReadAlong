@@ -1236,7 +1236,6 @@ class _FollowReadingPanel extends StatelessWidget {
       );
     }
     if (value.isPreparing) {
-      final countdown = value.phase == FollowReadingPhase.countdown;
       return _ReaderControlPanelFrame(
         footer: IconButton(
           key: const ValueKey('follow-cancel-preparation'),
@@ -1251,17 +1250,17 @@ class _FollowReadingPanel extends StatelessWidget {
             children: [
               _FollowSentenceText(sentence: sentence, compact: compact),
               const SizedBox(height: AppSpacing.unit),
-              Text(
-                countdown ? '${value.countdown}' : '麦克风准备中',
+              const Text(
+                '麦克风准备中',
                 style: TextStyle(
                   color: AppColors.accent,
-                  fontSize: countdown ? (compact ? 34 : 42) : 20,
+                  fontSize: 20,
                   fontWeight: FontWeight.w800,
                 ),
               ),
               const SizedBox(height: AppSpacing.unit),
               const Text(
-                '看到“开始读吧”再开口，第一个字会更完整',
+                '随时开口都能录到第一个字',
                 style: TextStyle(color: AppColors.textSecondary),
               ),
             ],
