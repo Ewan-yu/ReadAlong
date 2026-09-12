@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../services/recording/recording_service.dart';
@@ -183,6 +184,13 @@ final class SentenceDubbingController
   var _starting = false;
   var _stopping = false;
   var _disposed = false;
+  Future<void>? _backgroundScore;
+
+  /// The in-flight background score for the most recently stopped take.
+  /// Production code never awaits it; tests drain it before disposal so a
+  /// write-back cannot land on a disposed controller.
+  @visibleForTesting
+  Future<void>? get backgroundScore => _backgroundScore;
 
   @override
   Future<SentenceDubbingState> build(String libraryId) async {
@@ -494,7 +502,7 @@ final class SentenceDubbingController
       // Take in the background and is guarded by the generation token below.
       await _repository.selectTake(take.id);
       await _refreshAfterScore();
-      unawaited(_score(take, current.sentence.text, generation));
+      _backgroundScore = _score(take, current.sentence.text, generation);
     } on RecordingException catch (error) {
       if (_isCurrent(generation)) _fail(error.message);
     } on Object {
@@ -524,9 +532,14 @@ final class SentenceDubbingController
           status: DubbingTakeScoreStatus.scored,
           scoreJson: _scoreJson(result));
       if (!_isCurrent(generation)) return;
-      await _repository.selectTake(take.id);
-      if (!_isCurrent(generation)) return;
-      await _refreshAfterScore(result: result);
+      // The child may have picked another take of this sentence while the
+      // score was uploading; never steal that choice back. Show the score as
+      // the headline result only while this take is still the chosen one.
+      if (await _isStillChosenTake(take)) {
+        await _refreshAfterScore(result: result);
+      } else {
+        await _refreshAfterScore();
+      }
     } on ScoringException catch (error) {
       await _markScoreFailed(take, error.message, generation);
     } on RecordingException catch (error) {
@@ -543,7 +556,25 @@ final class SentenceDubbingController
         status: DubbingTakeScoreStatus.failed,
         scoreError: message);
     if (!_isCurrent(generation)) return;
-    await _refreshAfterScore(failure: message);
+    // Raise the failure banner only while the failed take is still the chosen
+    // version; otherwise the list row's failed state and retry action say it.
+    if (await _isStillChosenTake(take)) {
+      await _refreshAfterScore(failure: message);
+    } else {
+      await _refreshAfterScore();
+    }
+  }
+
+  /// Whether [take] is still the sentence's chosen version right now. The
+  /// selection may legitimately change while a background score is in flight.
+  Future<bool> _isStillChosenTake(DubbingTake take) async {
+    final takesNow = await _repository.listTakes(
+      take.projectId,
+      sentenceId: take.sentenceId,
+    );
+    return takesNow.any(
+      (candidate) => candidate.id == take.id && candidate.isSelected,
+    );
   }
 
   Future<void> _refreshAfterScore(

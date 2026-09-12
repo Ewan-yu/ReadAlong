@@ -27,8 +27,10 @@ void main() {
   late _Player player;
   late _OriginalPlayer originalPlayer;
   late _Recorder recorder;
+  late _Scorer scorer;
   late List<String> events;
   late ProviderContainer container;
+  SentenceDubbingController? activeController;
   ProviderSubscription<AsyncValue<SentenceDubbingState>>? subscription;
 
   setUp(() async {
@@ -38,6 +40,7 @@ void main() {
     player = _Player(events);
     originalPlayer = _OriginalPlayer(events);
     recorder = _Recorder(temporary, events);
+    scorer = _Scorer();
     container = ProviderContainer(overrides: [
       dubbingRepositoryProvider.overrideWith((_) async => repository),
       recordingServiceProvider.overrideWith((_) async => recorder),
@@ -46,16 +49,21 @@ void main() {
       sentenceDubbingPlaybackSettleProvider.overrideWithValue(Duration.zero),
       sentenceAudioPlayerProvider.overrideWithValue(player),
       originalAudioPlayerProvider.overrideWithValue(originalPlayer),
-      scoringProvider.overrideWithValue(_Scorer()),
+      scoringProvider.overrideWithValue(scorer),
       originalAudioBookProvider('book-copy').overrideWith((_) async => _book()),
     ]);
   });
 
   tearDown(() async {
+    // Drain any in-flight background score before disposing the container so
+    // its write-back never lands on a disposed controller.
+    final pendingScore = activeController?.backgroundScore;
+    if (pendingScore != null) {
+      await pendingScore.timeout(const Duration(seconds: 5));
+    }
     subscription?.close();
     container.dispose();
-    await pumpEventQueue(times: 20);
-    await Future<void>.delayed(const Duration(milliseconds: 50));
+    await pumpEventQueue();
     await originalPlayer.close();
     if (await temporary.exists()) await temporary.delete(recursive: true);
   });
@@ -67,8 +75,10 @@ void main() {
       fireImmediately: true,
     );
     await container.read(sentenceDubbingControllerProvider('book-copy').future);
-    return container
-        .read(sentenceDubbingControllerProvider('book-copy').notifier);
+    final controller =
+        container.read(sentenceDubbingControllerProvider('book-copy').notifier);
+    activeController = controller;
+    return controller;
   }
 
   SentenceDubbingState current() => container
@@ -85,7 +95,7 @@ void main() {
     expect(events.take(2), ['recorder.start', 'original.play']);
 
     await controller.stopRecording();
-    await Future<void>.delayed(const Duration(milliseconds: 50));
+    await controller.backgroundScore;
 
     expect(current().phase, SentenceDubbingPhase.result);
     expect(current().completedSentenceCount, 1);
@@ -113,11 +123,7 @@ void main() {
     originalPlayer.holdPlayback = true;
 
     final starting = controller.startRecording();
-    for (var attempt = 0;
-        attempt < 10 && !originalPlayer.playbackStarted;
-        attempt++) {
-      await pumpEventQueue(times: 20);
-    }
+    await _pumpUntil(() => originalPlayer.playbackStarted, because: '示范播放开始');
     expect(current().phase, SentenceDubbingPhase.demonstrating);
 
     await controller.handleAppBackgrounded();
@@ -134,11 +140,7 @@ void main() {
     originalPlayer.holdPlayback = true;
 
     final starting = controller.startRecording();
-    for (var attempt = 0;
-        attempt < 10 && !originalPlayer.playbackStarted;
-        attempt++) {
-      await pumpEventQueue(times: 20);
-    }
+    await _pumpUntil(() => originalPlayer.playbackStarted, because: '示范播放开始');
     originalPlayer.emit(const Duration(milliseconds: 800));
     await pumpEventQueue(times: 20);
     expect(current().phase, SentenceDubbingPhase.demonstrating);
@@ -148,7 +150,7 @@ void main() {
     await starting;
     expect(current().phase, SentenceDubbingPhase.recording);
     await controller.stopRecording();
-    await pumpEventQueue(times: 20);
+    await controller.backgroundScore;
   });
 
   test('示范音焦点提前中断时不会误导孩子直接开始录音', () async {
@@ -156,11 +158,7 @@ void main() {
     originalPlayer.holdPlayback = true;
 
     final starting = controller.startRecording();
-    for (var attempt = 0;
-        attempt < 10 && !originalPlayer.playbackStarted;
-        attempt++) {
-      await pumpEventQueue(times: 20);
-    }
+    await _pumpUntil(() => originalPlayer.playbackStarted, because: '示范播放开始');
     originalPlayer.emit(const Duration(milliseconds: 300));
     await pumpEventQueue(times: 20);
     originalPlayer.interrupt();
@@ -184,7 +182,7 @@ void main() {
     expect(originalPlayer.pauseCalls, 1);
     expect(current().sentence.start, const Duration(seconds: 2));
     await controller.stopRecording();
-    await pumpEventQueue(times: 20);
+    await controller.backgroundScore;
   });
 
   test('逐句示范复用整首绝对时钟，不再叠加固定视觉延迟', () async {
@@ -195,11 +193,7 @@ void main() {
     final starting = controller.startRecording();
     await pumpEventQueue(times: 20);
     expect(current().phase, SentenceDubbingPhase.demonstrating);
-    for (var attempt = 0;
-        attempt < 10 && !originalPlayer.playbackStarted;
-        attempt++) {
-      await pumpEventQueue(times: 20);
-    }
+    await _pumpUntil(() => originalPlayer.playbackStarted, because: '示范播放开始');
     expect(originalPlayer.playbackStarted, isTrue);
 
     originalPlayer.emit(const Duration(milliseconds: 1900));
@@ -212,7 +206,7 @@ void main() {
     originalPlayer.emit(const Duration(milliseconds: 3650));
     await starting;
     await controller.stopRecording();
-    await pumpEventQueue(times: 20);
+    await controller.backgroundScore;
   });
 
   test('首次打开逐句页面不等待耗时的麦克风清理', () async {
@@ -251,10 +245,10 @@ void main() {
     final controller = await ready();
     await controller.startRecording();
     await controller.stopRecording();
-    await pumpEventQueue(times: 20);
+    await controller.backgroundScore;
     await controller.startRecording();
     await controller.stopRecording();
-    await pumpEventQueue(times: 20);
+    await controller.backgroundScore;
 
     expect(current().takes, hasLength(2));
     final selected = current().takes.singleWhere((take) => take.isSelected);
@@ -272,6 +266,35 @@ void main() {
     expect(current().phase, SentenceDubbingPhase.ready);
     expect(current().result, isNull);
     expect(current().completedSentenceCount, 0);
+  });
+
+  test('评分在途时改选旧录音，评分落地不抢占选用版本', () async {
+    final controller = await ready();
+    await controller.startRecording();
+    await controller.stopRecording();
+    await controller.backgroundScore;
+
+    final gate = Completer<void>();
+    scorer.holdNextScore = gate;
+    await controller.startRecording();
+    await controller.stopRecording();
+    final pendingScore = controller.backgroundScore;
+    expect(current().takes, hasLength(2));
+    expect(current().takes.last.isSelected, isTrue);
+
+    await controller.selectTake('take-1');
+    expect(current().takes.first.isSelected, isTrue);
+
+    gate.complete();
+    await pendingScore;
+
+    expect(current().takes.first.isSelected, isTrue);
+    expect(
+      current().takes.last.scoreStatus,
+      DubbingTakeScoreStatus.scored,
+    );
+    expect(current().result?.stars, 4.5);
+    expect(current().phase, SentenceDubbingPhase.result);
   });
 
   test('重新录整本时只保留最后的故事，清空逐句录音并回到第 1 句', () async {
@@ -352,9 +375,27 @@ void main() {
 Future<void> _finishStory(SentenceDubbingController controller) async {
   await controller.startRecording();
   await controller.stopRecording();
+  await controller.backgroundScore;
   await controller.continueToNextSentence();
   await controller.startRecording();
   await controller.stopRecording();
+  await controller.backgroundScore;
+}
+
+/// Pumps microtasks and yields to the real event loop until [condition] holds.
+/// The background scoring chain includes real file IO, which never progresses
+/// on microtask pumps alone; a bounded deadline keeps failures loud and fast.
+Future<void> _pumpUntil(
+  bool Function() condition, {
+  String because = '条件成立',
+  Duration timeout = const Duration(seconds: 5),
+}) async {
+  final deadline = DateTime.now().add(timeout);
+  while (!condition()) {
+    if (DateTime.now().isAfter(deadline)) fail('等待$because超时');
+    await pumpEventQueue(times: 10);
+    await Future<void>.delayed(const Duration(milliseconds: 1));
+  }
 }
 
 DubbingMix _mix({String id = 'mix-1', DateTime? createdAt}) => DubbingMix(
@@ -564,6 +605,10 @@ final class _OriginalPlayer implements OriginalAudioPlayer {
 }
 
 final class _Scorer implements ScoringProvider {
+  /// When set, the next [score] call parks on this completer, letting tests
+  /// hold a background score in flight across other controller actions.
+  Completer<void>? holdNextScore;
+
   @override
   String get name => 'fake';
   @override
@@ -572,8 +617,12 @@ final class _Scorer implements ScoringProvider {
   Future<ScoreResult> score({
     required Uint8List pcm16k,
     required String refText,
-  }) async =>
-      const ScoreResult(childScore: 90, provider: 'fake');
+  }) async {
+    final gate = holdNextScore;
+    if (gate != null) holdNextScore = null;
+    if (gate != null) await gate.future;
+    return const ScoreResult(childScore: 90, provider: 'fake');
+  }
 }
 
 final class _Repository implements DubbingRepository {
