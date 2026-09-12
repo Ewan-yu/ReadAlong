@@ -3,7 +3,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'core/router.dart';
 import 'core/theme/tokens.dart';
-import 'dev/streaming_spike.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -13,7 +12,6 @@ void main() {
   PaintingBinding.instance.imageCache
     ..maximumSize = 24
     ..maximumSizeBytes = 64 << 20;
-  maybeRunStreamingSpike();
   runApp(const ProviderScope(child: ReadAlongApp()));
 }
 
