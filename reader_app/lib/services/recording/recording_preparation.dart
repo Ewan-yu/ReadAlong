@@ -44,11 +44,9 @@ final recordingPreparationProtocolProvider =
   (_) => const TimedRecordingPreparationProtocol(),
 );
 
-/// Follow reading keeps the child-learning 3-2-1 rhythm only for the first
-/// take of a reading session. Consecutive takes already know the drill, so
-/// they fall back to the mandatory microphone stabilization alone: the WAV
-/// still captures everything from recorder start and the content zero keeps
-/// the whole lead-in, so a child who speaks early is never cut.
+/// Follow reading uses the stabilization-only protocol for every take: the
+/// WAV still captures everything from recorder start and the content zero is
+/// the capture start, so a child who speaks early is never cut.
 final followQuickPreparationProtocolProvider =
     Provider<RecordingPreparationProtocol>(
   (_) => const TimedRecordingPreparationProtocol(

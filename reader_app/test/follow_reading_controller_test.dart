@@ -347,7 +347,7 @@ void main() {
     expect(await File(secondPath).exists(), isFalse);
   });
 
-  test('首次跟读走完整 3-2-1，同会话连续录音改用快速准备', () async {
+  test('首次跟读也走快速准备，不再出现 3-2-1 倒计时', () async {
     final fullPreparation = _CountingPreparation();
     final quickPreparation = _CountingPreparation();
     final quickContainer = ProviderContainer(
@@ -375,12 +375,19 @@ void main() {
     controller.selectSentence(_sentence('sentence-one'));
 
     await controller.startRecording();
+    expect(
+      quickContainer
+          .read(followReadingControllerProvider('book-copy'))
+          .requireValue
+          .phase,
+      FollowReadingPhase.recording,
+    );
     await controller.stopRecording();
     await controller.acknowledgeResult();
     await controller.startRecording();
 
-    expect(fullPreparation.calls, 1);
-    expect(quickPreparation.calls, 1);
+    expect(fullPreparation.calls, 0);
+    expect(quickPreparation.calls, 2);
   });
 
   test('Android 切到后台会取消隐形录音并保留当前句', () async {

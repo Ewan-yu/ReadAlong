@@ -16,7 +16,6 @@ enum FollowReadingPhase {
   idle,
   demonstrating,
   preparing,
-  countdown,
   recording,
   scoring,
   scored,
@@ -27,9 +26,9 @@ const followSpeechLevelThreshold = 0.08;
 const _speechFramesRequired = 2;
 
 /// MediaRecorder can begin writing PCM a little after `start()` resolves on
-/// Android. Never trim the full visual countdown from a follow-reading take:
-/// doing so can cut the child's first spoken consonant. The remaining short
-/// silence is safe for scoring and replay, while the first word is not.
+/// Android. Capture starts before the stabilization, so an eager child who
+/// speaks during it still lands inside the scored content (zero offset);
+/// keeping the lead-in math explicit documents that nothing is trimmed.
 const followRecordingContentOffsetSafetyLead = Duration(milliseconds: 650);
 
 Duration followRecordingContentOffset(Duration preparationElapsed) {
@@ -140,7 +139,6 @@ final class FollowReadingState {
     this.result,
     this.elapsed = Duration.zero,
     this.level = 0,
-    this.countdown = 0,
     this.recordingLimit = const Duration(seconds: 30),
     this.heardSpeech = false,
     this.playbackPosition = Duration.zero,
@@ -155,7 +153,6 @@ final class FollowReadingState {
   final ScoreResult? result;
   final Duration elapsed;
   final double level;
-  final int countdown;
   final Duration recordingLimit;
   final bool heardSpeech;
   final Duration playbackPosition;
@@ -164,9 +161,7 @@ final class FollowReadingState {
   final String? failure;
 
   bool get isRecording => phase == FollowReadingPhase.recording;
-  bool get isPreparing =>
-      phase == FollowReadingPhase.preparing ||
-      phase == FollowReadingPhase.countdown;
+  bool get isPreparing => phase == FollowReadingPhase.preparing;
   bool get canRetry => record != null && phase == FollowReadingPhase.failed;
 
   FollowReadingState copyWith({
@@ -176,7 +171,6 @@ final class FollowReadingState {
     Object? result = _unset,
     Duration? elapsed,
     double? level,
-    int? countdown,
     Duration? recordingLimit,
     bool? heardSpeech,
     Duration? playbackPosition,
@@ -196,7 +190,6 @@ final class FollowReadingState {
             identical(result, _unset) ? this.result : result as ScoreResult?,
         elapsed: elapsed ?? this.elapsed,
         level: level ?? this.level,
-        countdown: countdown ?? this.countdown,
         recordingLimit: recordingLimit ?? this.recordingLimit,
         heardSpeech: heardSpeech ?? this.heardSpeech,
         playbackPosition: playbackPosition ?? this.playbackPosition,
@@ -221,7 +214,6 @@ final class FollowReadingController
   AudioRecordingService? _recorder;
   late final SentenceAudioPlayer _player;
   late final ScoringProvider _scorer;
-  late final RecordingPreparationProtocol _preparation;
   late final RecordingPreparationProtocol _quickPreparation;
   StreamSubscription<RecordingLevel>? _levels;
   Timer? _limitTimer;
@@ -232,7 +224,6 @@ final class FollowReadingController
   var _recordSequence = 0;
   var _generation = 0;
   var _disposed = false;
-  var _rehearsedCountdown = false;
   ReaderSentence? _pendingSentence;
   Duration _contentOffset = Duration.zero;
   Duration _contentLeadIn = Duration.zero;
@@ -245,7 +236,6 @@ final class FollowReadingController
     // cleanup/initialization finishes. Recording awaits this future when the
     // child actually presses the record button.
     _recorderFuture = ref.watch(recordingServiceProvider.future);
-    _preparation = ref.watch(recordingPreparationProtocolProvider);
     _quickPreparation = ref.watch(followQuickPreparationProtocolProvider);
     ref.onDispose(() {
       final record = state.valueOrNull?.record;
@@ -372,7 +362,6 @@ final class FollowReadingController
         result: null,
         elapsed: Duration.zero,
         level: 0,
-        countdown: 0,
         recordingLimit: timing.maximumDuration,
         heardSpeech: false,
         playbackPosition: Duration.zero,
@@ -380,24 +369,18 @@ final class FollowReadingController
         activeWordIndex: null,
         failure: null,
       ));
-      // The 3-2-1 rhythm teaches the pacing once; consecutive takes in the
-      // same reading session only need the mandatory microphone stabilization.
-      final preparation =
-          _rehearsedCountdown ? _quickPreparation : _preparation;
-      final preparationElapsed = await preparation.run(
+      // Every take uses the quick protocol: microphone stabilization only.
+      // Capture already started above, so an eager child who speaks during
+      // the stabilization still lands inside the scored content (zero
+      // offset) — no first-take countdown to teach pacing, no clipped onset.
+      final preparationElapsed = await _quickPreparation.run(
         isActive: () => _isCurrent(generation),
         onUpdate: (update) {
           final latest = state.valueOrNull;
           if (!_isCurrent(generation) || latest == null) return;
-          _setState(latest.copyWith(
-            phase: update.stage == RecordingPreparationStage.stabilizing
-                ? FollowReadingPhase.preparing
-                : FollowReadingPhase.countdown,
-            countdown: update.countdown,
-          ));
+          _setState(latest.copyWith(phase: FollowReadingPhase.preparing));
         },
       );
-      _rehearsedCountdown = true;
       _contentOffset = followRecordingContentOffset(preparationElapsed);
       _contentLeadIn = followRecordingContentLeadIn(preparationElapsed);
       if (!_isCurrent(generation)) {
@@ -412,7 +395,6 @@ final class FollowReadingController
         result: null,
         elapsed: Duration.zero,
         level: 0,
-        countdown: 0,
         recordingLimit: timing.maximumDuration,
         heardSpeech: false,
         playbackPosition: Duration.zero,
@@ -466,7 +448,6 @@ final class FollowReadingController
     await _recorder?.cancel();
     _setState(current.copyWith(
       phase: FollowReadingPhase.idle,
-      countdown: 0,
       level: 0,
       failure: null,
     ));

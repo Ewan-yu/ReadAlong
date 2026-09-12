@@ -16,9 +16,9 @@ import 'scoring_provider.dart';
 const _iseHost = 'ise-api.xfyun.cn';
 const _isePath = '/v2/open-ise';
 
-/// Silence that does not participate in evaluation still has to be uploaded
-/// at the engine's required real-time pace, so every trimmed second removes a
-/// full second from the child-visible scoring wait.
+/// Silence trimming keeps the scored payload tight and consistent across
+/// takes; the engine scores trimmed and untrimmed audio almost identically
+/// (device-verified 2026-09-12), so this is hygiene rather than latency work.
 const _scoringSilenceHeadMargin = Duration(milliseconds: 200);
 const _scoringSilenceTailMargin = Duration(milliseconds: 300);
 const _scoringRmsSpeechFloor = 300;
@@ -96,7 +96,6 @@ double _percentile(List<double> values, double fraction) {
 }
 
 typedef XfyunChannelConnector = WebSocketChannel Function(Uri uri);
-typedef XfyunDelay = Future<void> Function(Duration duration);
 
 abstract interface class IseConnectionProbe {
   Future<void> testCredentials(IseCredentials credentials);
@@ -106,15 +105,12 @@ final class XfyunIseProvider implements ScoringProvider, IseConnectionProbe {
   XfyunIseProvider({
     required this.credentialStore,
     XfyunChannelConnector? connector,
-    XfyunDelay? delay,
     DateTime Function()? now,
   })  : _connector = connector ?? IOWebSocketChannel.connect,
-        _delay = delay ?? Future<void>.delayed,
         _now = now ?? DateTime.now;
 
   final IseCredentialStore credentialStore;
   final XfyunChannelConnector _connector;
-  final XfyunDelay _delay;
   final DateTime Function() _now;
 
   @override
@@ -136,9 +132,6 @@ final class XfyunIseProvider implements ScoringProvider, IseConnectionProbe {
     if (pcm16k.isEmpty || refText.trim().isEmpty) {
       throw const ScoringException('录音或参考文本为空');
     }
-    // The engine paces uploads in real time, so trim the automatic trailing
-    // silence before connecting; otherwise it adds its full duration to the
-    // child-visible wait on every take.
     final trimmed = trimPcm16kSilence(pcm16k);
     final stopwatch = Stopwatch()..start();
     final xml = await _request(
@@ -255,9 +248,11 @@ final class XfyunIseProvider implements ScoringProvider, IseConnectionProbe {
           'data': {'status': 0, 'data': ''},
         }),
       );
-      await _delay(const Duration(milliseconds: 40));
-
-      const chunkSize = 1280;
+      // Device-verified 2026-09-12: the engine scores large frames sent in
+      // one burst identically to the documented 40ms/1280B pacing (sid
+      // compared), cutting upload wall time from ≈audio duration to ≈0.2s.
+      // Official cap is 19200B per frame (26000B after base64).
+      const chunkSize = 12800;
       for (var offset = 0; offset < pcm16k.length; offset += chunkSize) {
         final end = (offset + chunkSize).clamp(0, pcm16k.length);
         final isFirst = offset == 0;
@@ -276,7 +271,6 @@ final class XfyunIseProvider implements ScoringProvider, IseConnectionProbe {
             },
           }),
         );
-        if (!isLast) await _delay(const Duration(milliseconds: 40));
       }
 
       return await result.future.timeout(
