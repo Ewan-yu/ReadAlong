@@ -32,6 +32,7 @@ import {
 } from "../../api/client";
 import { waitForJob } from "../../api/jobs";
 import { bookStateQuery, pageWorkspaceQuery } from "../../api/queries";
+import { ErrorBoundary } from "../../app/ErrorBoundary";
 import { PageStage } from "../../canvas/PageStage";
 import { clamp } from "../../canvas/geometry";
 import { usePageWorkspaceStore, type PageTool } from "../../stores/pageWorkspaceStore";
@@ -276,14 +277,16 @@ export function PageWorkspace() {
             </div>
           )}
           <div className={styles.canvasFrame}>
-            <PageStage
-              imageUrl={sourcePagePreviewUrl(bookId, entry.source_pdf_page)}
-              entry={entry}
-              decision={decision}
-              sentences={matchingSentences}
-              bboxesStale={currentChanged}
-              onDecisionChange={editDecision}
-            />
+            <ErrorBoundary title="画布加载失败">
+              <PageStage
+                imageUrl={sourcePagePreviewUrl(bookId, entry.source_pdf_page)}
+                entry={entry}
+                decision={decision}
+                sentences={matchingSentences}
+                bboxesStale={currentChanged}
+                onDecisionChange={editDecision}
+              />
+            </ErrorBoundary>
           </div>
           <div className={styles.canvasControls} aria-label="画布视图控制">
             <button type="button" aria-label="缩小画布" onClick={() => store.setZoom(clamp(store.zoom - 0.15, 0.6, 3))}><ZoomOut /></button>

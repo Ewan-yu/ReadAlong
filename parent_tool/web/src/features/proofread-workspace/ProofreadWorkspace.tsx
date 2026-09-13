@@ -7,6 +7,8 @@ import { useNavigate, useParams } from "@tanstack/react-router";
 import { Check, CheckCheck, CircleAlert, Combine, GripVertical, Hand, ListOrdered, LoaderCircle, MousePointer2, PenLine, Plus, Save, Scissors, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 
+import { ErrorBoundary } from "../../app/ErrorBoundary";
+import { useDraftGuard } from "../../app/draftGuard";
 import { checkProofreadText, pageAssetUrl, publishProofread, type ApiRequestError, type OcrSentence } from "../../api/client";
 import { waitForJob } from "../../api/jobs";
 import { bookStateQuery, proofreadWorkspaceQuery } from "../../api/queries";
@@ -55,6 +57,10 @@ export function ProofreadWorkspace() {
   const client = useQueryClient();
   const workspaceQuery = useQuery(proofreadWorkspaceQuery(bookId));
   const [sentences, setSentences] = useState<OcrSentence[]>([]);
+  // Response of async spell checks must land on the sentence it checked:
+  // ids shift on renumber, so verify by text at write-back time.
+  const sentencesRef = useRef(sentences);
+  sentencesRef.current = sentences;
   const [confirmedPages, setConfirmedPages] = useState<number[]>([]);
   const [selectedPage, setSelectedPage] = useState(1);
   const [selectedId, setSelectedId] = useState<string>();
@@ -71,17 +77,61 @@ export function ProofreadWorkspace() {
   const workspace = workspaceQuery.data;
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }), useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }));
 
+  const draftKey = workspace
+    ? `readalong.draft.proofread.${bookId}.${workspace.ocr_revision_id}.${workspace.proofread_revision_id ?? "draft"}`
+    : null;
+  // 刷新或误离开后按 revision 恢复未发布的草稿;revision 不匹配的旧草稿在
+  // 持久化 effect 中清理。
   useEffect(() => {
-    if (!workspace) return;
-    setSentences(workspace.sentences);
-    setConfirmedPages(workspace.confirmed_pages);
+    if (!workspace || !draftKey) return;
+    let restoredSentences = workspace.sentences;
+    let restoredPages = workspace.confirmed_pages;
+    let restoredDirty = false;
+    try {
+      const raw = sessionStorage.getItem(draftKey);
+      if (raw) {
+        const saved = JSON.parse(raw) as { sentences?: OcrSentence[]; confirmedPages?: number[] };
+        if (Array.isArray(saved.sentences) && saved.sentences.length > 0) {
+          restoredSentences = saved.sentences;
+          restoredPages = saved.confirmedPages ?? workspace.confirmed_pages;
+          restoredDirty = true;
+        }
+      }
+    } catch {
+      // 损坏的草稿直接丢弃,回到服务端数据。
+    }
+    setSentences(restoredSentences);
+    setConfirmedPages(restoredPages);
     setSelectedPage(workspace.pages[0]?.page_no ?? 1);
     setSelectedId(undefined);
     setMergeIds([]);
     setNewlyAddedId(undefined);
     setPendingBoxId(undefined);
-    setDirty(false);
-  }, [workspace?.ocr_revision_id, workspace?.proofread_revision_id]); // eslint-disable-line react-hooks/exhaustive-deps
+    setDirty(restoredDirty);
+  }, [draftKey]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 草稿持久化:dirty 时随编辑写入 sessionStorage,发布/放弃后清除。
+  useEffect(() => {
+    if (!draftKey) return undefined;
+    try {
+      for (let index = sessionStorage.length - 1; index >= 0; index--) {
+        const key = sessionStorage.key(index);
+        if (key && key.startsWith(`readalong.draft.proofread.${bookId}.`) && key !== draftKey) {
+          sessionStorage.removeItem(key);
+        }
+      }
+      if (dirty) {
+        sessionStorage.setItem(draftKey, JSON.stringify({ sentences, confirmedPages }));
+      } else {
+        sessionStorage.removeItem(draftKey);
+      }
+    } catch {
+      // 存储异常不影响编辑本身。
+    }
+    return undefined;
+  }, [bookId, draftKey, confirmedPages, dirty, sentences]);
+
+  useDraftGuard(dirty);
 
   const page = workspace?.pages.find((item) => item.page_no === selectedPage);
   const pageSentences = useMemo(() => sentences.filter((sentence) => sentence.page_no === selectedPage), [selectedPage, sentences]);
@@ -261,6 +311,7 @@ export function ProofreadWorkspace() {
     },
     onSuccess: async () => {
       await Promise.all([client.invalidateQueries({ queryKey: ["books", bookId, "proofread"] }), client.invalidateQueries(bookStateQuery(bookId))]);
+      if (draftKey) sessionStorage.removeItem(draftKey);
       setDirty(false);
     },
   });
@@ -299,13 +350,20 @@ export function ProofreadWorkspace() {
         <div className={styles.railHeading}><strong>阅读页</strong><span>{confirmedPages.length} / {workspace.pages.length}</span></div>
         <div className={styles.thumbnailList}>{workspace.pages.map((item) => <button type="button" key={item.page_no} data-active={item.page_no === selectedPage || undefined} onClick={() => { setSelectedPage(item.page_no); setSelectedId(undefined); setMergeIds([]); setNewlyAddedId(undefined); }}>
           <img src={pageAssetUrl(bookId, workspace.pages_revision_id, item.thumbnail)} alt="" loading="lazy" />
-          <span>第 {item.page_no} 页</span><i data-confirmed={confirmedPages.includes(item.page_no) || undefined}>{confirmedPages.includes(item.page_no) ? <Check /> : pagesWithReview.has(item.page_no) ? <CircleAlert /> : <span />}</i>
+          <span>第 {item.page_no} 页</span><i data-confirmed={confirmedPages.includes(item.page_no) || undefined}>{confirmedPages.includes(item.page_no) ? <Check /> : pagesWithReview.has(item.page_no) || item.dense_page_filtered ? <CircleAlert /> : <span />}</i>
         </button>)}</div>
       </aside>
 
       <main className={styles.canvasColumn}>
+        {page?.dense_page_filtered && (
+          <p className={styles.densePageWarning} role="status">
+            <CircleAlert /> 此页的 OCR 文本被自动过滤（疑似版权页/密集碎片）。如果这一页其实有要朗读的内容，请用“补录”手动添加句子。
+          </p>
+        )}
         <div className={styles.canvasHint}>{tool === "draw" ? "连续补录：拖动一个框后在右侧填写文本，可继续在本页补录下一句；点击“结束补录”完成。" : pendingBoxId && selectedId === pendingBoxId ? "已结束补录：当前句子草稿已保留；点击右侧“继续框选”完成文字框。" : tool === "split" ? "已选句子保留为第一框；在页面上拖动绘制第二个句子框。" : "点击文字框或句子列表可双向定位；同一文字框内可勾选多句后合并。"}<b>第 {selectedPage} 页</b></div>
-        <ProofreadStage imageUrl={pageAssetUrl(bookId, workspace.pages_revision_id, page.image)} sentences={pageSentences} selectedIds={selectedId ? [selectedId] : []} pendingSentenceId={pendingBoxId} tool={tool} onSelect={(id) => select(id)} onDraw={draw} onChangeBox={(id, bbox) => updateSentence(id, { bbox })} />
+        <ErrorBoundary title="画布加载失败">
+          <ProofreadStage imageUrl={pageAssetUrl(bookId, workspace.pages_revision_id, page.image)} sentences={pageSentences} selectedIds={selectedId ? [selectedId] : []} pendingSentenceId={pendingBoxId} tool={tool} onSelect={(id) => select(id)} onDraw={draw} onChangeBox={(id, bbox) => updateSentence(id, { bbox })} />
+        </ErrorBoundary>
       </main>
 
       <aside className={styles.inspector} aria-label="句子属性">
@@ -329,7 +387,7 @@ export function ProofreadWorkspace() {
             <p>这些句子共用一个区域；如需合成一句，请在上方列表勾选后点击“合并”。当前句不会默认勾选。</p>
           </section>}
           {isNewSentence && <div className={styles.newSentenceNotice}><Plus /><div><strong>{pendingBoxId === selected.id ? tool === "draw" ? "正在补录这句话" : "已结束补录" : tool === "draw" ? "连续补录中" : "已添加新句子"}</strong><span>{pendingBoxId === selected.id ? tool === "draw" ? "先在下方输入文本，再在画布上拖动框选这句话。" : "当前句子草稿已保留；点击“继续框选”完成这句话，或回到顶部点击“连续补录”添加新句子。" : tool === "draw" ? "当前句已画框，可以继续在画布上框选，或添加下一句。" : "请在下方输入文本；需要补框时点击“继续框选”。"}</span>{pendingBoxId === selected.id ? <button type="button" onClick={() => setTool("draw")}><PenLine />{tool === "draw" ? "去画布框选" : "继续框选"}</button> : tool === "draw" ? <button type="button" onClick={beginManualSentence}><Plus />添加下一句</button> : null}</div></div>}
-          <label className={styles.textField}><span>朗读文本</span><textarea ref={textareaRef} value={selected.text} placeholder="输入这一页要朗读的英文句子…" onChange={(event) => updateSentence(selected.id, { text: event.target.value, status: event.target.value.trim() ? "sentence" : "needs_review", suspect_words: [] })} onBlur={(event) => { const text = event.target.value.trim(); if (text) void checkProofreadText(bookId, text).then((suspectWords) => updateSentence(selected.id, { suspect_words: suspectWords })).catch(() => undefined); }} /></label>
+          <label className={styles.textField}><span>朗读文本</span><textarea ref={textareaRef} value={selected.text} placeholder="输入这一页要朗读的英文句子…" onChange={(event) => updateSentence(selected.id, { text: event.target.value, status: event.target.value.trim() ? "sentence" : "needs_review", suspect_words: [] })} onBlur={(event) => { const id = selected.id; const text = event.target.value.trim(); if (!text) return; void checkProofreadText(bookId, text).then((suspectWords) => { const latest = sentencesRef.current.find((sentence) => sentence.id === id); if (latest && latest.text.trim() === text) updateSentence(id, { suspect_words: suspectWords }); }).catch(() => undefined); }} /></label>
           <div className={styles.status}><span data-review={selected.status === "needs_review" || undefined}>{statusLabel(selected)}</span>{selected.suspect_words.map((word) => <em key={word.word} data-proper={word.kind === "proper_noun" || undefined}>{word.word}</em>)}</div>
           {pendingBoxId !== selected.id && <section className={styles.boxEditor}><strong>文字框（归一化坐标）</strong>{(["x", "y", "width", "height"] as const).map((key) => <label key={key}><span>{{ x: "左", y: "上", width: "宽", height: "高" }[key]}</span><input type="number" min="0" max="1" step="0.001" value={selected.bbox[key]} onChange={(event) => updateSentence(selected.id, { bbox: clampBox({ ...selected.bbox, [key]: Number(event.target.value) }) })} /></label>)}</section>}
         </> : <div className={styles.emptyInspector}><Plus /><strong>{selectedOnPage ? "选择一个文字框" : "从本页句子开始"}</strong><p>点击上方句子行进入编辑，或在当前页连续补录多句。</p><button type="button" onClick={beginManualSentence}><PenLine />在本页添加句子</button></div>}

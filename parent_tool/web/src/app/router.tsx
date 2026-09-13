@@ -15,11 +15,16 @@ import { VoiceProfilesPage } from "../features/voice-profiles/VoiceProfilesPage"
 import { SettingsHomePage } from "../features/settings-home/SettingsHomePage";
 import { StepPlaceholder } from "../features/placeholders/StepPlaceholder";
 import { AppShell } from "./AppShell";
+import { RouteError, RouteNotFound } from "./RouteError";
 import { isStepUnlocked, type WorkflowStep } from "./step-gates";
 
 type RouterContext = { queryClient: QueryClient };
 
-const rootRoute = createRootRouteWithContext<RouterContext>()({ component: AppShell });
+const rootRoute = createRootRouteWithContext<RouterContext>()({
+  component: AppShell,
+  errorComponent: RouteError,
+  notFoundComponent: RouteNotFound,
+});
 
 const indexRoute = createRoute({
   getParentRoute: () => rootRoute,

@@ -24,11 +24,20 @@ type Props = {
 function useLoadedImage(url: string) {
   const [image, setImage] = useState<HTMLImageElement>();
   useEffect(() => {
+    // Clear first: while the next page decodes, painting the previous page
+    // would let overlays use a stale imageRect of the wrong page.
+    setImage(undefined);
+    let cancelled = false;
     const next = new window.Image();
     next.decoding = "async";
     next.src = url;
-    next.onload = () => setImage(next);
-    return () => { next.onload = null; };
+    next.onload = () => {
+      if (!cancelled) setImage(next);
+    };
+    return () => {
+      cancelled = true;
+      next.onload = null;
+    };
   }, [url]);
   return image;
 }

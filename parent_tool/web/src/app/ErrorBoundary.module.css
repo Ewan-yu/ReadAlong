@@ -1,0 +1,4 @@
+.boundary { display: grid; gap: var(--space-3); place-items: center; min-height: 18rem; padding: var(--space-8); border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-surface); text-align: center; }
+.boundary h2 { margin: 0; font-family: var(--font-display); font-size: var(--text-lg); }
+.boundary p { margin: 0; max-width: 46ch; color: var(--color-text-muted); font-size: var(--text-sm); word-break: break-all; }
+.boundary button { min-height: 2.5rem; padding: 0 var(--space-5); border: 0; border-radius: var(--radius-sm); background: var(--color-primary); color: var(--color-surface); font-size: var(--text-sm); cursor: pointer; }
