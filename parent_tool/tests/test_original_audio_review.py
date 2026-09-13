@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
+from app.models.errors import PipelineError
 from app.models.pipeline import PipelineState, StepId, StepResult, StepStatus
 from app.pipeline.artifacts import ArtifactStore
 from app.pipeline.definitions import CancellationToken, StepRegistry
@@ -131,3 +134,74 @@ def test_candidate_requires_explicit_confirmation_and_is_promoted(tmp_path: Path
     assert updated.original_audio_review.background_disabled is True
     assert updated.steps[StepId.ORIGINAL_TIMELINE].status is StepStatus.STALE
     assert review.workspace("book-1").status == "voice_only"
+
+
+def test_export_commit_rejects_background_decision_changed_mid_run(tmp_path: Path) -> None:
+    paths = WorkspacePaths(tmp_path)
+    states = StateRepository(paths)
+    book = paths.book("book-1")
+    book.mkdir(parents=True)
+    states.create(PipelineState.new(book_id="book-1", pdf_path="source.pdf", pdf_sha256="a" * 64, original_audio_path="original_audio.mp3", original_audio_sha256="b" * 64))
+    review = OriginalAudioReviewService(states, ArtifactStore(paths))
+
+    class ExportDisablingBackground:
+        step_id = StepId.EXPORT
+        implementation_version = "export-test-v1"
+        params_model = EmptyParams
+
+        def run(self, context, _params):
+            (context.staging_dir / "result.json").write_text("{}", encoding="utf-8")
+            # 模拟打包期间家长在另一个请求里禁用背景轨。
+            review.disable_background("book-1")
+            return StepResult(outputs=("result.json",))
+
+    engine = PipelineEngine(
+        states,
+        ArtifactStore(paths),
+        StepRegistry(
+            (
+                FakeStage(StepId.PAGES),
+                FakeStage(StepId.OCR),
+                FakeProofread(),
+                FakeStage(StepId.AUDIO),
+                FakeOriginalAudio(),
+                FakeStage(StepId.ORIGINAL_TIMELINE),
+                ExportDisablingBackground(),
+            )
+        ),
+    )
+    _run(engine, StepId.PAGES, "02345678-1234-4234-8234-123456789abc")
+    _run(engine, StepId.OCR, "11345678-1234-4234-8234-123456789abc")
+    _run(engine, StepId.PROOFREAD, "12345678-1234-4234-8234-123456789abc")
+    _run(engine, StepId.AUDIO, "32345678-1234-4234-8234-123456789abc")
+    _run(engine, StepId.ORIGINAL_AUDIO, "22345678-1234-4234-8234-123456789abc")
+    review.confirm_current("book-1")
+
+    with pytest.raises(PipelineError) as excinfo:
+        _run(engine, StepId.EXPORT, "52345678-1234-4234-8234-123456789abc")
+    assert excinfo.value.code == "PIPELINE_STATE_CHANGED"
+
+    # 旧决策构建的资源包不能进入 DONE;决策变化被保留,重新导出即可。
+    state = states.load("book-1")
+    assert state.steps[StepId.EXPORT].status is StepStatus.FAILED
+    assert state.steps[StepId.EXPORT].success is None
+    assert state.original_audio_review.background_disabled is True
+
+    calm_engine = PipelineEngine(
+        states,
+        ArtifactStore(paths),
+        StepRegistry(
+            (
+                FakeStage(StepId.PAGES),
+                FakeStage(StepId.OCR),
+                FakeProofread(),
+                FakeStage(StepId.AUDIO),
+                FakeOriginalAudio(),
+                FakeStage(StepId.ORIGINAL_TIMELINE),
+                FakeStage(StepId.EXPORT),
+            )
+        ),
+    )
+    success = _run(calm_engine, StepId.EXPORT, "62345678-1234-4234-8234-123456789abc")
+    assert states.load("book-1").steps[StepId.EXPORT].status is StepStatus.DONE
+    assert success.output_root.startswith("05_export/revisions/")

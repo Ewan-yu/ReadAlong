@@ -335,6 +335,8 @@ class PipelineEngine:
                         "任务状态已经变化，不能发布产物。",
                         status_code=409,
                     )
+                if plan.step_id is StepId.EXPORT:
+                    self._assert_export_decisions_unchanged(plan, state)
                 old_fingerprint = (
                     current.success.output_fingerprint if current.success is not None else None
                 )
@@ -402,6 +404,30 @@ class PipelineEngine:
                     prepared.job_id,
                 )
             raise
+
+    def _assert_export_decisions_unchanged(
+        self, plan: RunPlan, state: PipelineState
+    ) -> None:
+        """Confirming a separation or toggling the background are synchronous
+        API routes and can land while an export job is packaging; the review
+        service deliberately skips stale-marking for a RUNNING export, so the
+        commit is the last line of defence against publishing a pack built
+        from an outdated background decision."""
+        confirmed = state.original_audio_review.confirmed
+        confirmed_path = (
+            self.artifacts.paths.book(plan.book_id) / confirmed.output_root
+            if confirmed is not None
+            else None
+        )
+        if confirmed_path != plan.confirmed_original_audio_output or (
+            plan.include_original_background
+            is state.original_audio_review.background_disabled
+        ):
+            raise PipelineError(
+                "PIPELINE_STATE_CHANGED",
+                "导出期间原音背景决策已变化，旧资源包不能发布；请重新导出。",
+                status_code=409,
+            )
 
     def _rollback(self, prepared: PreparedRun, exc: Exception) -> None:
         now = utc_now()
