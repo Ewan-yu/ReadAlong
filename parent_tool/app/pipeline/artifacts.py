@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import shutil
 from pathlib import Path, PurePosixPath
+from uuid import uuid4
 
 from app.models.errors import PipelineError
 from app.models.pipeline import OutputFile, PipelineState, StepId, StepSuccess
-from app.pipeline.hashing import canonical_sha256, file_sha256
+from app.pipeline.hashing import canonical_sha256, file_sha256, file_sha256_cached
 from app.pipeline.paths import WorkspacePaths, ensure_within
 
 
@@ -90,12 +91,33 @@ class ArtifactStore:
         if not self.verify(book_id, StepId.ORIGINAL_AUDIO, success):
             raise PipelineError("ORIGINAL_AUDIO_CANDIDATE_INVALID", "原音分离候选已损坏，请重新分离。", status_code=409)
         target = self.paths.revision(book_id, StepId.ORIGINAL_AUDIO, revision_id)
-        if not target.exists():
+        target_relative = target.relative_to(self.paths.book(book_id)).as_posix()
+        published = success.model_copy(update={"output_root": target_relative})
+        if target.exists():
+            # Re-promoting the same candidate must be idempotent; a leftover
+            # from an interrupted earlier promote is unreferenced and removed.
+            if self._verify_tree(target, published):
+                return published
+            shutil.rmtree(target)
+        # Copy into a same-volume sibling and atomically rename: a killed
+        # copy can no longer leave a half-written official revision behind
+        # (which would permanently block re-confirmation).
+        temporary = target.with_name(f".{target.name}.promote-{uuid4().hex}")
+        try:
             target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copytree(source, target)
-        published = success.model_copy(update={"output_root": target.relative_to(self.paths.book(book_id)).as_posix()})
-        if not self.verify(book_id, StepId.ORIGINAL_AUDIO, published):
-            raise PipelineError("ORIGINAL_AUDIO_CANDIDATE_INVALID", "无法发布完整的原音分离候选。", status_code=409)
+            shutil.copytree(source, temporary)
+            if not self._verify_tree(temporary, published):
+                raise PipelineError("ORIGINAL_AUDIO_CANDIDATE_INVALID", "无法发布完整的原音分离候选。", status_code=409)
+            try:
+                temporary.rename(target)
+            except OSError:
+                # A concurrent promote won the rename; treat its complete
+                # revision as success and only fail on real damage.
+                if not self._verify_tree(target, published):
+                    raise
+        finally:
+            if temporary.exists():
+                shutil.rmtree(temporary, ignore_errors=True)
         return published
 
     def verify(self, book_id: str, step_id: StepId, success: StepSuccess) -> bool:
@@ -114,13 +136,22 @@ class ArtifactStore:
             )
             if actual != expected or not actual.is_dir() or not success.outputs:
                 return False
+            return self._verify_tree(actual, success)
+        except (OSError, PipelineError):
+            return False
+
+    def _verify_tree(self, root: Path, success: StepSuccess) -> bool:
+        try:
             for output in success.outputs:
                 relative = self._normalize_output(output.path)
-                candidate = ensure_within(actual, actual / Path(*PurePosixPath(relative).parts))
-                self._reject_symlinks(actual, candidate)
+                candidate = ensure_within(root, root / Path(*PurePosixPath(relative).parts))
+                self._reject_symlinks(root, candidate)
                 if not candidate.is_file() or candidate.stat().st_size != output.size:
                     return False
-                if file_sha256(candidate) != output.sha256:
+                # Immutable revisions are re-verified on every job start and
+                # workspace load; the stat-keyed cache keeps those repeats
+                # cheap while still detecting a mutated file.
+                if file_sha256_cached(candidate) != output.sha256:
                     return False
             calculated = canonical_sha256(
                 [item.model_dump(mode="json") for item in success.outputs]

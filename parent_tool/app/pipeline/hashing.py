@@ -30,7 +30,7 @@ def file_sha256(path: Path, *, chunk_size: int = 1024 * 1024) -> str:
     return digest.hexdigest()
 
 
-_SHA256_CACHE_LIMIT = 32
+_SHA256_CACHE_LIMIT = 256
 _SHA256_CACHE: OrderedDict[tuple[str, int, int], str] = OrderedDict()
 _SHA256_CACHE_LOCK = threading.Lock()
 
