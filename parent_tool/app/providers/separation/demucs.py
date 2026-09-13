@@ -186,7 +186,7 @@ class DemucsSeparationProvider:
     @staticmethod
     def _encode(ffmpeg: Path, source: Path, target: Path, cancellation: CancellationToken) -> None:
         target.parent.mkdir(parents=True, exist_ok=True)
-        process = subprocess.Popen([str(ffmpeg), "-y", "-i", str(source), "-ar", "48000", "-ac", "2", "-c:a", "libopus", "-b:a", "96k", str(target)], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace")
+        process = subprocess.Popen([str(ffmpeg), "-hide_banner", "-nostats", "-loglevel", "error", "-y", "-i", str(source), "-ar", "48000", "-ac", "2", "-c:a", "libopus", "-b:a", "96k", str(target)], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace")
         while process.poll() is None:
             if cancellation.requested:
                 terminate_process(process)

@@ -30,6 +30,12 @@ class FfmpegOpusTranscoder:
         process = subprocess.Popen(
             [
                 str(ffmpeg),
+                # Progress stats on stderr can outlive a small pipe buffer
+                # on long transcodes; keep stderr to real errors only.
+                "-hide_banner",
+                "-nostats",
+                "-loglevel",
+                "error",
                 "-y",
                 "-i",
                 str(wav_path),
@@ -94,6 +100,10 @@ class FfmpegOpusTranscoder:
         process = subprocess.Popen(
             [
                 str(ffmpeg),
+                "-hide_banner",
+                "-nostats",
+                "-loglevel",
+                "error",
                 "-y",
                 "-i",
                 str(source_path),
@@ -145,6 +155,10 @@ class FfmpegOpusTranscoder:
         process = subprocess.Popen(
             [
                 str(ffmpeg),
+                "-hide_banner",
+                "-nostats",
+                "-loglevel",
+                "error",
                 "-y",
                 "-ss",
                 str(start_seconds),
