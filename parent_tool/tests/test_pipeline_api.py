@@ -125,6 +125,29 @@ def test_create_book_uploads_pdf_into_new_workspace(tmp_path: Path) -> None:
     assert '"display_name":"My Granny"' in metadata
 
 
+def test_writes_rejected_while_storage_migration_barrier_active(tmp_path: Path) -> None:
+    class _ActiveBarrier:
+        def barrier_active(self) -> bool:
+            return True
+
+    with _client(tmp_path) as client:
+        # 迁移期间(复制/校验/切换后未重启)同步写入端点一律 409,
+        # 否则只写进旧根、重启后被清理误删。
+        client.app.state.workspace_migration_service = _ActiveBarrier()
+        blocked = client.post(
+            "/api/books",
+            files={"pdf": ("My Granny.pdf", BytesIO(_pdf_upload()), "application/pdf")},
+        )
+        blocked_voice = client.post(
+            "/api/voices/generated", json={"name": "demo", "description": "demo"}
+        )
+
+    assert blocked.status_code == 409
+    assert blocked.json()["code"] == "MIGRATION_IN_PROGRESS"
+    assert blocked_voice.status_code == 409
+    assert blocked_voice.json()["code"] == "MIGRATION_IN_PROGRESS"
+
+
 def test_workspace_catalog_lists_storage_and_deletes_project(tmp_path: Path) -> None:
     with _client(tmp_path) as client:
         listing = client.get("/api/books")

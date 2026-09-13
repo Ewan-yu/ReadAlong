@@ -52,6 +52,22 @@ class WorkspaceMigrationService:
                 raise PipelineError("MIGRATION_NOT_FOUND", "没有找到该存储迁移任务。", status_code=404)
             return self._status
 
+    def barrier_active(self) -> bool:
+        """True while a migration is copying, verifying or has switched the
+        data root but the process has not restarted yet.
+
+        In all of these windows the running instance still writes to the old
+        root: copies already made would be silently lost when the pending
+        source cleanup removes the old root after the restart. Mutating API
+        routes must reject work while this is true.
+        """
+        with self._lock:
+            if self._active_context is not None:
+                return True
+            return self._status is not None and (
+                self._status.phase is StorageMigrationPhase.SWITCHED
+            )
+
     def start(self, target_root: str) -> StorageMigrationStatus:
         if self.settings.managed_by == "environment":
             raise PipelineError(

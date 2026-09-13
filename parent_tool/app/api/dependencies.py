@@ -4,6 +4,7 @@ from fastapi import Request
 
 from app.jobs.events import EventBus
 from app.jobs.manager import JobManager
+from app.models.errors import PipelineError
 from app.pipeline.state_repository import StateRepository
 from app.services.page_workspace_service import PageWorkspaceService
 from app.services.proofread_workspace_service import ProofreadWorkspaceService
@@ -19,6 +20,23 @@ from app.services.timeline_workspace_service import TimelineWorkspaceService
 
 def get_job_manager(request: Request) -> JobManager:
     return request.app.state.job_manager
+
+
+def require_migration_idle(request: Request) -> None:
+    """Reject direct workspace/voice writes while storage migrates.
+
+    Pipeline jobs are already held by the JobManager maintenance slot, but
+    synchronous routes (book creation, review decisions, voice profiles)
+    write straight to the data root; during a migration those writes only
+    reach the old root and would be deleted by the post-restart cleanup.
+    """
+    service = getattr(request.app.state, "workspace_migration_service", None)
+    if service is not None and service.barrier_active():
+        raise PipelineError(
+            "MIGRATION_IN_PROGRESS",
+            "正在迁移数据目录；请等待迁移完成并重启家长端后再继续制作。",
+            status_code=409,
+        )
 
 
 def get_state_repository(request: Request) -> StateRepository:

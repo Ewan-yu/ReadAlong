@@ -7,7 +7,7 @@ from typing import Annotated
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, Response, UploadFile, status
 from fastapi.responses import FileResponse
 
-from app.api.dependencies import get_voice_profile_service
+from app.api.dependencies import get_voice_profile_service, require_migration_idle
 from app.api.routes.pipeline import ERROR_RESPONSES, _save_upload
 from app.models.errors import PipelineError
 from app.models.voice_profile import (
@@ -35,6 +35,7 @@ def list_voices(
     status_code=status.HTTP_202_ACCEPTED,
     response_model=VoiceProfile,
     responses=ERROR_RESPONSES,
+    dependencies=[Depends(require_migration_idle)],
 )
 def create_generated_voice(
     request: CreateGeneratedVoiceRequest,
@@ -51,6 +52,7 @@ def create_generated_voice(
     status_code=status.HTTP_202_ACCEPTED,
     response_model=VoiceProfile,
     responses=ERROR_RESPONSES,
+    dependencies=[Depends(require_migration_idle)],
 )
 async def create_uploaded_voice(
     background_tasks: BackgroundTasks,
@@ -110,7 +112,7 @@ def preview_voice(
     )
 
 
-@router.patch("/{voice_id}", response_model=VoiceProfile, responses=ERROR_RESPONSES)
+@router.patch("/{voice_id}", response_model=VoiceProfile, responses=ERROR_RESPONSES, dependencies=[Depends(require_migration_idle)])
 def update_voice(
     voice_id: str,
     request: UpdateVoiceProfileRequest,
@@ -119,7 +121,7 @@ def update_voice(
     return service.update(voice_id, name=request.name, is_default=request.is_default)
 
 
-@router.delete("/{voice_id}", status_code=status.HTTP_204_NO_CONTENT, responses=ERROR_RESPONSES)
+@router.delete("/{voice_id}", status_code=status.HTTP_204_NO_CONTENT, responses=ERROR_RESPONSES, dependencies=[Depends(require_migration_idle)])
 def delete_voice(
     voice_id: str,
     service: Annotated[VoiceProfileService, Depends(get_voice_profile_service)],
@@ -128,7 +130,7 @@ def delete_voice(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-@router.post("/{voice_id}/regenerate-preview", status_code=status.HTTP_202_ACCEPTED, responses=ERROR_RESPONSES)
+@router.post("/{voice_id}/regenerate-preview", status_code=status.HTTP_202_ACCEPTED, responses=ERROR_RESPONSES, dependencies=[Depends(require_migration_idle)])
 def regenerate_preview(
     voice_id: str,
     background_tasks: BackgroundTasks,

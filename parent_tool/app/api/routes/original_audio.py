@@ -5,7 +5,12 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Response, status
 from fastapi.responses import FileResponse
 
-from app.api.dependencies import get_job_manager, get_original_audio_review_service, get_timeline_workspace_service
+from app.api.dependencies import (
+    get_job_manager,
+    get_original_audio_review_service,
+    get_timeline_workspace_service,
+    require_migration_idle,
+)
 from app.jobs.manager import JobManager
 from app.models.errors import ApiErrorResponse
 from app.models.original_audio import OriginalAudioParams
@@ -76,7 +81,7 @@ def get_timeline_workspace(
     return service.workspace(book_id)
 
 
-@router.put("/timeline/review", response_model=TimelineReviewUpdateResponse, responses=ERROR_RESPONSES)
+@router.put("/timeline/review", response_model=TimelineReviewUpdateResponse, responses=ERROR_RESPONSES, dependencies=[Depends(require_migration_idle)])
 def put_timeline_review(
     book_id: str,
     request: TimelineReviewUpdateRequest,
@@ -93,7 +98,7 @@ def source_asset(
     return FileResponse(service.source_asset(book_id), headers={"Cache-Control": "private, no-store"})
 
 
-@router.post("/background/disable", status_code=status.HTTP_204_NO_CONTENT, responses=ERROR_RESPONSES)
+@router.post("/background/disable", status_code=status.HTTP_204_NO_CONTENT, responses=ERROR_RESPONSES, dependencies=[Depends(require_migration_idle)])
 def disable_background(
     book_id: str,
     service: Annotated[OriginalAudioReviewService, Depends(get_original_audio_review_service)],
@@ -112,7 +117,7 @@ def candidate_asset(
     return FileResponse(service.candidate_asset(book_id, candidate_id, asset_path), headers={"Cache-Control": "private, no-store"})
 
 
-@router.post("/candidates/current/confirm", response_model=StepSuccess, responses=ERROR_RESPONSES)
+@router.post("/candidates/current/confirm", response_model=StepSuccess, responses=ERROR_RESPONSES, dependencies=[Depends(require_migration_idle)])
 def confirm_current_candidate(
     book_id: str,
     service: Annotated[OriginalAudioReviewService, Depends(get_original_audio_review_service)],

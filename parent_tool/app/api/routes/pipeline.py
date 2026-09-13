@@ -4,10 +4,12 @@ import tempfile
 from pathlib import Path
 from typing import Annotated
 
+import anyio
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Response, UploadFile, status
 
 from app.api.dependencies import (
     get_job_manager,
+    require_migration_idle,
     get_state_repository,
     get_workspace_catalog_service,
     get_workspace_service,
@@ -100,6 +102,7 @@ async def _save_upload(
     status_code=status.HTTP_201_CREATED,
     response_model=PipelineState,
     responses=ERROR_RESPONSES,
+    dependencies=[Depends(require_migration_idle)],
 )
 async def create_book(
     pdf: Annotated[UploadFile, File(description="要处理的 PDF 文件")],
@@ -152,11 +155,15 @@ async def create_book(
                 too_large_code="ORIGINAL_AUDIO_TOO_LARGE",
                 too_large_message="原音 MP3 不能超过 500MB。",
             )
-        return workspace.create_from_pdf(
-            temporary_path,
-            workspace.next_book_id(filename),
-            original_audio=audio_temporary_path,
-            source_filename=filename,
+        # Copying and hashing up to two 500 MB uploads is blocking IO; keep
+        # it off the event loop so SSE pushes and health checks stay live.
+        return await anyio.to_thread.run_sync(
+            lambda: workspace.create_from_pdf(
+                temporary_path,
+                workspace.next_book_id(filename),
+                original_audio=audio_temporary_path,
+                source_filename=filename,
+            )
         )
     finally:
         await pdf.close()
