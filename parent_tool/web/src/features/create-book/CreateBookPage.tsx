@@ -11,8 +11,9 @@ import {
   LoaderCircle,
   Package,
   RefreshCw,
+  X,
 } from "lucide-react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useForm } from "react-hook-form";
 
 import {
@@ -83,10 +84,45 @@ function ProgressBanner({ job }: { job: JobSnapshot }) {
   );
 }
 
+function UploadBanner({
+  percent,
+  onCancel,
+}: {
+  percent: number;
+  onCancel: () => void;
+}) {
+  return (
+    <div className={styles.progressBanner} role="status" aria-live="polite">
+      <Cloud />
+      <div>
+        <div className={styles.progressCopy}>
+          <strong>正在上传文件，请稍候…</strong>
+          <span>{Math.round(percent * 100)}%</span>
+        </div>
+        <div className={styles.progressTrack} aria-label="上传进度" aria-valuenow={Math.round(percent * 100)} role="progressbar">
+          <span style={{ transform: `scaleX(${percent})` }} />
+        </div>
+      </div>
+      <button type="button" className={styles.cancelUpload} onClick={onCancel}>
+        <X />取消上传
+      </button>
+    </div>
+  );
+}
+
+type CreatePhase = "idle" | "uploading" | "analyzing";
+
 export function CreateBookPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [job, setJob] = useState<JobSnapshot>();
+  const [phase, setPhase] = useState<CreatePhase>("idle");
+  const [uploadPercent, setUploadPercent] = useState(0);
+  const uploadAbort = useRef<AbortController | null>(null);
+  // createBook 成功但后续步骤失败时保留工作区,重试只补跑页面分析,
+  // 不再重复上传并创建孤儿项目。
+  const [createdBookId, setCreatedBookId] = useState<string>();
+  const [lastValues, setLastValues] = useState<CreateBookValues>();
   const form = useForm<CreateBookValues>({
     resolver: zodResolver(createBookSchema),
     defaultValues: {
@@ -102,23 +138,54 @@ export function CreateBookPage() {
   const originalAudio = form.watch("originalAudio");
   const quality = form.watch("quality");
 
-  const mutation = useMutation({
-    mutationFn: async (values: CreateBookValues) => {
-      const state = await createBook(values.pdf, values.originalAudio);
-      const run = await runPageProcessing(state.book_id, {
+  const startPageProcessing = async (bookId: string, values: CreateBookValues) => {
+    setPhase("analyzing");
+    try {
+      const run = await runPageProcessing(bookId, {
         quality: values.quality,
         reading_long_edge: values.readingLongEdge,
         webp_quality: values.webpQuality,
         split_detection_enabled: values.splitDetectionEnabled,
       });
       if (run.jobId) await waitForJob(run.jobId, setJob);
-      return state.book_id;
-    },
-    onSuccess: async (bookId) => {
       await queryClient.invalidateQueries({ queryKey: ["books", bookId, "state"] });
       await navigate({ to: "/books/$bookId/pages", params: { bookId } });
+    } finally {
+      setPhase("idle");
+    }
+  };
+
+  const mutation = useMutation({
+    mutationFn: async (values: CreateBookValues) => {
+      setLastValues(values);
+      setCreatedBookId(undefined);
+      setUploadPercent(0);
+      setPhase("uploading");
+      const controller = new AbortController();
+      uploadAbort.current = controller;
+      try {
+        const state = await createBook(values.pdf, values.originalAudio, {
+          onUploadProgress: setUploadPercent,
+          signal: controller.signal,
+        });
+        setCreatedBookId(state.book_id);
+        await startPageProcessing(state.book_id, values);
+        return state.book_id;
+      } finally {
+        uploadAbort.current = null;
+      }
     },
   });
+
+  const cancelUpload = () => uploadAbort.current?.abort();
+  const retryAnalysisOnly = () => {
+    if (createdBookId && lastValues) void startPageProcessing(createdBookId, lastValues);
+  };
+  const continueInLibrary = async () => {
+    if (!createdBookId) return;
+    await queryClient.invalidateQueries({ queryKey: ["books"] });
+    await navigate({ to: "/books/$bookId/pages", params: { bookId: createdBookId } });
+  };
 
   const selectPreset = (next: QualityPreset) => {
     const values = valuesForPreset(next);
@@ -129,6 +196,7 @@ export function CreateBookPage() {
 
   const estimatedSize = pdf ? Math.max(pdf.size * 1.35, pdf.size) / 1024 / 1024 : undefined;
   const error = mutation.error as ApiRequestError | null;
+  const busy = phase !== "idle";
 
   return (
     <div className={styles.page}>
@@ -137,11 +205,25 @@ export function CreateBookPage() {
         <span className={styles.headerIndex}>01</span>
       </header>
 
-      {job && mutation.isPending && <ProgressBanner job={job} />}
-      {error && (
+      {phase === "uploading" && <UploadBanner percent={uploadPercent} onCancel={cancelUpload} />}
+      {phase === "analyzing" && job && <ProgressBanner job={job} />}
+      {error && phase !== "uploading" && (
         <div className={styles.errorBanner} role="alert">
           <CircleAlert />
-          <div><strong>这次分析没有完成</strong><p>{error.message}</p></div>
+          <div>
+            <strong>{createdBookId ? "项目已创建，页面分析没有完成" : "这次分析没有完成"}</strong>
+            <p>{error.message}</p>
+            {createdBookId && (
+              <div className={styles.errorBannerActions}>
+                <button type="button" data-primary onClick={() => void continueInLibrary()}>
+                  去继续处理这个项目
+                </button>
+                <button type="button" onClick={retryAnalysisOnly}>
+                  只重试页面分析
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       )}
 
@@ -188,8 +270,22 @@ export function CreateBookPage() {
                 ))}
               </div>
               <div className={styles.settingsGrid}>
-                <label><span>页面图片目标长边</span><span className={styles.inputWithUnit}><input type="number" {...form.register("readingLongEdge", { valueAsNumber: true })} /><b>px</b></span><small>建议 1500–2500</small></label>
-                <label><span>WebP 质量</span><span className={styles.inputWithUnit}><input type="number" {...form.register("webpQuality", { valueAsNumber: true })} /><b>%</b></span><small>建议 70–90</small></label>
+                <label>
+                  <span>页面图片目标长边</span>
+                  <span className={styles.inputWithUnit}><input type="number" {...form.register("readingLongEdge", { valueAsNumber: true })} /><b>px</b></span>
+                  <small>建议 1500–2500</small>
+                  {form.formState.errors.readingLongEdge && (
+                    <em className={styles.fieldError} role="alert">{form.formState.errors.readingLongEdge.message}</em>
+                  )}
+                </label>
+                <label>
+                  <span>WebP 质量</span>
+                  <span className={styles.inputWithUnit}><input type="number" {...form.register("webpQuality", { valueAsNumber: true })} /><b>%</b></span>
+                  <small>建议 70–90</small>
+                  {form.formState.errors.webpQuality && (
+                    <em className={styles.fieldError} role="alert">{form.formState.errors.webpQuality.message}</em>
+                  )}
+                </label>
               </div>
               <label className={styles.checkbox}>
                 <input type="checkbox" {...form.register("splitDetectionEnabled")} />
@@ -199,8 +295,14 @@ export function CreateBookPage() {
           </section>
 
           <footer className={styles.formFooter}>
-            <button className={styles.primaryAction} type="submit" disabled={mutation.isPending}>
-              {mutation.isPending ? <><LoaderCircle className={styles.spin} />正在分析页面</> : <>开始分析<ArrowRight /></>}
+            <button className={styles.primaryAction} type="submit" disabled={busy}>
+              {phase === "uploading" ? (
+                <><LoaderCircle className={styles.spin} />正在上传 {Math.round(uploadPercent * 100)}%</>
+              ) : phase === "analyzing" ? (
+                <><LoaderCircle className={styles.spin} />正在分析页面</>
+              ) : (
+                <>开始分析<ArrowRight /></>
+              )}
             </button>
             <p>完成后进入“页面处理”，确认拆分、旋转与裁边。</p>
           </footer>

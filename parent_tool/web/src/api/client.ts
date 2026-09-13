@@ -36,7 +36,12 @@ export type VoiceProfile = {
   updated_at: string;
 };
 
-export type ProofreadPage = { page_no: number; image: string; thumbnail: string };
+export type ProofreadPage = {
+  page_no: number;
+  image: string;
+  thumbnail: string;
+  dense_page_filtered?: boolean;
+};
 export type ProofreadWorkspace = {
   pages_revision_id: string;
   ocr_revision_id: string;
@@ -152,13 +157,46 @@ async function parseFetchError(response: Response, fallback: string): Promise<ne
   throw new ApiRequestError(body, fallback);
 }
 
-export async function createBook(pdf: File, originalAudio?: File): Promise<PipelineState> {
-  const body = new FormData();
-  body.append("pdf", pdf);
-  if (originalAudio) body.append("original_audio", originalAudio);
-  const response = await fetch("/api/books", { method: "POST", body });
-  if (!response.ok) await parseFetchError(response, "无法创建绘本工作区，请稍后重试。");
-  return (await response.json()) as PipelineState;
+export function createBook(
+  pdf: File,
+  originalAudio?: File,
+  options: { onUploadProgress?: (fraction: number) => void; signal?: AbortSignal } = {},
+): Promise<PipelineState> {
+  // XHR (not fetch): multi-hundred-MB uploads need real progress and cancel.
+  return new Promise((resolve, reject) => {
+    const body = new FormData();
+    body.append("pdf", pdf);
+    if (originalAudio) body.append("original_audio", originalAudio);
+    const request = new XMLHttpRequest();
+    request.open("POST", "/api/books");
+    request.responseType = "json";
+    request.upload.onprogress = (event) => {
+      if (event.lengthComputable) options.onUploadProgress?.(event.loaded / event.total);
+    };
+    request.onerror = () =>
+      reject(new ApiRequestError(undefined, "无法连接家长端服务，请确认服务是否在运行。"));
+    request.onabort = () => reject(new DOMException("上传已取消。", "AbortError"));
+    request.onload = () => {
+      if (request.status >= 200 && request.status < 300) {
+        resolve(request.response as PipelineState);
+      } else {
+        reject(
+          new ApiRequestError(
+            request.response as Partial<ApiErrorBody> | undefined,
+            "无法创建绘本工作区，请稍后重试。",
+          ),
+        );
+      }
+    };
+    if (options.signal) {
+      if (options.signal.aborted) {
+        request.abort();
+        return;
+      }
+      options.signal.addEventListener("abort", () => request.abort(), { once: true });
+    }
+    request.send(body);
+  });
 }
 
 export async function getWorkspaces(): Promise<WorkspaceList> {
