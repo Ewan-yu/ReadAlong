@@ -1,9 +1,9 @@
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:archive/archive_io.dart';
 import 'package:crypto/crypto.dart';
+import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 import 'package:sqflite/sqflite.dart' as sqflite;
 
@@ -213,17 +213,107 @@ class BookPackImporter {
 
       final backupMatch = _backupDirectoryPattern.firstMatch(name);
       if (backupMatch == null) continue;
-      final targetPath = p.join(booksDir, backupMatch.group(1)!);
-      if (await FileSystemEntity.type(targetPath, followLinks: false) ==
-          FileSystemEntityType.notFound) {
+      final libraryId = backupMatch.group(1)!;
+      final targetPath = p.join(booksDir, libraryId);
+      final indexed = await shelfIndex.findByLibraryId(libraryId);
+      final targetExists = await Directory(targetPath).exists();
+      if (!targetExists) {
+        // Roll back to the previous book: the staging rename never happened.
         await entity.rename(targetPath);
-      } else {
-        unresolved.add('目标 $targetPath 与备份 ${entity.path} 同时存在');
+      }
+      // Whatever now sits at the target (restored old book or the fully
+      // extracted NEW pack of a forward roll) must end up indexed from its
+      // own manifest; the shelf index write is the step the crash skipped.
+      final failure = await _adoptForwardRolledTarget(
+        libraryId: libraryId,
+        targetPath: targetPath,
+        previous: indexed,
+      );
+      if (failure != null) {
+        if (indexed == null && !targetExists) {
+          // A restored book nobody indexes and that cannot be adopted is
+          // unusable; drop it instead of blocking future imports.
+          await _deleteIfExists(targetPath);
+          debugPrint(
+            'readalong.shelf recovery dropped unadoptable $libraryId',
+          );
+        } else {
+          unresolved.add(failure);
+        }
+      } else if (await Directory(entity.path).exists()) {
+        // Forward roll: the backup of the old pack is no longer needed.
+        await entity.delete(recursive: true);
+        debugPrint('readalong.shelf recovery rolled forward $libraryId');
       }
     }
 
     if (unresolved.isNotEmpty) {
       throw StateError('发现未完成的覆盖恢复；已保留备份：${unresolved.join('；')}');
+    }
+
+    // A crash between the staging rename and the index write leaves an
+    // unindexed book directory that blocks every future import of the same
+    // pack; such a book was never usable, so remove it. Only run against a
+    // healthy, fully listed index.
+    final referencedDirs = <String>{
+      for (final book in await shelfIndex.listBooks())
+        p.normalize(book.bookDir),
+    };
+    await for (final entity in root.list(followLinks: false)) {
+      if (entity is! Directory) continue;
+      final name = p.basename(entity.path);
+      if (name.startsWith('.') ||
+          !_libraryIdPattern.hasMatch(name) ||
+          referencedDirs.contains(p.normalize(entity.path))) {
+        continue;
+      }
+      try {
+        await entity.delete(recursive: true);
+        debugPrint('readalong.shelf recovery removed unindexed $name');
+      } on Object catch (error) {
+        debugPrint(
+          'readalong.shelf recovery could not remove unindexed $name: $error',
+        );
+      }
+    }
+  }
+
+  /// Rebuilds the shelf entry of a recovered book from its on-disk manifest.
+  /// Returns null on success, otherwise a description that keeps both
+  /// directories in place for manual recovery.
+  Future<String?> _adoptForwardRolledTarget({
+    required String libraryId,
+    required String targetPath,
+    ShelfBook? previous,
+  }) async {
+    try {
+      final manifest = jsonDecode(
+        await File(p.join(targetPath, 'manifest.json')).readAsString(),
+      ) as Map<String, dynamic>;
+      final pages = (manifest['pages'] as List).cast<Map<String, dynamic>>();
+      final thumbnailPath = await File(p.join(targetPath, 'cover.jpg')).exists()
+          ? 'cover.jpg'
+          : pages.first['thumbnail'] as String;
+      final entry = ShelfBook(
+        libraryId: libraryId,
+        sourceBookId: manifest['book_id'] as String,
+        title: manifest['title'] as String,
+        pageCount: manifest['page_count'] as int,
+        bookDir: targetPath,
+        thumbnailPath: thumbnailPath,
+        // The pack sha is not recoverable from extracted files; keeping the
+        // previous identity only affects duplicate detection in this edge.
+        packageSha256: previous?.packageSha256 ?? '',
+        importedAt: previous?.importedAt ?? DateTime.now().toUtc(),
+      );
+      if (previous == null) {
+        await shelfIndex.add(entry);
+      } else {
+        await shelfIndex.replace(entry);
+      }
+      return null;
+    } on Object catch (error) {
+      return '覆盖恢复失败，已保留目标 $targetPath 与备份: $error';
     }
   }
 
@@ -446,11 +536,15 @@ class BookPackImporter {
 String _nonce() => DateTime.now().microsecondsSinceEpoch.toString();
 
 final _importDirectoryPattern = RegExp(
-  r'^\.import-[a-z0-9][a-z0-9-]{2,63}-\d+$',
+  r'^\.import-[a-z0-9][a-z0-9-]{2,126}-\d+$',
 );
 final _backupDirectoryPattern = RegExp(
-  r'^\.backup-([a-z0-9][a-z0-9-]{2,63})-\d+$',
+  r'^\.backup-([a-z0-9][a-z0-9-]{2,126})-\d+$',
 );
 final _deleteDirectoryPattern = RegExp(
   r'^\.delete-(\d+)-([a-z0-9][a-z0-9-]{2,126})$',
 );
+
+// Mirrors the widened recovery patterns: a legal source book id plus a
+// `-copy-N` suffix can exceed the 64-char book id limit.
+final _libraryIdPattern = RegExp(r'^[a-z0-9][a-z0-9-]{2,126}$');

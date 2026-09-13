@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -497,7 +498,7 @@ void main() {
       );
     });
 
-    test('覆盖回滚索引失败时保留备份并报告未完成恢复', () async {
+    test('覆盖回滚失败遗留的备份在恢复时前滚为新书并更新索引', () async {
       final first =
           await importer.import(_fixture('fixture_book.readalongbook'));
       final failingImporter = BookPackImporter(
@@ -528,25 +529,19 @@ void main() {
       expect(result.errors.any((error) => error.contains('回滚书架索引失败')), isTrue);
       expect(Directory(first.entry!.bookDir).existsSync(), isTrue);
       expect(backups, hasLength(1));
-      expect(
-        await File('${backups.single.path}/manifest.json').readAsBytes(),
-        ZipDecoder()
-            .decodeBytes(_fixture('fixture_book.readalongbook'))
-            .firstWhere((file) => file.name == 'manifest.json')
-            .content,
-      );
 
-      await expectLater(
-        importer.recoverInterruptedImports(),
-        throwsA(
-          isA<StateError>().having(
-            (error) => error.message,
-            'message',
-            contains('未完成的覆盖恢复'),
-          ),
-        ),
-      );
-      expect(backups.single.existsSync(), isTrue);
+      // 目标目录在崩溃/失败前已完成暂存改名,内容是完整的新包:恢复时按新
+      // manifest 重建书架索引并删除旧备份,书架不再卡死在“未完成的覆盖恢复”。
+      await importer.recoverInterruptedImports();
+
+      expect(backups.single.existsSync(), isFalse);
+      expect(Directory(first.entry!.bookDir).existsSync(), isTrue);
+      expect(await _readManifestTitle(first.entry!), 'Fixture Book Updated');
+      final recovered =
+          await shelfIndex.findByLibraryId(first.entry!.libraryId);
+      expect(recovered?.title, 'Fixture Book Updated');
+      // 前滚无法从解包文件复原新包哈希,保留旧身份仅影响去重判定。
+      expect(recovered?.packageSha256, first.entry!.packageSha256);
     });
 
     test('覆盖回滚发现备份丢失时保留新目标并报告错误', () async {
@@ -582,9 +577,18 @@ void main() {
           .create();
       final restored = Directory('${booksDir.path}/.backup-restored-book-102');
       await restored.create();
-      await File('${restored.path}/marker.txt').writeAsString('restore me');
-      final nestedImport =
-          Directory('${booksDir.path}/unrelated/.import-fixture-book-0001-103');
+      await File('${restored.path}/manifest.json').writeAsString(jsonEncode({
+        'book_id': 'restored-book',
+        'title': 'Restored Book',
+        'page_count': 1,
+        'pages': [
+          {'thumbnail': 'thumbnails/p0001.jpg'}
+        ],
+      }));
+      await File('${restored.path}/old.txt').writeAsString('restore me');
+      // 名称不符合库名规则的目录不会被孤儿清扫递归处理。
+      final nestedImport = Directory(
+          '${booksDir.path}/not-a-book!/.import-fixture-book-0001-103');
       await nestedImport.create(recursive: true);
 
       await importer.recoverInterruptedImports();
@@ -595,8 +599,11 @@ void main() {
         isFalse,
       );
       expect(Directory('${booksDir.path}/restored-book').existsSync(), isTrue);
-      expect(File('${booksDir.path}/restored-book/marker.txt').existsSync(),
-          isTrue);
+      expect(
+          File('${booksDir.path}/restored-book/old.txt').existsSync(), isTrue);
+      // 恢复回来的书必须重新进入索引,否则会被下一次孤儿清扫当作垃圾。
+      final indexed = await shelfIndex.findByLibraryId('restored-book');
+      expect(indexed?.title, 'Restored Book');
       expect(nestedImport.existsSync(), isTrue);
     });
 
@@ -622,6 +629,44 @@ void main() {
       expect(target.existsSync(), isTrue);
       expect(backup.existsSync(), isTrue);
       expect(File('${backup.path}/old.txt').existsSync(), isTrue);
+    });
+
+    test('恢复清扫未被索引管理的孤儿书籍目录', () async {
+      final first =
+          await importer.import(_fixture('fixture_book.readalongbook'));
+      final orphan = Directory('${tempDir.path}/books/orphan-book');
+      await orphan.create(recursive: true);
+      await File('${orphan.path}/manifest.json').writeAsString('{}');
+
+      await importer.recoverInterruptedImports();
+
+      expect(orphan.existsSync(), isFalse);
+      expect(Directory(first.entry!.bookDir).existsSync(), isTrue);
+      expect(await shelfIndex.listBooks(), hasLength(1));
+    });
+
+    test('恢复识别超过库名上限的副本备份目录', () async {
+      final booksDir = Directory('${tempDir.path}/books');
+      await booksDir.create(recursive: true);
+      final longId = 'book-${'a' * 53}'; // 58 chars, a legal book id.
+      final libraryId = '$longId-copy-2'; // 65 chars, exceeds the 64-char cap.
+      final backup = Directory('${booksDir.path}/.backup-$libraryId-101');
+      await backup.create(recursive: true);
+      await File('${backup.path}/manifest.json').writeAsString(jsonEncode({
+        'book_id': longId,
+        'title': 'Long Copy',
+        'page_count': 1,
+        'pages': [
+          {'thumbnail': 'thumbnails/p0001.jpg'}
+        ],
+      }));
+
+      await importer.recoverInterruptedImports();
+
+      final indexed = await shelfIndex.findByLibraryId(libraryId);
+      expect(indexed?.title, 'Long Copy');
+      expect(Directory('${booksDir.path}/$libraryId').existsSync(), isTrue);
+      expect(backup.existsSync(), isFalse);
     });
 
     test('坏包不创建书籍目录或书架索引', () async {
