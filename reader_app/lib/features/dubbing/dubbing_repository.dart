@@ -2,6 +2,7 @@ import 'dart:io';
 import 'dart:math';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:path/path.dart' as p;
 
 import '../../data/appdb/app_database_providers.dart';
 import '../../data/appdb/dubbing_models.dart';
@@ -266,12 +267,35 @@ final class LocalDubbingRepository implements DubbingRepository {
       mixId: id,
       extension: extension,
     );
-    return DubbingMixOutput(
+    final output = DubbingMixOutput(
       id: id,
       projectId: project.id,
       relativePath: relativePath,
       absolutePath: _fileStore.resolveRelativePath(relativePath),
     );
+    await _sweepPartFiles(Directory(p.dirname(output.absolutePath)));
+    return output;
+  }
+
+  /// A killed process can leave `.mix-id.part.*` render leftovers behind;
+  /// each render targets a fresh id, so they are never reused. Clean them
+  /// best-effort whenever a new output is prepared.
+  Future<void> _sweepPartFiles(Directory mixesDirectory) async {
+    try {
+      if (!await mixesDirectory.exists()) return;
+      await for (final entity in mixesDirectory.list(followLinks: false)) {
+        final name = p.basename(entity.path);
+        if (entity is File && name.startsWith('.') && name.contains('.part')) {
+          try {
+            await entity.delete();
+          } on Object {
+            // A locked leftover is retried by the next preparation.
+          }
+        }
+      }
+    } on Object {
+      // Sweeping must never block mix creation.
+    }
   }
 
   @override

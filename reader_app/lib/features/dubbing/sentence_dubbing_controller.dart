@@ -483,7 +483,14 @@ final class SentenceDubbingController
         throw const RecordingException('录音服务尚未准备好，请再试一次');
       }
       final path = await recorder.stop();
-      if (!_isCurrent(generation)) return;
+      if (!_isCurrent(generation)) {
+        // The take belongs to an abandoned flow; keep the private directory
+        // clean instead of leaving the orphan WAV for the next purge.
+        try {
+          await File(path).delete();
+        } on Object {}
+        return;
+      }
       final duration = _stopwatch?.elapsed ?? current.elapsed;
       final take = await _repository.saveTake(
         projectId: current.project.id,

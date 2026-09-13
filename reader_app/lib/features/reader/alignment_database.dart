@@ -55,9 +55,10 @@ void _sweepStaleTempCopies() {
   if (!directory.existsSync()) return;
   for (final entity in directory.listSync()) {
     final name = p.basename(entity.path);
-    if (entity is File &&
-        name.startsWith('ra_alignment_') &&
-        name.endsWith('.db')) {
+    final knownTempCopy = name.startsWith('ra_alignment_') ||
+        name.startsWith('ra_validate_') ||
+        name.startsWith('ra_timeline_');
+    if (entity is File && knownTempCopy && name.endsWith('.db')) {
       try {
         entity.deleteSync();
       } on Object {

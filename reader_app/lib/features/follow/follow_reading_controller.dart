@@ -491,7 +491,14 @@ final class FollowReadingController
         throw const RecordingException('录音服务尚未准备好，请再试一次');
       }
       final audioPath = await recorder.stop();
-      if (!_isCurrent(generation)) return;
+      if (!_isCurrent(generation)) {
+        // The one-off take belongs to an abandoned flow; avoid leaving the
+        // orphan WAV for the next purge.
+        try {
+          await File(audioPath).delete();
+        } on Object {}
+        return;
+      }
       final record = FollowRecording(
         id: ++_recordSequence,
         audioPath: audioPath,
