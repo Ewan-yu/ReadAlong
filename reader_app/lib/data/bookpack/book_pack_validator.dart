@@ -451,7 +451,7 @@ class BookPackValidator {
     if (file == null || !file.isFile) {
       errors.add('缺少原音文件: $declaredPath');
     } else {
-      final content = List<int>.from(file.content as List<int>);
+      final content = file.content as Uint8List;
       if (declaredSize is int && content.length != declaredSize) {
         errors.add('原音文件大小不一致: 声明 $declaredSize，实际 ${content.length}');
       }
@@ -480,7 +480,7 @@ class BookPackValidator {
         if (playbackFile == null || !playbackFile.isFile) {
           errors.add('缺少原音兼容播放轨: $playbackPath');
         } else {
-          final content = List<int>.from(playbackFile.content as List<int>);
+          final content = playbackFile.content as Uint8List;
           if (size is! int || size <= 0 || content.length != size) {
             errors.add('原音兼容播放轨大小不一致');
           }
@@ -523,7 +523,7 @@ class BookPackValidator {
           if (backgroundFile == null || !backgroundFile.isFile) {
             errors.add('缺少原音背景轨: $backgroundPath');
           } else {
-            final content = List<int>.from(backgroundFile.content as List<int>);
+            final content = backgroundFile.content as Uint8List;
             if (size is! int || size <= 0 || content.length != size) {
               errors.add('原音背景轨大小不一致');
             }
@@ -590,7 +590,7 @@ class BookPackValidator {
       errors.add('缺少原音逐词时间线: $path');
       return;
     }
-    final bytes = List<int>.from(file.content as List<int>);
+    final bytes = file.content as Uint8List;
     if (sha256.convert(bytes).toString() != expectedHash) {
       errors.add('原音逐词时间线 sha256 不一致');
       return;
