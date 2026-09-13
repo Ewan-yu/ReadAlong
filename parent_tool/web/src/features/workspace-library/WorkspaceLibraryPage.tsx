@@ -37,6 +37,8 @@ const stepCopy: Record<WorkspaceSummary["current_step"], string> = {
   ocr: "OCR 与句子",
   proofread: "OCR 与句子",
   audio: "语音生成",
+  original_audio: "原音处理",
+  original_timeline: "原音歌词",
   export: "导出资源包",
 };
 
