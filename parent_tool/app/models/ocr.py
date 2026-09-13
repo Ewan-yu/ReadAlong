@@ -66,6 +66,10 @@ class OcrPage(FrozenModel):
     response_path: str
     blocks_seen: int = Field(ge=0)
     sentences_created: int = Field(ge=0)
+    # The dense-page heuristic discarded every block of this page; the
+    # proofread workspace surfaces it so a comic or word-list page that was
+    # filtered in error can be re-typed manually instead of vanishing.
+    dense_page_filtered: bool = False
 
 
 class OcrSentences(FrozenModel):

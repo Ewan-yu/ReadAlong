@@ -105,6 +105,12 @@ class RawBlock:
     bbox: tuple[float, float, float, float]
 
 
+@dataclass(frozen=True)
+class ParsedBlocks:
+    blocks: tuple[RawBlock, ...]
+    dense_page_filtered: bool = False
+
+
 class OcrStep:
     step_id = StepId.OCR
     implementation_version = "ocr-v3"
@@ -158,7 +164,8 @@ class OcrStep:
             output_paths.append(response_path)
             with Image.open(source_image) as image:
                 width, height = image.size
-            blocks = self._parse_blocks(result.raw_jsonl, width, height)
+            parsed = self._parse_blocks(result.raw_jsonl, width, height)
+            blocks = parsed.blocks
             created_before = len(sentences)
             for block in blocks:
                 fragments = self._split_sentences(block.text)
@@ -192,6 +199,7 @@ class OcrStep:
                     response_path=response_path,
                     blocks_seen=len(blocks),
                     sentences_created=len(sentences) - created_before,
+                    dense_page_filtered=parsed.dense_page_filtered,
                 )
             )
             context.progress(index / total, f"已识别阅读页 {index}/{total}。")
@@ -206,9 +214,14 @@ class OcrStep:
             document.model_dump_json(indent=2), encoding="utf-8"
         )
         context.progress(1, "OCR 与句子切分完成。")
+        dense_filtered = sum(1 for page in pages if page.dense_page_filtered)
         return StepResult(
             outputs=("sentences.json", *output_paths),
-            summary={"page_count": len(pages), "sentence_count": len(sentences)},
+            summary={
+                "page_count": len(pages),
+                "sentence_count": len(sentences),
+                "dense_filtered_pages": dense_filtered,
+            },
         )
 
     @staticmethod
@@ -225,7 +238,7 @@ class OcrStep:
             ) from exc
 
     @classmethod
-    def _parse_blocks(cls, raw_jsonl: str, width: int, height: int) -> tuple[RawBlock, ...]:
+    def _parse_blocks(cls, raw_jsonl: str, width: int, height: int) -> ParsedBlocks:
         try:
             records = [json.loads(line) for line in raw_jsonl.splitlines() if line.strip()]
         except json.JSONDecodeError as exc:
@@ -274,7 +287,11 @@ class OcrStep:
         )
         # Dense publication/copyright pages contain scattered Latin fragments such as ISBN and URLs.
         # They are not read-aloud content; keeping them produces long, noisy synthetic audio.
-        return () if len(ordered) >= 10 else ordered
+        # The drop is reported per page so an over-eager filter on a comic or
+        # word-list page stays visible in the proofread workspace.
+        if len(ordered) >= 10:
+            return ParsedBlocks(blocks=(), dense_page_filtered=True)
+        return ParsedBlocks(blocks=ordered)
 
     @staticmethod
     def _is_spoken_text_block(label: str, text: str) -> bool:

@@ -51,7 +51,12 @@ class ProofreadWorkspaceService:
 
         output_by_no = {output.page_no: output for entry in plan.pages for output in entry.outputs}
         pages = tuple(
-            ProofreadPage(page_no=page.page_no, image=output_by_no[page.page_no].page_image, thumbnail=output_by_no[page.page_no].thumbnail)
+            ProofreadPage(
+                page_no=page.page_no,
+                image=output_by_no[page.page_no].page_image,
+                thumbnail=output_by_no[page.page_no].thumbnail,
+                dense_page_filtered=page.dense_page_filtered,
+            )
             for page in draft.pages
         )
         return ProofreadWorkspaceResponse(

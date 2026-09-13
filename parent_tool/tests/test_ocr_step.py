@@ -132,6 +132,7 @@ def test_ocr_step_replays_response_and_builds_sentence_draft(tmp_path: Path) -> 
     assert output.sentences[2].status.value == "needs_review"
     assert output.pages[0].blocks_seen == 4
     assert output.pages[0].sentences_created == 5
+    assert output.pages[0].dense_page_filtered is False
     assert 0 <= output.sentences[0].bbox.x < 1
     assert output.sentences[0].bbox.x + output.sentences[0].bbox.width <= 1
     assert "The Frog Family" not in [item.text for item in output.sentences]
@@ -144,6 +145,35 @@ def test_ocr_step_rejects_invalid_replayed_jsonl(tmp_path: Path) -> None:
     with pytest.raises(PipelineError) as caught:
         step._parse_blocks("not JSON", 100, 100)
     assert caught.value.code == "OCR_RESPONSE_INVALID"
+
+
+def test_dense_page_drop_is_reported_instead_of_silent() -> None:
+    response = json.dumps(
+        {
+            "result": {
+                "layoutParsingResults": [
+                    {
+                        "prunedResult": {
+                            "parsing_res_list": [
+                                {
+                                    "block_label": "text",
+                                    "block_content": f"Fragment {index}.",
+                                    "block_bbox": [10, 10 + index * 20, 200, 25 + index * 20],
+                                }
+                                for index in range(10)
+                            ]
+                        }
+                    }
+                ]
+            }
+        }
+    )
+    step = OcrStep(ReplayOcrProvider({"p.png": response}), FakeSpellChecker())
+
+    parsed = step._parse_blocks(response, 300, 400)
+
+    assert parsed.blocks == ()
+    assert parsed.dense_page_filtered is True
 
 
 def test_sentence_parser_keeps_smart_quote_speech_and_speech_tags() -> None:

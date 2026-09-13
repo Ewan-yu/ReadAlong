@@ -8,6 +8,7 @@ class ProofreadPage(FrozenModel):
     page_no: int
     image: str
     thumbnail: str
+    dense_page_filtered: bool = False
 
 
 class ProofreadWorkspaceResponse(FrozenModel):
