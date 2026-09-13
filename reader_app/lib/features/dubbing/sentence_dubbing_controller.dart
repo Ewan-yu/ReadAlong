@@ -183,6 +183,7 @@ final class SentenceDubbingController
   var _generation = 0;
   var _starting = false;
   var _stopping = false;
+  var _mixing = false;
   var _disposed = false;
   Future<void>? _backgroundScore;
 
@@ -683,60 +684,67 @@ final class SentenceDubbingController
   /// reason to read `source.mp3` into the command.
   Future<void> createMix() async {
     final current = state.valueOrNull;
-    if (current == null || current.isBusy) return;
+    if (current == null || current.isBusy || _mixing) return;
     if (!current.canCreateMix) {
       _fail('每一句都完成后，就可以生成故事作品。');
       return;
     }
-    final allTakes = await _repository.listTakes(current.project.id);
-    final selectedBySentence = <String, DubbingTake>{
-      for (final take in allTakes)
-        if (take.takeKind == DubbingTakeKind.sentence && take.isSelected)
-          take.sentenceId!: take,
-    };
-    if (selectedBySentence.length != current.original.sentences.length) {
-      _fail('每一句都选用一个录音后，才能生成完整作品。');
-      return;
-    }
-    final output = await _repository.prepareMixOutput(current.project.id);
-    final mode = current.original.backgroundPath == null
-        ? DubbingMixMode.voiceOnly
-        : DubbingMixMode.withConfirmedBackground;
-    final entries = current.original.sentences.map((sentence) {
-      final take = selectedBySentence[sentence.id]!;
-      return DubbingMixSentenceTake(
-        sentenceId: sentence.id,
-        sequence: sentence.sequence,
-        start: sentence.start,
-        end: sentence.end,
-        take: take,
-        audioPath: _repository.resolveAudioPath(take),
-      );
-    }).toList(growable: false);
-    final plan = DubbingMixPlan.create(
-      sentenceTakes: entries,
-      outputPath: output.absolutePath,
-      mode: mode,
-      timelineDuration: current.original.duration,
-      confirmedBackgroundPath: current.original.backgroundPath,
-      originalSourcePath: current.original.audioPath,
-    );
-    _set(current.copyWith(phase: SentenceDubbingPhase.mixing, failure: null));
+    // The busy phase is only set after several awaits; a double tap in that
+    // window would otherwise render two concurrent works.
+    _mixing = true;
     try {
-      final result = await _mixService.render(plan);
-      final mix = await _repository.saveMix(
-        output: output,
-        variant: result.variant,
-        sourceTakeFingerprint: plan.sourceTakeFingerprint,
-        duration: result.duration,
+      final allTakes = await _repository.listTakes(current.project.id);
+      final selectedBySentence = <String, DubbingTake>{
+        for (final take in allTakes)
+          if (take.takeKind == DubbingTakeKind.sentence && take.isSelected)
+            take.sentenceId!: take,
+      };
+      if (selectedBySentence.length != current.original.sentences.length) {
+        _fail('每一句都选用一个录音后，才能生成完整作品。');
+        return;
+      }
+      final output = await _repository.prepareMixOutput(current.project.id);
+      final mode = current.original.backgroundPath == null
+          ? DubbingMixMode.voiceOnly
+          : DubbingMixMode.withConfirmedBackground;
+      final entries = current.original.sentences.map((sentence) {
+        final take = selectedBySentence[sentence.id]!;
+        return DubbingMixSentenceTake(
+          sentenceId: sentence.id,
+          sequence: sentence.sequence,
+          start: sentence.start,
+          end: sentence.end,
+          take: take,
+          audioPath: _repository.resolveAudioPath(take),
+        );
+      }).toList(growable: false);
+      final plan = DubbingMixPlan.create(
+        sentenceTakes: entries,
+        outputPath: output.absolutePath,
+        mode: mode,
+        timelineDuration: current.original.duration,
+        confirmedBackgroundPath: current.original.backgroundPath,
+        originalSourcePath: current.original.audioPath,
       );
-      await _refreshMixes(createdMixId: mix.id);
-    } on DubbingMixInputException catch (error) {
-      _fail(error.message);
-    } on DubbingMixRenderException catch (error) {
-      _fail(error.message);
-    } on Object {
-      _fail('作品没有生成成功，录音都还在，可以再试一次。');
+      _set(current.copyWith(phase: SentenceDubbingPhase.mixing, failure: null));
+      try {
+        final result = await _mixService.render(plan);
+        final mix = await _repository.saveMix(
+          output: output,
+          variant: result.variant,
+          sourceTakeFingerprint: plan.sourceTakeFingerprint,
+          duration: result.duration,
+        );
+        await _refreshMixes(createdMixId: mix.id);
+      } on DubbingMixInputException catch (error) {
+        _fail(error.message);
+      } on DubbingMixRenderException catch (error) {
+        _fail(error.message);
+      } on Object {
+        _fail('作品没有生成成功，录音都还在，可以再试一次。');
+      }
+    } finally {
+      _mixing = false;
     }
   }
 

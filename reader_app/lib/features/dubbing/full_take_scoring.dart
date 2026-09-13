@@ -20,6 +20,7 @@ final class FullTakeScorer {
     required File audio,
     required List<OriginalAudioSentence> sentences,
     Duration contentOffset = Duration.zero,
+    bool Function()? isActive,
   }) async {
     final byteLength = await audio.length();
     if (byteLength > maxScoringAudioBytes) {
@@ -28,6 +29,9 @@ final class FullTakeScorer {
     final pcm = parseWavPcm16(await audio.readAsBytes()).pcm16k;
     final results = <FullTakeSentenceScore>[];
     for (final sentence in sentences) {
+      // Each ISE round-trip costs quota; stop issuing new requests as soon as
+      // the caller (page/controller) goes away, keeping partial results.
+      if (isActive != null && !isActive()) break;
       final slice = pcm16SliceForRange(
         pcm,
         sentence.start + contentOffset,

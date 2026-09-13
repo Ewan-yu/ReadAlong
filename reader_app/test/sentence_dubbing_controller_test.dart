@@ -15,6 +15,7 @@ import 'package:reader_app/features/reader/original_audio_player.dart';
 import 'package:reader_app/features/reader/original_audio_repository.dart';
 import 'package:reader_app/features/reader/point_reading_models.dart';
 import 'package:reader_app/features/reader/sentence_audio_player.dart';
+import 'package:reader_app/services/audio/dubbing_mix_service.dart';
 import 'package:reader_app/services/recording/recording_preparation.dart';
 import 'package:reader_app/services/recording/recording_service.dart';
 import 'package:reader_app/services/scoring/score_models.dart';
@@ -28,6 +29,7 @@ void main() {
   late _OriginalPlayer originalPlayer;
   late _Recorder recorder;
   late _Scorer scorer;
+  late _CountingMixService mixService;
   late List<String> events;
   late ProviderContainer container;
   SentenceDubbingController? activeController;
@@ -41,6 +43,7 @@ void main() {
     originalPlayer = _OriginalPlayer(events);
     recorder = _Recorder(temporary, events);
     scorer = _Scorer();
+    mixService = _CountingMixService();
     container = ProviderContainer(overrides: [
       dubbingRepositoryProvider.overrideWith((_) async => repository),
       recordingServiceProvider.overrideWith((_) async => recorder),
@@ -50,6 +53,7 @@ void main() {
       sentenceAudioPlayerProvider.overrideWithValue(player),
       originalAudioPlayerProvider.overrideWithValue(originalPlayer),
       scoringProvider.overrideWithValue(scorer),
+      dubbingMixServiceProvider.overrideWithValue(mixService),
       originalAudioBookProvider('book-copy').overrideWith((_) async => _book()),
     ]);
   });
@@ -105,6 +109,29 @@ void main() {
     await controller.continueToNextSentence();
     expect(current().sentenceIndex, 1);
     expect(current().sentence.id, 's2');
+  });
+
+  test('生成作品准备窗口内连点只渲染一次作品', () async {
+    final controller = await ready();
+    for (var index = 0; index < 2; index++) {
+      await controller.startRecording();
+      await controller.stopRecording();
+      await controller.backgroundScore;
+      if (index == 0) await controller.continueToNextSentence();
+    }
+    expect(current().canCreateMix, isTrue);
+
+    final gate = Completer<void>();
+    repository.prepareMixOutputGate = gate;
+    final first = controller.createMix();
+    await pumpEventQueue();
+    // 第二次点击落在 prepareMixOutput 的 await 窗口内，phase 尚未进入 mixing。
+    await controller.createMix();
+    gate.complete();
+    await first;
+
+    expect(mixService.renderCalls, 1);
+    expect(repository.mixes, hasLength(1));
   });
 
   test('Android 切后台会结束并保存正在录制的句子', () async {
@@ -625,6 +652,23 @@ final class _Scorer implements ScoringProvider {
   }
 }
 
+final class _CountingMixService implements DubbingMixService {
+  var renderCalls = 0;
+
+  @override
+  Future<DubbingMixResult> render(DubbingMixPlan plan) async {
+    renderCalls++;
+    final output = File(plan.outputPath);
+    await output.parent.create(recursive: true);
+    await output.writeAsBytes([1, 2, 3]);
+    return DubbingMixResult(
+      outputPath: output.path,
+      mode: plan.mode,
+      duration: plan.renderDuration,
+    );
+  }
+}
+
 final class _Repository implements DubbingRepository {
   _Repository(this.directory);
   final Directory directory;
@@ -669,14 +713,19 @@ final class _Repository implements DubbingRepository {
     Duration contentOffset = Duration.zero,
     String? sentenceId,
   }) async {
-    final path = p.join(directory.path, 'durable-${takes.length + 1}.wav');
+    // Mirrors the production layout so mix-plan path validation accepts the
+    // takes as private dubbing content.
+    final relative = 'dubbing/book/$projectId/takes/${sentenceId ?? 'full'}'
+        '/take-${takes.length + 1}.wav';
+    final path = p.joinAll([directory.path, ...relative.split('/')]);
+    await File(path).parent.create(recursive: true);
     await sourceAudio.copy(path);
     final take = DubbingTake(
       id: 'take-${takes.length + 1}',
       projectId: projectId,
       sentenceId: sentenceId,
       takeKind: kind,
-      audioRelativePath: p.basename(path),
+      audioRelativePath: relative,
       duration: duration,
       contentOffset: contentOffset,
       isSelected: false,
@@ -732,16 +781,46 @@ final class _Repository implements DubbingRepository {
       mixes.where((mix) => mix.projectId == projectId).toList(growable: false);
   @override
   Future<DubbingMixOutput> prepareMixOutput(String projectId,
-          {String extension = '.m4a'}) =>
-      throw UnimplementedError();
+      {String extension = '.m4a'}) async {
+    // One-shot gate used by the createMix re-entry test to hold the first
+    // call inside the pre-mixing await window.
+    final gate = prepareMixOutputGate;
+    if (gate != null) {
+      prepareMixOutputGate = null;
+      await gate.future;
+    }
+    final id = 'mix-${mixes.length + 1}';
+    final relativePath = 'dubbing/book/$projectId/mixes/$id$extension';
+    return DubbingMixOutput(
+      id: id,
+      projectId: projectId,
+      relativePath: relativePath,
+      absolutePath: p.joinAll([directory.path, ...relativePath.split('/')]),
+    );
+  }
+
+  Completer<void>? prepareMixOutputGate;
+
   @override
   Future<DubbingMix> saveMix({
     required DubbingMixOutput output,
     required DubbingMixVariant variant,
     required String sourceTakeFingerprint,
     required Duration duration,
-  }) =>
-      throw UnimplementedError();
+  }) async {
+    final mix = DubbingMix(
+      id: output.id,
+      projectId: output.projectId,
+      audioRelativePath: output.relativePath,
+      variant: variant,
+      sourceTakeFingerprint: sourceTakeFingerprint,
+      duration: duration,
+      createdAt: DateTime.utc(2026),
+    );
+    mixes.insert(0, mix);
+    return mix;
+  }
+
   @override
   Future<void> deleteMix(String mixId) async =>
       mixes.removeWhere((mix) => mix.id == mixId);

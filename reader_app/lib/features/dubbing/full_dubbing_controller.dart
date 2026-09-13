@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../services/recording/recording_service.dart';
@@ -140,6 +141,34 @@ final class FullDubbingController
   var _playbackCommand = 0;
   var _generation = 0;
   var _stopping = false;
+  var _scoring = false;
+  var _mixing = false;
+  Stopwatch? _takeClock;
+
+  /// Pins the stored content offset to the real capture clock.
+  ///
+  /// The offset must cover the whole WAV lead-in from `recorder.start()` to
+  /// the moment the child-visible timeline begins: background loading,
+  /// preparation and the player's own start latency (field data 2026-09-13:
+  /// load gap 60 ms on a flagship phone, larger on low-end tablets). Called
+  /// provisionally when playback is issued and refined when the player
+  /// reports it is actually playing; `max` keeps repeated calls harmless.
+  void _captureTakeZero() {
+    final clock = _takeClock;
+    if (clock == null) return;
+    final elapsed = clock.elapsed;
+    if (elapsed > _contentOffset) _contentOffset = elapsed;
+  }
+
+  void _logTakeTiming(String stage, {String extra = ''}) {
+    final elapsed = _takeClock?.elapsedMilliseconds;
+    if (elapsed == null) return;
+    debugPrint(
+      'readalong.fulltake timing $stage +${elapsed}ms'
+      '${extra.isEmpty ? '' : ' $extra'}',
+    );
+  }
+
   var _disposed = false;
 
   @override
@@ -230,6 +259,12 @@ final class FullDubbingController
         await recorder.cancel();
         return;
       }
+      // The take clock anchors the stored contentOffset to the real
+      // capture-to-timeline-zero gap; the timing logs keep the field data
+      // (R2) visible for future devices.
+      _takeClock = Stopwatch()..start();
+      _contentOffset = Duration.zero;
+      debugPrint('readalong.fulltake timing capture-started');
       _backgroundLoaded = false;
       final background = current.original.backgroundPath;
       if (background != null) {
@@ -241,6 +276,7 @@ final class FullDubbingController
           await _audioPlayer.seek(Duration.zero);
           await _audioPlayer.setVolume(_recordingBackgroundVolume);
           _backgroundLoaded = true;
+          _logTakeTiming('background-loaded');
         } on Object {
           _audioMode = _FullAudioMode.none;
           // Silent lyrics are a supported fallback. Never substitute the
@@ -256,7 +292,7 @@ final class FullDubbingController
             ? '背景音乐暂时不能播放，歌词仍会按时间继续。'
             : null,
       ));
-      _contentOffset = await _preparation.run(
+      final preparationElapsed = await _preparation.run(
         isActive: () => _isCurrent(generation),
         onUpdate: (update) {
           final latest = state.valueOrNull;
@@ -268,6 +304,10 @@ final class FullDubbingController
             countdown: update.countdown,
           ));
         },
+      );
+      _logTakeTiming(
+        'prep-done',
+        extra: 'preparationMs=${preparationElapsed.inMilliseconds}',
       );
       if (!_isCurrent(generation)) {
         await recorder.cancel();
@@ -332,7 +372,14 @@ final class FullDubbingController
           countdown: 0,
           elapsed: Duration.zero,
           level: 0));
-      if (_backgroundLoaded) unawaited(_playBackground());
+      // Provisional content zero: the play command (or, without a
+      // background, the silent lyric clock) starts now; the first real
+      // "playing" event refines it via _captureTakeZero.
+      _captureTakeZero();
+      if (_backgroundLoaded) {
+        _logTakeTiming('play-issued');
+        unawaited(_playBackground());
+      }
     } on RecordingException catch (error) {
       if (_isCurrent(generation)) _fail(error.message);
     } on Object {
@@ -372,6 +419,11 @@ final class FullDubbingController
             : const Duration(milliseconds: 1),
         contentOffset: _contentOffset,
       );
+      _logTakeTiming(
+        'take-saved',
+        extra: 'contentOffsetMs=${_contentOffset.inMilliseconds}',
+      );
+      _takeClock = null;
       try {
         await File(path).delete();
       } on Object {}
@@ -450,50 +502,57 @@ final class FullDubbingController
 
   Future<void> createMix() async {
     var current = state.valueOrNull;
-    if (current == null || current.isBusy) return;
+    if (current == null || current.isBusy || _mixing) return;
     final selected = current.takes.where((take) => take.isSelected).firstOrNull;
     if (selected == null || selected.takeKind != DubbingTakeKind.full) {
       _fail('请先选用一条完整录音。');
       return;
     }
-    await _stopPlayback(clearState: true);
-    final latest = state.valueOrNull;
-    if (latest == null) return;
-    current = latest;
-    final output = await _repository.prepareMixOutput(current.project.id);
-    final mode = current.original.backgroundPath == null
-        ? DubbingMixMode.voiceOnly
-        : DubbingMixMode.withConfirmedBackground;
-    final plan = DubbingMixPlan.forFullTake(
-      take: selected,
-      audioPath: _repository.resolveAudioPath(selected),
-      outputPath: output.absolutePath,
-      mode: mode,
-      timelineDuration: current.original.duration,
-      confirmedBackgroundPath: current.original.backgroundPath,
-      originalSourcePath: current.original.audioPath,
-    );
-    _set(current.copyWith(phase: FullDubbingPhase.mixing, failure: null));
+    // The busy phase is only set after several awaits; a double tap in that
+    // window would otherwise render two concurrent works.
+    _mixing = true;
     try {
-      final result = await _mixService.render(plan);
-      await _repository.saveMix(
-        output: output,
-        variant: result.variant,
-        sourceTakeFingerprint: plan.sourceTakeFingerprint,
-        duration: result.duration,
+      await _stopPlayback(clearState: true);
+      final latest = state.valueOrNull;
+      if (latest == null) return;
+      current = latest;
+      final output = await _repository.prepareMixOutput(current.project.id);
+      final mode = current.original.backgroundPath == null
+          ? DubbingMixMode.voiceOnly
+          : DubbingMixMode.withConfirmedBackground;
+      final plan = DubbingMixPlan.forFullTake(
+        take: selected,
+        audioPath: _repository.resolveAudioPath(selected),
+        outputPath: output.absolutePath,
+        mode: mode,
+        timelineDuration: current.original.duration,
+        confirmedBackgroundPath: current.original.backgroundPath,
+        originalSourcePath: current.original.audioPath,
       );
-      // “完成”必须对应一个真正可回放的作品，而不是只改变角标。
-      await _repository.updateProjectStatus(
-        current.project.id,
-        DubbingProjectStatus.complete,
-      );
-      await _refresh();
-    } on DubbingMixInputException catch (error) {
-      _fail(error.message);
-    } on DubbingMixRenderException catch (error) {
-      _fail(error.message);
-    } on Object {
-      _fail('作品没有生成成功，录音都还在，可以再试一次。');
+      _set(current.copyWith(phase: FullDubbingPhase.mixing, failure: null));
+      try {
+        final result = await _mixService.render(plan);
+        await _repository.saveMix(
+          output: output,
+          variant: result.variant,
+          sourceTakeFingerprint: plan.sourceTakeFingerprint,
+          duration: result.duration,
+        );
+        // “完成”必须对应一个真正可回放的作品，而不是只改变角标。
+        await _repository.updateProjectStatus(
+          current.project.id,
+          DubbingProjectStatus.complete,
+        );
+        await _refresh();
+      } on DubbingMixInputException catch (error) {
+        _fail(error.message);
+      } on DubbingMixRenderException catch (error) {
+        _fail(error.message);
+      } on Object {
+        _fail('作品没有生成成功，录音都还在，可以再试一次。');
+      }
+    } finally {
+      _mixing = false;
     }
   }
 
@@ -527,35 +586,42 @@ final class FullDubbingController
     var current = state.valueOrNull;
     if (current == null ||
         current.isBusy ||
+        _scoring ||
         take.takeKind != DubbingTakeKind.full) {
       return;
     }
-    await _stopPlayback(clearState: true);
-    final latest = state.valueOrNull;
-    if (latest == null) return;
-    current = latest;
-    final generation = ++_generation;
-    _set(current.copyWith(phase: FullDubbingPhase.scoring, failure: null));
+    _scoring = true;
     try {
-      final report = await FullTakeScorer(_scorer).score(
-        audio: File(_repository.resolveAudioPath(take)),
-        sentences: current.original.sentences,
-        contentOffset: take.contentOffset,
-      );
-      await _repository.updateTakeScore(
-        takeId: take.id,
-        status: DubbingTakeScoreStatus.scored,
-        scoreJson: jsonEncode(report.toJson()),
-      );
-      if (_isCurrent(generation)) await _refresh();
-    } on Object {
-      if (!_isCurrent(generation)) return;
-      await _repository.updateTakeScore(
-        takeId: take.id,
-        status: DubbingTakeScoreStatus.failed,
-        scoreError: '完整录音评分暂时不可用，录音已保留。',
-      );
-      await _refresh(phase: FullDubbingPhase.failed);
+      await _stopPlayback(clearState: true);
+      final latest = state.valueOrNull;
+      if (latest == null) return;
+      current = latest;
+      final generation = ++_generation;
+      _set(current.copyWith(phase: FullDubbingPhase.scoring, failure: null));
+      try {
+        final report = await FullTakeScorer(_scorer).score(
+          audio: File(_repository.resolveAudioPath(take)),
+          sentences: current.original.sentences,
+          contentOffset: take.contentOffset,
+          isActive: () => _isCurrent(generation),
+        );
+        await _repository.updateTakeScore(
+          takeId: take.id,
+          status: DubbingTakeScoreStatus.scored,
+          scoreJson: jsonEncode(report.toJson()),
+        );
+        if (_isCurrent(generation)) await _refresh();
+      } on Object {
+        if (!_isCurrent(generation)) return;
+        await _repository.updateTakeScore(
+          takeId: take.id,
+          status: DubbingTakeScoreStatus.failed,
+          scoreError: '完整录音评分暂时不可用，录音已保留。',
+        );
+        await _refresh(phase: FullDubbingPhase.failed);
+      }
+    } finally {
+      _scoring = false;
     }
   }
 
@@ -618,7 +684,11 @@ final class FullDubbingController
 
   Future<void> _playBackground() async {
     try {
+      // just_audio's play() future completes when playback ENDS, not when it
+      // starts (field data 2026-09-13); the start moment comes from the
+      // playing stream instead. Keep this unawaited by the caller.
       await _audioPlayer.play();
+      _logTakeTiming('play-completed');
     } on Object {
       final current = state.valueOrNull;
       if (current?.isRecording == true) {
@@ -771,8 +841,14 @@ final class FullDubbingController
   }
 
   void _onAudioPlaying(bool playing) {
-    if (_audioMode == _FullAudioMode.none ||
-        _audioMode == _FullAudioMode.recordingBackground) {
+    if (_audioMode == _FullAudioMode.recordingBackground) {
+      if (playing) {
+        _logTakeTiming('playing-observed');
+        _captureTakeZero();
+      }
+      return;
+    }
+    if (_audioMode == _FullAudioMode.none) {
       return;
     }
     final current = state.valueOrNull;

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/material.dart';
@@ -15,6 +16,10 @@ import 'package:reader_app/features/reader/original_audio_player.dart';
 import 'package:reader_app/services/audio/dubbing_mix_service.dart';
 import 'package:reader_app/services/recording/recording_service.dart';
 import 'package:reader_app/services/recording/recording_preparation.dart';
+import 'package:reader_app/services/scoring/score_models.dart';
+import 'package:reader_app/services/scoring/scoring_provider.dart';
+import 'package:reader_app/services/scoring/xfyun_ise_provider.dart'
+    show scoringProvider;
 
 void main() {
   late Directory temporary;
@@ -22,6 +27,8 @@ void main() {
   late ProviderContainer container;
   late _ControlledPreparation preparation;
   late _OriginalPlayer audioPlayer;
+  late _GatedScorer scorer;
+  late _MixService mixService;
   ProviderSubscription<AsyncValue<FullDubbingState>>? subscription;
 
   setUp(() async {
@@ -29,12 +36,15 @@ void main() {
     repository = _MemoryDubbingRepository(temporary);
     preparation = _ControlledPreparation();
     audioPlayer = _OriginalPlayer();
+    scorer = _GatedScorer();
+    mixService = _MixService();
     container = ProviderContainer(overrides: [
       dubbingRepositoryProvider.overrideWith((_) async => repository),
       recordingServiceProvider.overrideWith((_) async => _Recorder(temporary)),
       originalAudioPlayerProvider.overrideWithValue(audioPlayer),
-      dubbingMixServiceProvider.overrideWithValue(_MixService()),
+      dubbingMixServiceProvider.overrideWithValue(mixService),
       recordingPreparationProtocolProvider.overrideWithValue(preparation),
+      scoringProvider.overrideWithValue(scorer),
       originalAudioBookProvider('book-copy').overrideWith((_) async => _book()),
     ]);
   });
@@ -85,8 +95,9 @@ void main() {
     expect(current().countdown, 0);
   });
 
-  test('麦克风先启动，内容零点偏移随完整 Take 保存', () async {
+  test('内容零点覆盖背景加载耗时，不再只等于准备时长', () async {
     final controller = await ready();
+    audioPlayer.loadDelayMs = 300;
 
     final starting = controller.startCountdown();
     await pumpEventQueue();
@@ -98,8 +109,10 @@ void main() {
 
     expect(current().phase, FullDubbingPhase.ready);
     expect(current().takes, hasLength(1));
-    expect(current().takes.single.contentOffset,
-        const Duration(milliseconds: 650));
+    // 模拟低端设备 300ms 的背景轨解码:存出的内容零点必须包含它。
+    final offsetMs = current().takes.single.contentOffset.inMilliseconds;
+    expect(offsetMs, greaterThanOrEqualTo(300));
+    expect(offsetMs, lessThan(10000));
     expect(current().takes.single.isSelected, isTrue);
   });
 
@@ -150,7 +163,7 @@ void main() {
     expect(current().playbackKind, FullDubbingPlaybackKind.take);
     expect(current().playbackId, take.id);
     expect(current().audioPlaying, isTrue);
-    expect(audioPlayer.seeked.last, const Duration(milliseconds: 650));
+    expect(audioPlayer.seeked.last, take.contentOffset);
     expect(audioPlayer.volumes.last, 1);
 
     await controller.playTake(take);
@@ -212,6 +225,71 @@ void main() {
     await controller.stopRecording();
   });
 
+  test('整轨评分在页面退出后不再发起后续评分请求', () async {
+    final controller = await ready();
+    final starting = controller.startCountdown();
+    await pumpEventQueue();
+    preparation.release();
+    await starting;
+    await controller.stopRecording();
+    final take = current().takes.single;
+    await File(repository.resolveAudioPath(take))
+        .writeAsBytes(_minimalWav(4000));
+
+    final scoring = controller.scoreTake(take);
+    await _until(() => scorer.requests.isNotEmpty);
+    expect(scorer.requests, hasLength(1));
+
+    container.invalidate(fullDubbingControllerProvider('book-copy'));
+    scorer.releaseAll();
+    await scoring;
+
+    expect(scorer.requests, hasLength(1));
+  });
+
+  test('评分准备窗口内重复触发不会并发两轮评分', () async {
+    final controller = await ready();
+    final starting = controller.startCountdown();
+    await pumpEventQueue();
+    preparation.release();
+    await starting;
+    await controller.stopRecording();
+    final take = current().takes.single;
+    await File(repository.resolveAudioPath(take))
+        .writeAsBytes(_minimalWav(4000));
+
+    audioPlayer.holdStop = true;
+    final first = controller.scoreTake(take);
+    await pumpEventQueue();
+    // 第二次触发落在停止回放的 await 窗口内，phase 尚未进入 scoring。
+    await controller.scoreTake(take);
+    audioPlayer.releaseStop();
+    scorer.autoRelease = true;
+    await first;
+
+    expect(scorer.requests, hasLength(3));
+  });
+
+  test('生成作品准备窗口内连点只渲染一次作品', () async {
+    final controller = await ready();
+    final starting = controller.startCountdown();
+    await pumpEventQueue();
+    preparation.release();
+    await starting;
+    await controller.stopRecording();
+
+    audioPlayer.holdStop = true;
+    final first = controller.createMix();
+    await pumpEventQueue();
+    // 第二次点击落在停止回放的 await 窗口内，phase 尚未进入 mixing。
+    await controller.createMix();
+    audioPlayer.releaseStop();
+    await first;
+
+    expect(mixService.renderCalls, 1);
+    expect(current().mixes, hasLength(1));
+  });
+
   testWidgets('完整配音入口适配窄屏和 Android 平板横屏', (tester) async {
     tester.view.devicePixelRatio = 1;
     tester.view.physicalSize = const Size(360, 640);
@@ -259,10 +337,111 @@ OriginalAudioBook _book() => OriginalAudioBook(
                   sequence: 1,
                   text: 'Hello',
                   start: Duration.zero,
-                  end: Duration(seconds: 1))
-            ])
+                  end: const Duration(seconds: 1))
+            ]),
+        OriginalAudioSentence(
+            id: 's2',
+            sequence: 2,
+            text: 'World.',
+            start: const Duration(seconds: 1),
+            end: const Duration(seconds: 2),
+            words: [
+              const OriginalAudioWord(
+                  sequence: 1,
+                  text: 'World',
+                  start: const Duration(seconds: 1),
+                  end: const Duration(seconds: 2))
+            ]),
+        OriginalAudioSentence(
+            id: 's3',
+            sequence: 3,
+            text: 'Again.',
+            start: const Duration(seconds: 2),
+            end: const Duration(seconds: 3),
+            words: [
+              const OriginalAudioWord(
+                  sequence: 1,
+                  text: 'Again',
+                  start: const Duration(seconds: 2),
+                  end: const Duration(seconds: 3))
+            ]),
       ],
     );
+
+/// Minimal 16 kHz / mono / 16-bit PCM WAV accepted by [parseWavPcm16].
+Uint8List _minimalWav(int milliseconds) {
+  final dataBytes = milliseconds * 32; // 16 kHz × 2 bytes per sample.
+  final bytes = ByteData(44 + dataBytes);
+  void ascii(int offset, String value) {
+    for (var index = 0; index < value.length; index++) {
+      bytes.setUint8(offset + index, value.codeUnitAt(index));
+    }
+  }
+
+  ascii(0, 'RIFF');
+  bytes.setUint32(4, 36 + dataBytes, Endian.little);
+  ascii(8, 'WAVE');
+  ascii(12, 'fmt ');
+  bytes.setUint32(16, 16, Endian.little);
+  bytes.setUint16(20, 1, Endian.little);
+  bytes.setUint16(22, 1, Endian.little);
+  bytes.setUint32(24, 16000, Endian.little);
+  bytes.setUint32(28, 32000, Endian.little);
+  bytes.setUint16(32, 2, Endian.little);
+  bytes.setUint16(34, 16, Endian.little);
+  ascii(36, 'data');
+  bytes.setUint32(40, dataBytes, Endian.little);
+  return bytes.buffer.asUint8List();
+}
+
+final class _GatedScorer implements ScoringProvider {
+  final requests = <String>[];
+  final _gates = <Completer<void>>[];
+  var autoRelease = false;
+
+  void releaseAll() {
+    for (final gate in _gates) {
+      if (!gate.isCompleted) gate.complete();
+    }
+  }
+
+  @override
+  String get name => 'gated';
+
+  @override
+  Future<bool> isConfigured() async => true;
+
+  @override
+  Future<ScoreResult> score({
+    required Uint8List pcm16k,
+    required String refText,
+  }) async {
+    requests.add(refText);
+    if (autoRelease) {
+      return ScoreResult(childScore: 80, provider: name);
+    }
+    final gate = Completer<void>();
+    _gates.add(gate);
+    await gate.future;
+    return ScoreResult(childScore: 80, provider: name);
+  }
+}
+
+/// Real file IO cannot be advanced by microtask pumping alone, so bounded
+/// 1 ms real yields are required (same pattern as sentence dubbing tests).
+Future<void> _until(
+  bool Function() condition, {
+  Duration timeout = const Duration(seconds: 5),
+}) async {
+  final deadline = DateTime.now().add(timeout);
+  while (!condition()) {
+    if (DateTime.now().isAfter(deadline)) {
+      fail('条件等待超时');
+    }
+    await pumpEventQueue();
+    await Future<void>.delayed(const Duration(milliseconds: 1));
+  }
+}
 
 final class _Recorder implements AudioRecordingService {
   _Recorder(this.directory);
@@ -292,7 +471,15 @@ final class _OriginalPlayer implements OriginalAudioPlayer {
   var playCalls = 0;
   var pauseCalls = 0;
   var holdPlayback = false;
+  var holdStop = false;
+  var loadDelayMs = 0;
   Completer<void>? pendingPlayback;
+  Completer<void>? _stopGate;
+
+  void releaseStop() {
+    final gate = _stopGate;
+    if (gate != null && !gate.isCompleted) gate.complete();
+  }
 
   @override
   Stream<bool> get playingStream => playing.stream;
@@ -301,7 +488,14 @@ final class _OriginalPlayer implements OriginalAudioPlayer {
   @override
   Future<void> dispose() async {}
   @override
-  Future<void> load(String path) async => loadedPaths.add(path);
+  Future<void> load(String path) async {
+    if (loadDelayMs > 0) {
+      // Simulates the decoder preparation cost of a low-end device.
+      await Future<void>.delayed(Duration(milliseconds: loadDelayMs));
+    }
+    loadedPaths.add(path);
+  }
+
   @override
   Future<void> pause() async {
     pauseCalls++;
@@ -329,6 +523,10 @@ final class _OriginalPlayer implements OriginalAudioPlayer {
   Future<void> setVolume(double volume) async => volumes.add(volume);
   @override
   Future<void> stop() async {
+    if (holdStop) {
+      _stopGate = Completer<void>();
+      await _stopGate!.future;
+    }
     final pending = pendingPlayback;
     if (pending != null) {
       if (!pending.isCompleted) pending.complete();
@@ -364,8 +562,11 @@ final class _ControlledPreparation implements RecordingPreparationProtocol {
 }
 
 final class _MixService implements DubbingMixService {
+  var renderCalls = 0;
+
   @override
   Future<DubbingMixResult> render(DubbingMixPlan plan) async {
+    renderCalls++;
     final output = File(plan.outputPath);
     await output.parent.create(recursive: true);
     await output.writeAsBytes([1, 2, 3]);
