@@ -124,6 +124,83 @@ void main() {
     expect(book.sentences.single.id, 's0002');
     expect(book.sentences.single.text, 'Good night.');
   });
+
+  test('alignment 句柄迟到的 close 错误不影响成功加载', () async {
+    await _writeReadyPackage(bookDir);
+    final resilient = LocalOriginalAudioRepository(
+      shelfIndex: shelfIndex,
+      databaseFactory: _CloseThrowingFactory(databaseFactoryFfi),
+    );
+
+    final book = await resilient.loadBook('copy-1');
+
+    expect(book.sentences.single.id, 's0001');
+  });
+}
+
+/// Wraps every opened database so [Database.close] fails with the late error
+/// Android sometimes reports for read-only handles; queries still delegate.
+class _CloseThrowingFactory implements DatabaseFactory {
+  _CloseThrowingFactory(this._inner);
+
+  final DatabaseFactory _inner;
+
+  @override
+  Future<Database> openDatabase(
+    String path, {
+    OpenDatabaseOptions? options,
+  }) async {
+    final inner = await _inner.openDatabase(path, options: options);
+    return _DelegatingDatabase._(inner);
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) =>
+      _inner.noSuchMethod(invocation);
+}
+
+class _DelegatingDatabase implements Database {
+  _DelegatingDatabase._(this._inner);
+
+  final Database _inner;
+
+  @override
+  Future<void> close() async {
+    // Really close the handle (Windows keeps the file locked otherwise) but
+    // still report the late error, mirroring the observed Android behaviour.
+    await _inner.close();
+    throw const FileSystemException('late close');
+  }
+
+  @override
+  Future<List<Map<String, Object?>>> query(
+    String table, {
+    bool? distinct,
+    List<String>? columns,
+    String? where,
+    List<Object?>? whereArgs,
+    String? groupBy,
+    String? having,
+    String? orderBy,
+    int? limit,
+    int? offset,
+  }) =>
+      _inner.query(
+        table,
+        distinct: distinct,
+        columns: columns,
+        where: where,
+        whereArgs: whereArgs,
+        groupBy: groupBy,
+        having: having,
+        orderBy: orderBy,
+        limit: limit,
+        offset: offset,
+      );
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) =>
+      throw UnimplementedError(invocation.memberName.toString());
 }
 
 Future<void> _writeAlignment(

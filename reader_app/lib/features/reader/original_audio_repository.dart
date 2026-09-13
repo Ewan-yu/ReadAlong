@@ -292,8 +292,13 @@ final class LocalOriginalAudioRepository implements OriginalAudioRepository {
       }
       return result;
     } finally {
-      if (database != null) {
-        await _traceOriginalAudioStage('alignment_close', database.close);
+      try {
+        if (database != null) {
+          await _traceOriginalAudioStage('alignment_close', database.close);
+        }
+      } on Object {
+        // A successfully read immutable package must remain usable even when
+        // Android reports a late close error for its read-only SQLite handle.
       }
     }
   }

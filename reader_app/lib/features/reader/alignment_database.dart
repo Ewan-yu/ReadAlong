@@ -34,13 +34,16 @@ final class AlignmentDatabase {
       database.query(table, columns: columns, orderBy: orderBy, limit: limit);
 
   Future<void> close() async {
-    await database.close();
     final path = tempCopyPath;
-    if (path == null) return;
     try {
-      await File(path).delete();
-    } on Object {
-      // A best-effort cleanup; an undeletable temp file is only disk noise.
+      await database.close();
+    } finally {
+      if (path == null) return;
+      try {
+        await File(path).delete();
+      } on Object {
+        // A best-effort cleanup; an undeletable temp file is only disk noise.
+      }
     }
   }
 }

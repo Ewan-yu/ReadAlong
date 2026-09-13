@@ -120,4 +120,48 @@ void main() {
     await handle.close();
     await tempDir.delete(recursive: true);
   });
+
+  test('close 抛出迟到错误时临时副本仍被删除', () async {
+    final tempDir = await Directory.systemTemp.createTemp('alignment_db_test_');
+    final sourcePath = await _writeSourceDatabase(tempDir);
+    final factory = _HangingOnPathFactory(databaseFactoryFfi, sourcePath);
+    final handle = await openAlignmentDatabase(
+      databaseFactory: factory,
+      databasePath: sourcePath,
+      directOpenTimeout: const Duration(milliseconds: 100),
+    );
+    final copyPath = handle.tempCopyPath!;
+    expect(File(copyPath).existsSync(), isTrue);
+
+    final failing = AlignmentDatabase(
+      _CloseThrowingDatabase(handle.database),
+      tempCopyPath: copyPath,
+    );
+    await expectLater(
+      failing.close(),
+      throwsA(isA<FileSystemException>()),
+    );
+    expect(File(copyPath).existsSync(), isFalse);
+
+    await tempDir.delete(recursive: true);
+  });
+}
+
+/// Mirrors the late close error Android sometimes reports for read-only
+/// SQLite handles: the underlying handle is really closed first (Windows
+/// keeps otherwise-locked files), then the error is reported.
+class _CloseThrowingDatabase implements Database {
+  _CloseThrowingDatabase(this._inner);
+
+  final Database _inner;
+
+  @override
+  Future<void> close() async {
+    await _inner.close();
+    throw const FileSystemException('late close');
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) =>
+      throw UnimplementedError(invocation.memberName.toString());
 }
