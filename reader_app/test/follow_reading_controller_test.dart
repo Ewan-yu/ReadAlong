@@ -20,12 +20,15 @@ final class _FakeRecorder implements AudioRecordingService {
 
   final String path;
   var cancelCalls = 0;
+  Completer<void>? startGate;
 
   @override
   Future<RecordingSession> start({
     required String libraryId,
     required String sentenceId,
   }) async {
+    final gate = startGate;
+    if (gate != null) await gate.future;
     await File(path).writeAsBytes(_wav());
     return RecordingSession(path: path, levels: const Stream.empty());
   }
@@ -225,6 +228,22 @@ void main() {
     expect(await controller.playMyRecording(), isFalse);
     expect(currentState().phase, FollowReadingPhase.scored);
     expect(await File(record.audioPath).exists(), isTrue);
+  });
+
+  test('开始录音的启动窗口内双击不会取消第一次录音', () async {
+    final controller = await readyController();
+    controller.selectSentence(_sentence('double-tap'));
+    recorder.startGate = Completer<void>();
+    final first = controller.startRecording();
+    await pumpEventQueue();
+    // 第二次点击落在 recorder.start() 尚未返回、phase 仍为 idle 的窗口内。
+    await controller.startRecording();
+    recorder.startGate!.complete();
+    await first;
+
+    expect(currentState().phase, FollowReadingPhase.recording);
+    expect(currentState().failure, isNull);
+    expect(recorder.cancelCalls, 0);
   });
 
   test('录音时长按示范音长度缩放并保持儿童合理上下限', () {

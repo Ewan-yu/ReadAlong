@@ -221,6 +221,7 @@ final class FollowReadingController
   Stopwatch? _stopwatch;
   FollowVoiceActivityTracker? _voiceActivity;
   var _stoppingRecording = false;
+  var _startingRecording = false;
   var _recordSequence = 0;
   var _generation = 0;
   var _disposed = false;
@@ -335,7 +336,16 @@ final class FollowReadingController
   Future<void> startRecording() async {
     final current = state.valueOrNull;
     final sentence = current?.sentence;
-    if (current == null || sentence == null || current.isRecording) return;
+    if (current == null ||
+        sentence == null ||
+        current.isRecording ||
+        _startingRecording) {
+      return;
+    }
+    // The entry guard only sees phase, which stays idle until the recorder
+    // responds; a double tap in that window would otherwise hit the native
+    // "already recording" error and cancel the first take.
+    _startingRecording = true;
     final generation = ++_generation;
     final timing = followRecordingTimingFor(sentence);
     try {
@@ -438,6 +448,8 @@ final class FollowReadingController
       if (_isCurrent(generation)) _setFailure(error.message);
     } on Object {
       if (_isCurrent(generation)) _setFailure('录音没有开始，请稍后重试');
+    } finally {
+      _startingRecording = false;
     }
   }
 
