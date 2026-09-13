@@ -166,6 +166,18 @@ void main() {
       expect(await index.findByLibraryId(book.libraryId), book);
     });
 
+    test('书籍目录缺失时仍可删除书架条目与录音', () async {
+      final book = await importFixture();
+      // 模拟目录被外部清理或异常丢失:坏条目不能再永远删不掉。
+      await Directory(book.bookDir).delete(recursive: true);
+
+      await library.deleteBook(book, deleteRecordings: true);
+
+      expect(await index.findByLibraryId(book.libraryId), isNull);
+      expect(recordCleaner.deletedIds, [book.libraryId]);
+      expect(pendingDeleteDirectories(), isEmpty);
+    });
+
     test('deleting recordings passes the library ID to the cleaner', () async {
       final book = await importFixture();
 
@@ -347,8 +359,9 @@ void main() {
       final booksDir = Directory('${tempDir.path}/books');
       await booksDir.create(recursive: true);
       final nonOwned = Directory('${booksDir.path}/.delete-not-owned');
+      // 名称不符合库名规则的目录不会被孤儿清扫递归处理。
       final nested = Directory(
-        '${booksDir.path}/ordinary/.delete-102-fixture-book-0001',
+        '${booksDir.path}/not-a-book!/.delete-102-fixture-book-0001',
       );
       await nonOwned.create();
       await nested.create(recursive: true);

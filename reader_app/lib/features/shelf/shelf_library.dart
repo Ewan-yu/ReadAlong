@@ -191,11 +191,20 @@ class LocalShelfLibrary implements ShelfLibrary {
     final source = Directory(book.bookDir);
     final pendingDelete = Directory(importer.deleteStagingPath(book.libraryId));
 
-    await source.rename(pendingDelete.path);
+    // The directory may already be gone (external cleanup or a lost race);
+    // the index row and recordings must still be removable, otherwise a
+    // broken shelf entry can never be deleted.
+    var movedToStaging = false;
+    if (await source.exists()) {
+      await source.rename(pendingDelete.path);
+      movedToStaging = true;
+    }
     try {
       await shelfIndex.delete(book.libraryId);
     } catch (_) {
-      await pendingDelete.rename(source.path);
+      if (movedToStaging) {
+        await pendingDelete.rename(source.path);
+      }
       rethrow;
     }
 
@@ -207,10 +216,12 @@ class LocalShelfLibrary implements ShelfLibrary {
         failures.add(error);
       }
     }
-    try {
-      await _deleteDirectory(pendingDelete);
-    } catch (error) {
-      failures.add(error);
+    if (movedToStaging) {
+      try {
+        await _deleteDirectory(pendingDelete);
+      } catch (error) {
+        failures.add(error);
+      }
     }
     if (failures.isNotEmpty) {
       throw PartialBookDeleteException(book: book, causes: failures);
